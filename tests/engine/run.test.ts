@@ -79,4 +79,35 @@ describe('runEngine', () => {
         expect(result.cleanup.ok).toBe(false)
         expect(result.cleanup.failed).toEqual(['study:s1'])
     })
+
+    it('categorizes an openBrowser failure as environment and still runs cleanup', async () => {
+        const d = deps({
+            openBrowser: vi.fn(async () => {
+                throw new Error('net::ERR_CONNECTION_REFUSED')
+            }),
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(result.ok).toBe(false)
+        expect(result.failureCategory).toBe('environment')
+        expect(d.runCleanup).toHaveBeenCalledOnce()
+    })
+
+    it('records cleanup-call-threw when runCleanup itself throws', async () => {
+        const d = deps({
+            runCleanup: vi.fn(async () => {
+                throw new Error('boom')
+            }),
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(result.cleanup.ok).toBe(false)
+        expect(result.cleanup.failed).toEqual(['cleanup-call-threw'])
+        expect(result.cleanup.error).toBe('boom')
+    })
+
+    it('assigns the cleanup failure category on a passing run whose cleanup failed', async () => {
+        const d = deps({ runCleanup: vi.fn(async () => ({ ok: false, deleted: [], failed: ['study:s1'] })) })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(result.ok).toBe(true)
+        expect(result.failureCategory).toBe('cleanup')
+    })
 })

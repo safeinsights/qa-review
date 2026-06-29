@@ -38,6 +38,8 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     const env = resolveEnv(req.env, deps.vars)
     const suite = suiteOverride ?? getSuite(req.suite)
 
+    // Collected step events for a future live-streaming consumer (e.g. the CLI/GUI
+    // progress view). Not read here; recorder.finish() is the source of truth for steps.
     const events: StepEvent[] = []
     const recorder = new Recorder(
         { root: deps.resultsRoot, suite: suite.name, env: env.name, role: req.role, mode, startedAt },
@@ -99,6 +101,10 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         }))
         await handle?.close().catch(() => {})
     }
+
+    // A passing run whose cleanup failed is surfaced with the 'cleanup' category
+    // (leftover test data may remain) without marking the test itself as failed.
+    if (ok && !cleanupResult.ok) failureCategory = 'cleanup'
 
     return recorder.finish({ ok, failureCategory, cleanup: cleanupResult })
 }
