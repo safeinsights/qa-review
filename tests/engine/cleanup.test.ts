@@ -28,6 +28,40 @@ describe('CleanupClient', () => {
         expect((fetchImpl.mock.calls[0][0] as string)).toContain('/api/qa/studies/study-1')
     })
 
+    it('deletes all studies before any users when multiple ids are tracked', async () => {
+        const fetchImpl = fakeFetch({
+            '/api/qa/studies/s1': { status: 200 },
+            '/api/qa/studies/s2': { status: 200 },
+            '/api/qa/users/u1': { status: 200 },
+            '/api/qa/users/u2': { status: 200 },
+        })
+        const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)
+        client.trackStudy('s1')
+        client.trackUser('u1')
+        client.trackStudy('s2')
+        client.trackUser('u2')
+
+        await client.run()
+
+        const urls = fetchImpl.mock.calls.map((c) => c[0] as string)
+        const lastStudyIdx = urls.map((u) => u.includes('/api/qa/studies/')).lastIndexOf(true)
+        const firstUserIdx = urls.findIndex((u) => u.includes('/api/qa/users/'))
+        expect(lastStudyIdx).toBeLessThan(firstUserIdx)
+    })
+
+    it('records a failure (does not throw) when fetch rejects', async () => {
+        const fetchImpl = vi.fn(async () => {
+            throw new Error('ECONNREFUSED')
+        })
+        const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)
+        client.trackStudy('s1')
+
+        const result = await client.run()
+
+        expect(result.ok).toBe(false)
+        expect(result.failed).toEqual(['study:s1'])
+    })
+
     it('marks ok=false and records failures when a delete returns non-2xx', async () => {
         const fetchImpl = fakeFetch({ '/api/qa/studies/study-1': { status: 500 } })
         const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)

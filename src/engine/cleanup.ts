@@ -30,11 +30,17 @@ export class CleanupClient {
     }
 
     private async del(path: string): Promise<boolean> {
-        const res = await this.fetchImpl(`${this.baseURL}${path}`, {
-            method: 'DELETE',
-            headers: { Cookie: this.cookieHeader },
-        })
-        return res.ok
+        try {
+            const res = await this.fetchImpl(`${this.baseURL}${path}`, {
+                method: 'DELETE',
+                headers: { Cookie: this.cookieHeader },
+            })
+            return res.ok
+        } catch {
+            // A thrown fetch (DNS/connection refused) is a failed delete, not a
+            // crash: run() must still return the list of ids it couldn't remove.
+            return false
+        }
     }
 
     async run(): Promise<CleanupResult> {
