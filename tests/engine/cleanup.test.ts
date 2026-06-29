@@ -62,7 +62,7 @@ describe('CleanupClient', () => {
         expect(result.failed).toEqual(['study:s1'])
     })
 
-    it('marks ok=false and records failures when a delete returns non-2xx', async () => {
+    it('marks ok=false and records the failing status when a delete returns non-2xx', async () => {
         const fetchImpl = fakeFetch({ '/api/qa/studies/study-1': { status: 500 } })
         const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)
         client.trackStudy('study-1')
@@ -71,13 +71,14 @@ describe('CleanupClient', () => {
 
         expect(result.ok).toBe(false)
         expect(result.failed).toEqual(['study:study-1'])
+        expect(result.statuses).toEqual({ 'study:study-1': 500 })
     })
 
     it('is a no-op (ok=true) when nothing was tracked', async () => {
         const fetchImpl = fakeFetch({})
         const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)
         const result = await client.run()
-        expect(result).toEqual({ ok: true, deleted: [], failed: [] })
+        expect(result).toEqual({ ok: true, deleted: [], failed: [], statuses: {} })
         expect(fetchImpl).not.toHaveBeenCalled()
     })
 })

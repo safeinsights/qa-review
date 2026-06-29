@@ -49,8 +49,22 @@ export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?
             await page.getByRole('button', { name: /verify code/i }).click()
         }
 
-        // Landing on a dashboard confirms an authenticated session.
-        await dashboard.waitFor({ state: 'visible', timeout: 30_000 })
+        // Success = we've left the sign-in page and an authenticated marker is
+        // present. After verifying the code there is a redirect chain (+ a
+        // re-hydration spinner), so wait for the URL to leave /signin first, then
+        // for the "Hi, <name>" sidebar that every authenticated page shows. This
+        // is more robust than a bare "dashboard" text match that can race the
+        // mid-redirect blank screen.
+        await page.waitForURL((url) => !url.pathname.endsWith('/account/signin'), { timeout: 30_000 })
+        await page
+            .getByText(/^Hi,/i)
+            .first()
+            .waitFor({ state: 'visible', timeout: 30_000 })
+            .catch(async () => {
+                // Fallback: some roles land on a page whose primary signal is the
+                // dashboard heading rather than the greeting.
+                await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
+            })
     } catch (cause) {
         // Capture what the page looked like at the point of failure so the result
         // bundle shows WHY login failed (best-effort).

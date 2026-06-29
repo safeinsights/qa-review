@@ -24,6 +24,10 @@ async function main() {
     }
     console.log(`\nok: ${result.ok} | category: ${result.failureCategory ?? '-'}`)
     console.log(`cleanup ok: ${result.cleanup.ok}`)
+    if (!result.cleanup.ok) {
+        console.log(`cleanup failed: ${result.cleanup.failed.join(', ')}`)
+        if (result.cleanup.statuses) console.log(`cleanup statuses: ${JSON.stringify(result.cleanup.statuses)}`)
+    }
     console.log(`report: ${result.bundleDir}/report.html`)
 }
 
