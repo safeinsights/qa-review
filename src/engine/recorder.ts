@@ -36,7 +36,7 @@ export class Recorder {
     }
 
     step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string }) {
-        const event: StepEvent = { name, status, at: nowOr(this.init.startedAt), ...extra }
+        const event: StepEvent = { name, status, at: Date.now(), ...extra }
         // Replace the prior 'running' entry for the same step name when it resolves.
         const idx = this.steps.findIndex((s) => s.name === name && s.status === 'running')
         if (idx >= 0 && status !== 'running') this.steps[idx] = event
@@ -45,7 +45,7 @@ export class Recorder {
     }
 
     finish(input: FinishInput): RunResult {
-        const finishedAt = nowOr(this.init.startedAt)
+        const finishedAt = Date.now()
         const result: RunResult = {
             ok: input.ok,
             failureCategory: input.failureCategory,
@@ -65,12 +65,6 @@ export class Recorder {
     }
 }
 
-function nowOr(fallback: number): number {
-    // Date.now is fine in the engine runtime; tests pass a fixed startedAt and
-    // only assert structure/order, not timestamps.
-    return Date.now() || fallback
-}
-
 function stampFor(epoch: number): string {
     const d = new Date(epoch)
     const p = (n: number) => String(n).padStart(2, '0')
@@ -81,11 +75,13 @@ function renderReport(r: RunResult): string {
     const rows = r.steps
         .map((s) => `<li class="${s.status}">${s.status === 'passed' ? '✓' : s.status === 'failed' ? '✗' : '…'} ${escapeHtml(s.name)}${s.error ? ` — <em>${escapeHtml(s.error)}</em>` : ''}</li>`)
         .join('\n')
-    const banner = r.ok ? 'PASSED' : `FAILED (${r.failureCategory ?? 'unknown'})`
-    const cleanupWarn = r.cleanup.ok ? '' : `<p class="warn">⚠ Cleanup failed: ${r.cleanup.failed.join(', ')} — leftover data may need manual removal.</p>`
-    return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(r.suite ?? '')} ${r.env}</title>
+    const banner = r.ok ? 'PASSED' : `FAILED (${escapeHtml(r.failureCategory ?? 'unknown')})`
+    const cleanupWarn = r.cleanup.ok
+        ? ''
+        : `<p class="warn">⚠ Cleanup failed: ${r.cleanup.failed.map(escapeHtml).join(', ')} — leftover data may need manual removal.</p>`
+    return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(r.suite)} ${escapeHtml(r.env)}</title>
 <style>body{font:14px system-ui;margin:2rem}.passed{color:#137333}.failed{color:#c5221f}.warn{color:#b06000}video{max-width:100%}</style>
-<h1>${banner}</h1><p>${r.env} · ${r.role} · ${r.mode}</p>${cleanupWarn}
+<h1>${banner}</h1><p>${escapeHtml(r.env)} · ${escapeHtml(r.role)} · ${escapeHtml(r.mode)}</p>${cleanupWarn}
 <ul>${rows}</ul>
 <video src="video.webm" controls></video>`
 }

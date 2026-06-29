@@ -46,4 +46,25 @@ describe('Recorder', () => {
         rec.step('A', 'passed')
         expect(seen).toEqual(['A:running', 'A:passed'])
     })
+
+    it('coalesces a running step into its resolved status (one entry, not two)', () => {
+        const root = tmpRoot()
+        const rec = new Recorder({ root, suite: 's', env: 'qa', role: 'admin', mode: 'suite', startedAt: 1 })
+        rec.step('Create study', 'running')
+        rec.step('Create study', 'passed')
+        const result = rec.finish({ ok: true, cleanup: { ok: true, deleted: [], failed: [] } })
+        expect(result.steps).toHaveLength(1)
+        expect(result.steps[0].status).toBe('passed')
+    })
+
+    it('escapes app-controlled text in report.html', () => {
+        const root = tmpRoot()
+        const rec = new Recorder({ root, suite: 's', env: 'qa', role: 'admin', mode: 'suite', startedAt: 1 })
+        rec.step('Open <script>alert(1)</script>', 'failed', { error: 'bad & <tag>' })
+        const result = rec.finish({ ok: false, failureCategory: 'app-assertion', cleanup: { ok: true, deleted: [], failed: [] } })
+        const html = fs.readFileSync(path.join(result.bundleDir, 'report.html'), 'utf8')
+        expect(html).not.toContain('<script>alert(1)</script>')
+        expect(html).toContain('&lt;script&gt;')
+        expect(html).toContain('bad &amp; &lt;tag&gt;')
+    })
 })
