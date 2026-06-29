@@ -17,6 +17,7 @@ describe('resolveEnv', () => {
         expect(cfg.name).toBe('qa')
         expect(cfg.baseURL).toBe('https://qa.example.com')
         expect(cfg.accounts.admin).toEqual({ email: 'a+clerk_test@example.com', password: 'pw-a' })
+        expect(cfg.accounts.researcher).toEqual({ email: 'r+clerk_test@example.com', password: 'pw-r' })
         expect(cfg.accounts.reviewer.email).toBe('v+clerk_test@example.com')
     })
 
@@ -27,5 +28,11 @@ describe('resolveEnv', () => {
     it('throws a clear error when a required secret is missing', () => {
         const incomplete = { ...ENV_VARS, QA_ADMIN_PASSWORD: '' }
         expect(() => resolveEnv('qa', incomplete)).toThrow(/QA_ADMIN_PASSWORD/)
+    })
+
+    it('throws a clear error when a required secret is undefined', () => {
+        const withoutBase: Record<string, string | undefined> = { ...ENV_VARS }
+        delete withoutBase.QA_BASE_URL
+        expect(() => resolveEnv('qa', withoutBase)).toThrow(/QA_BASE_URL/)
     })
 })

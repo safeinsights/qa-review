@@ -18,9 +18,8 @@ export function resolveEnv(name: string, vars: Vars = process.env): EnvConfig {
         const known = ENVIRONMENTS.map((e) => e.name).join(', ')
         throw new Error(`Unknown environment "${name}". Known environments: ${known}`)
     }
-    const roles: Role[] = ['admin', 'researcher', 'reviewer']
     const accounts = {} as EnvConfig['accounts']
-    for (const role of roles) {
+    for (const role of Object.keys(decl.accounts) as Role[]) {
         const a = decl.accounts[role]
         accounts[role] = { email: read(vars, a.emailVar), password: read(vars, a.passwordVar) }
     }
