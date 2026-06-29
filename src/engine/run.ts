@@ -12,6 +12,7 @@ export interface BrowserHandle {
     page: import('@playwright/test').Page
     cookieHeader: string
     close: () => Promise<void>
+    saveVideoTo?: (bundleDir: string) => Promise<void>
 }
 
 // Injectable dependencies — production defaults in defaultDeps(); tests pass fakes.
@@ -100,6 +101,9 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
             error: (e as Error).message,
         }))
         await handle?.close().catch(() => {})
+        // Best-effort: the recorded video is only finalized after the context
+        // closes, so persist it into the bundle now. A missing video never fails the run.
+        await handle?.saveVideoTo?.(recorder.bundleDir).catch(() => {})
     }
 
     // A passing run whose cleanup failed is surfaced with the 'cleanup' category
@@ -125,12 +129,18 @@ export function defaultDeps(): RunDeps {
                 recordVideo: { dir: resultsRoot }, // moved into bundle after finish
             })
             const page = await context.newPage()
+            const video = page.video()
             return {
                 page,
                 cookieHeader: '',
                 close: async () => {
                     await context.close()
                     await browser.close()
+                },
+                saveVideoTo: async (bundleDir: string) => {
+                    // Video is finalized only after context.close(); persist it into
+                    // the run bundle so report.html's <video src="video.webm"> resolves.
+                    if (video) await video.saveAs(path.join(bundleDir, 'video.webm'))
                 },
             }
         },
