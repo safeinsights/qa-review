@@ -69,6 +69,21 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         // The cleanup client authorizes via the admin session cookie.
         ;(cleanup as unknown as { cookieHeader: string }).cookieHeader = cookieHeader
 
+        let stepIndex = 0
+        const page = handle.page
+        const captureScreenshot = async (label: string): Promise<string | undefined> => {
+            // Best-effort per-step still saved into the bundle. The recorder stays
+            // Playwright-free; we hand it only the bundle-relative path. A capture
+            // failure must never fail the step.
+            const slug = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)
+            const rel = path.join('screenshots', `${String(++stepIndex).padStart(2, '0')}-${slug}.png`)
+            try {
+                await page.screenshot({ path: path.join(recorder.bundleDir, rel) })
+                return rel
+            } catch {
+                return undefined
+            }
+        }
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
@@ -77,10 +92,12 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 recorder.step(name, 'running')
                 try {
                     const out = await action()
-                    recorder.step(name, 'passed')
+                    const screenshot = await captureScreenshot(name)
+                    recorder.step(name, 'passed', { screenshot })
                     return out
                 } catch (cause) {
-                    recorder.step(name, 'failed', { error: (cause as Error).message })
+                    const screenshot = await captureScreenshot(name)
+                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot })
                     throw cause
                 }
             },
@@ -139,8 +156,11 @@ export function defaultDeps(): RunDeps {
                 },
                 saveVideoTo: async (bundleDir: string) => {
                     // Video is finalized only after context.close(); persist it into
-                    // the run bundle so report.html's <video src="video.webm"> resolves.
-                    if (video) await video.saveAs(path.join(bundleDir, 'video.webm'))
+                    // the run bundle so report.html's <video src="video.webm"> resolves,
+                    // then remove the orphan source so results/ doesn't accumulate junk.
+                    if (!video) return
+                    await video.saveAs(path.join(bundleDir, 'video.webm'))
+                    await video.delete().catch(() => {})
                 },
             }
         },

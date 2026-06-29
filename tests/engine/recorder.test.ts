@@ -67,4 +67,14 @@ describe('Recorder', () => {
         expect(html).toContain('&lt;script&gt;')
         expect(html).toContain('bad &amp; &lt;tag&gt;')
     })
+
+    it('records per-step screenshot paths in summary and report', () => {
+        const root = tmpRoot()
+        const rec = new Recorder({ root, suite: 's', env: 'qa', role: 'admin', mode: 'suite', startedAt: 1 })
+        rec.step('Open page', 'passed', { screenshot: 'screenshots/01-open-page.png' })
+        const result = rec.finish({ ok: true, cleanup: { ok: true, deleted: [], failed: [] } })
+        expect(result.steps[0].screenshot).toBe('screenshots/01-open-page.png')
+        const html = fs.readFileSync(path.join(result.bundleDir, 'report.html'), 'utf8')
+        expect(html).toContain('screenshots/01-open-page.png')
+    })
 })

@@ -73,14 +73,21 @@ function stampFor(epoch: number): string {
 
 function renderReport(r: RunResult): string {
     const rows = r.steps
-        .map((s) => `<li class="${s.status}">${s.status === 'passed' ? '✓' : s.status === 'failed' ? '✗' : '…'} ${escapeHtml(s.name)}${s.error ? ` — <em>${escapeHtml(s.error)}</em>` : ''}</li>`)
+        .map((s) => {
+            const mark = s.status === 'passed' ? '✓' : s.status === 'failed' ? '✗' : '…'
+            const err = s.error ? ` — <em>${escapeHtml(s.error)}</em>` : ''
+            const shot = s.screenshot
+                ? ` <a href="${escapeHtml(s.screenshot)}"><img src="${escapeHtml(s.screenshot)}" class="thumb" alt="screenshot"></a>`
+                : ''
+            return `<li class="${s.status}">${mark} ${escapeHtml(s.name)}${err}${shot}</li>`
+        })
         .join('\n')
     const banner = r.ok ? 'PASSED' : `FAILED (${escapeHtml(r.failureCategory ?? 'unknown')})`
     const cleanupWarn = r.cleanup.ok
         ? ''
         : `<p class="warn">⚠ Cleanup failed: ${r.cleanup.failed.map(escapeHtml).join(', ')} — leftover data may need manual removal.</p>`
     return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(r.suite)} ${escapeHtml(r.env)}</title>
-<style>body{font:14px system-ui;margin:2rem}.passed{color:#137333}.failed{color:#c5221f}.warn{color:#b06000}video{max-width:100%}</style>
+<style>body{font:14px system-ui;margin:2rem}.passed{color:#137333}.failed{color:#c5221f}.warn{color:#b06000}video{max-width:100%}.thumb{max-height:60px;vertical-align:middle;margin-left:.5rem;border:1px solid #ccc}</style>
 <h1>${banner}</h1><p>${escapeHtml(r.env)} · ${escapeHtml(r.role)} · ${escapeHtml(r.mode)}</p>${cleanupWarn}
 <ul>${rows}</ul>
 <video src="video.webm" controls></video>`
