@@ -1,37 +1,62 @@
-import { setupClerkTestingToken } from '@clerk/testing/playwright'
 import type { Page } from '@playwright/test'
 import type { EnvConfig, Role } from '@/engine/types'
 
-export const CLERK_TEST_OTP = '424242'
-
 export class AuthError extends Error {}
 
-// Logs `page` into the live app as `role` using Clerk testing mode. Returns the
-// session cookie header string (used by the cleanup client to authorize
-// DELETE calls as this user). Throws AuthError on failure so run.ts can
-// categorize it as 'auth'.
-export async function loginAs(page: Page, env: EnvConfig, role: Role): Promise<string> {
+// Logs `page` into the live app as `role` by driving the real Clerk sign-in UI
+// (email + password, then the fixed second-factor code). Returns the session
+// cookie header string (used by the cleanup client to authorize DELETE calls as
+// this user). Throws AuthError on failure so run.ts can categorize it as 'auth'.
+// `bundleDir` (when provided) is where a failure screenshot is written.
+export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?: string): Promise<string> {
     const account = env.accounts[role]
-    await setupClerkTestingToken({ page })
 
     try {
         await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
-        await page.getByLabel('email').fill(account.email)
-        await page.getByLabel('password').fill(account.password)
-        await page.getByRole('button', { name: 'login' }).click()
+        // The app is client-rendered: a loading spinner shows first, then the
+        // form hydrates. Wait for the Email field to actually appear before
+        // interacting (web-first wait absorbs the spinner).
+        const emailField = page.getByLabel('Email')
+        await emailField.waitFor({ state: 'visible', timeout: 30_000 })
+        await emailField.fill(account.email)
+        await page.getByLabel('Password').fill(account.password)
+        await page.getByRole('button', { name: 'Login' }).click()
 
-        // Optional MFA step: present for accounts with SMS MFA enabled. With Clerk
-        // testing mode the code is the fixed test OTP.
+        // After Login there is a spinner before the next screen. The account
+        // either lands straight on the dashboard, or (these test accounts) hits
+        // the MFA picker. Wait for EITHER to appear before deciding.
         const smsButton = page.getByRole('button', { name: 'SMS Verification' })
-        if (await smsButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-            await smsButton.click()
-            await fillPin(page, CLERK_TEST_OTP)
+        const dashboard = page.locator('text=dashboard').first()
+        await Promise.race([
+            smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
+            dashboard.waitFor({ state: 'visible', timeout: 30_000 }),
+        ]).catch(() => {})
+
+        // MFA branch: click SMS Verification, then enter the fixed code. The
+        // picker→code transition has its own spinner and a Mantine re-render can
+        // drop the first click, so retry until the 6-digit pin input appears.
+        const pinInput = page.getByTestId('sms-pin-input')
+        if (await smsButton.isVisible().catch(() => false)) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await smsButton.click().catch(() => {})
+                const appeared = await pinInput
+                    .waitFor({ state: 'visible', timeout: 10_000 })
+                    .then(() => true)
+                    .catch(() => false)
+                if (appeared) break
+            }
+            await fillPin(page, env.mfaCode)
             await page.getByRole('button', { name: /verify code/i }).click()
         }
 
         // Landing on a dashboard confirms an authenticated session.
-        await page.locator('text=dashboard').first().waitFor({ state: 'visible', timeout: 30_000 })
+        await dashboard.waitFor({ state: 'visible', timeout: 30_000 })
     } catch (cause) {
+        // Capture what the page looked like at the point of failure so the result
+        // bundle shows WHY login failed (best-effort).
+        if (bundleDir) {
+            await page.screenshot({ path: `${bundleDir}/screenshots/auth-failure.png` }).catch(() => {})
+        }
         throw new AuthError(`Could not log in as ${role} on ${env.name}: ${(cause as Error).message}`)
     }
 

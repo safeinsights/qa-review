@@ -25,9 +25,13 @@ export type RunMode = 'suite' | 'exploratory'
 
 export interface RunRequest {
     suite: string // suite name, or the plain-English instruction in exploratory mode
-    env: string // environment name, e.g. "qa" | "staging"
+    env: string // environment name, e.g. "qa" | "staging" (or a PR label like "pr839")
     role: Role
     mode?: RunMode // defaults to 'suite'
+    // Pre-resolved environment. Used for ephemeral PR previews (resolvePrEnv),
+    // where there is no named entry in the committed config. When set, the engine
+    // uses it directly instead of resolving `env` by name.
+    envConfig?: EnvConfig
 }
 
 export interface RunResult {
@@ -49,4 +53,6 @@ export interface EnvConfig {
     name: string
     baseURL: string
     accounts: Record<Role, { email: string; password: string }>
+    // Fixed second-factor code for the shared test accounts (same on every env).
+    mfaCode: string
 }

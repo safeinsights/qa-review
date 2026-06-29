@@ -20,7 +20,12 @@ export interface RunDeps {
     vars: Record<string, string | undefined>
     resultsRoot: string
     openBrowser: (env: { name: string; baseURL: string }) => Promise<BrowserHandle>
-    login: (handle: BrowserHandle, env: ReturnType<typeof resolveEnv>, role: RunRequest['role']) => Promise<string>
+    login: (
+        handle: BrowserHandle,
+        env: ReturnType<typeof resolveEnv>,
+        role: RunRequest['role'],
+        bundleDir: string,
+    ) => Promise<string>
     runCleanup: (client: CleanupClient) => Promise<RunResult['cleanup']>
 }
 
@@ -36,7 +41,7 @@ function categorize(error: Error): FailureCategory {
 export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: Suite): Promise<RunResult> {
     const startedAt = Date.now()
     const mode = req.mode ?? 'suite'
-    const env = resolveEnv(req.env, deps.vars)
+    const env = req.envConfig ?? resolveEnv(req.env, deps.vars)
     const suite = suiteOverride ?? getSuite(req.suite)
 
     // Collected step events for a future live-streaming consumer (e.g. the CLI/GUI
@@ -60,7 +65,7 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
 
         let cookieHeader: string
         try {
-            cookieHeader = await deps.login(handle, env, req.role)
+            cookieHeader = await deps.login(handle, env, req.role, recorder.bundleDir)
         } catch (cause) {
             // A failure in the login phase is always an auth failure, regardless
             // of the thrown error's class (tests inject a plain Error).
@@ -147,24 +152,38 @@ export function defaultDeps(): RunDeps {
             })
             const page = await context.newPage()
             const video = page.video()
+            let browserClosed = false
+            const closeBrowser = async () => {
+                if (browserClosed) return
+                browserClosed = true
+                await browser.close().catch(() => {})
+            }
             return {
                 page,
                 cookieHeader: '',
+                // Close ONLY the context here — this finalizes the video while
+                // keeping `video.saveAs()` usable. The browser is closed in
+                // saveVideoTo (or as a fallback below if saveVideoTo is absent).
                 close: async () => {
-                    await context.close()
-                    await browser.close()
+                    await context.close().catch(() => {})
                 },
                 saveVideoTo: async (bundleDir: string) => {
-                    // Video is finalized only after context.close(); persist it into
-                    // the run bundle so report.html's <video src="video.webm"> resolves,
-                    // then remove the orphan source so results/ doesn't accumulate junk.
-                    if (!video) return
-                    await video.saveAs(path.join(bundleDir, 'video.webm'))
-                    await video.delete().catch(() => {})
+                    // Persist the finalized video into the run bundle so
+                    // report.html's <video src="video.webm"> resolves, then remove
+                    // the orphan source so results/ doesn't accumulate junk. Runs
+                    // after close() (context already closed → video is finalized).
+                    try {
+                        if (video) {
+                            await video.saveAs(path.join(bundleDir, 'video.webm'))
+                            await video.delete().catch(() => {})
+                        }
+                    } finally {
+                        await closeBrowser()
+                    }
                 },
             }
         },
-        login: async (handle, env, role) => loginAs(handle.page, env, role),
+        login: async (handle, env, role, bundleDir) => loginAs(handle.page, env, role, bundleDir),
         runCleanup: async (client) => client.run(),
     }
 }
