@@ -1,7 +1,8 @@
 import type { Suite } from '@/suites/types'
 import { signinSuite } from '@/suites/signin'
+import { createStudySuite } from '@/suites/create-study'
 
-const SUITES: Suite[] = [signinSuite]
+const SUITES: Suite[] = [signinSuite, createStudySuite]
 
 export function listSuites(): { name: string; description: string }[] {
     return SUITES.map((s) => ({ name: s.name, description: s.description }))

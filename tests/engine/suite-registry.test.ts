@@ -5,6 +5,7 @@ describe('suite-registry', () => {
     it('lists available suites with name + description', () => {
         const names = listSuites().map((s) => s.name)
         expect(names).toContain('signin')
+        expect(names).toContain('create-study')
     })
 
     it('returns a suite by name', () => {
