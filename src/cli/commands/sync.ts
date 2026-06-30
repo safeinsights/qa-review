@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { configDir } from '@/engine/settings'
+import { repoDir } from '@/engine/paths'
 import { isInDrift } from '@/engine/keyring'
 import type { GitRunner } from '@/cli/commands/request-access'
 
@@ -30,8 +31,8 @@ export async function syncRepo(repoDir: string, git: GitRunner): Promise<SyncRes
 }
 
 export async function syncCommand(): Promise<void> {
-    const repoDir = process.cwd()
-    const r = await syncRepo(repoDir, gitIn(repoDir))
+    const dir = repoDir()
+    const r = await syncRepo(dir, gitIn(dir))
     switch (r.status) {
         case 'synced':
             console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `qar rekey`.' : ''))

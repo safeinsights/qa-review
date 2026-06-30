@@ -1,9 +1,9 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { Encrypter, Decrypter, armor, generateIdentity as ageGenerateIdentity, identityToRecipient } from 'age-encryption'
 import { SHARED_ACCOUNTS, ENVIRONMENTS } from '../../config/environments'
 import { readIdentity } from '@/engine/identity'
+import { configDir } from '@/engine/paths'
 
 // Flat var map the engine consumes (same shape `process.env` had). Keys are the
 // committed var names declared in config/environments.ts (ADMIN_EMAIL,
@@ -50,13 +50,11 @@ export function knownVarNames(): string[] {
     return [...baseUrls, ...accounts]
 }
 
-// Resolve the repo-root config/ directory. Anchored to this module's location
-// (src/engine/ -> ../../config), NOT process.cwd(), so it works when the GUI
-// spawns the engine from an arbitrary working directory.
-export function configDir(): string {
-    const here = path.dirname(fileURLToPath(import.meta.url))
-    return path.resolve(here, '../../config')
-}
+// Re-export configDir for existing importers (identity, keyring, rekey, set-secret,
+// request-access, sync, migrate all import it from here). The implementation lives
+// in src/engine/paths.ts — the single source of truth, rooted at the cloned-repo
+// dir (QAR_REPO_DIR) or this checkout's repo root for `pnpm qar`.
+export { configDir }
 
 function readJsonFile(file: string): Record<string, string> {
     if (!fs.existsSync(file)) return {}

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { configDir } from '@/engine/settings'
+import { repoDir } from '@/engine/paths'
 import { createIdentity } from '@/engine/identity'
 import { readKeyring, addMember, writeKeyring } from '@/engine/keyring'
 
@@ -14,7 +15,7 @@ function slug(name: string): string {
 // Injectable git runner so the core is unit-testable. Default shells out to git.
 export type GitRunner = (args: string[]) => Promise<string>
 
-const realGit: GitRunner = async (args) => (await execFileAsync('git', args, { cwd: process.cwd() })).stdout
+const realGit: GitRunner = async (args) => (await execFileAsync('git', args, { cwd: repoDir() })).stdout
 
 export interface RequestAccessOptions {
     dir: string
@@ -63,7 +64,8 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
 
     try {
         await execFileAsync('gh', ['pr', 'create', '--fill', '--title', `Add ${name} to keyring`,
-            '--body', 'Reviewer: run "Approve & rekey" (qar rekey on this branch) before merging.'])
+            '--body', 'Reviewer: run "Approve & rekey" (qar rekey on this branch) before merging.'],
+            { cwd: repoDir() })
         console.log('Opened a pull request. A teammate will approve + rekey, then merge.')
     } catch {
         console.log('Could not open a PR automatically (is `gh` installed and authed?).')
