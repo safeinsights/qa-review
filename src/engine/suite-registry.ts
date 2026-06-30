@@ -32,12 +32,10 @@ export async function listSuites(): Promise<{ name: string; description: string 
 }
 
 export async function getSuite(name: string): Promise<Suite> {
-    const suite = (await allSuites()).find((s) => s.name === name)
+    const all = await allSuites()
+    const suite = all.find((s) => s.name === name)
     if (!suite) {
-        const known = (await allSuites()).map((s) => s.name).join(', ')
-        throw new Error(`Unknown suite "${name}". Known suites: ${known}`)
+        throw new Error(`Unknown suite "${name}". Known suites: ${all.map((s) => s.name).join(', ')}`)
     }
     return suite
 }
-
-export { allSuites as SUITES }
