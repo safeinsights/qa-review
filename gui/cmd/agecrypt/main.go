@@ -1,9 +1,9 @@
-// Command agecrypt is a tiny passphrase-based age encrypt/decrypt helper used to
-// verify cross-language interop between the Go GUI (filippo.io/age) and the TS
-// engine (age-encryption). Reads plaintext/ciphertext from stdin.
+// Command agecrypt is a tiny age X25519 encrypt/decrypt helper used to verify
+// cross-language interop between the Go GUI (filippo.io/age) and the TS engine
+// (age-encryption). Reads plaintext/ciphertext from stdin.
 //
-//	agecrypt encrypt <passphrase>   # stdin: plaintext  -> stdout: armored age
-//	agecrypt decrypt <passphrase>   # stdin: armored age -> stdout: plaintext
+//	agecrypt encrypt <recipient>   # stdin: plaintext  -> stdout: armored age
+//	agecrypt decrypt <identity>    # stdin: armored age -> stdout: plaintext
 package main
 
 import (
@@ -19,10 +19,10 @@ import (
 
 func main() {
 	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: agecrypt <encrypt|decrypt> <passphrase>")
+		fmt.Fprintln(os.Stderr, "usage: agecrypt <encrypt|decrypt> <recipient-or-identity>")
 		os.Exit(2)
 	}
-	mode, pass := os.Args[1], os.Args[2]
+	mode, arg := os.Args[1], os.Args[2]
 	in, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fail(err)
@@ -30,7 +30,8 @@ func main() {
 
 	switch mode {
 	case "encrypt":
-		r, err := age.NewScryptRecipient(pass)
+		// arg is an age1... recipient public key.
+		r, err := age.ParseX25519Recipient(arg)
 		if err != nil {
 			fail(err)
 		}
@@ -51,7 +52,8 @@ func main() {
 		}
 		os.Stdout.Write(buf.Bytes())
 	case "decrypt":
-		id, err := age.NewScryptIdentity(pass)
+		// arg is an AGE-SECRET-KEY-1... identity.
+		id, err := age.ParseX25519Identity(arg)
 		if err != nil {
 			fail(err)
 		}

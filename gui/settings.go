@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"filippo.io/age"
@@ -19,8 +22,6 @@ const (
 	secretsFile = "settings.secrets.json"
 	localFile   = "settings.local.json"
 )
-
-const ageArmorHeader = "-----BEGIN AGE ENCRYPTED FILE-----"
 
 // secretVars are the var names whose values must be encrypted when committed to
 // the project tier. Kept in sync with secretVarNames() in src/engine/settings.ts
@@ -71,9 +72,9 @@ type SettingField struct {
 // SettingsView is the merged settings state returned to the panel.
 type SettingsView struct {
 	Fields []SettingField `json:"fields"`
-	// HasPassphrase reports whether the session passphrase is set (so the UI can
-	// gate encrypted saves / show a lock prompt).
-	HasPassphrase bool `json:"hasPassphrase"`
+	// HasIdentity reports whether this user has an age identity file
+	// (config/age-identity.txt), so the UI can prompt to generate one if missing.
+	HasIdentity bool `json:"hasIdentity"`
 }
 
 func configDirFor(cwd string) string {
@@ -112,9 +113,37 @@ func writeSettingsFile(path string, m map[string]string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// SetPassphrase stores the session age passphrase in memory (never persisted).
-func (a *App) SetPassphrase(p string) {
-	a.passphrase = p
+// readKeyringRecipients reads the recipient public keys from config/keyring.json.
+// A missing file yields no recipients (not an error).
+func readKeyringRecipients(dir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "keyring.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var members []struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.Unmarshal(data, &members); err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(members))
+	for _, m := range members {
+		keys = append(keys, m.PublicKey)
+	}
+	return keys, nil
+}
+
+// writeLock writes config/keyring.lock with a stable fingerprint of the recipient
+// set: sha256 hex of the recipient keys, sorted ascending, joined with "\n". Must
+// match src/engine/keyring.ts fingerprint() byte-for-byte.
+func writeLock(dir string, recipients []string) error {
+	sorted := append([]string(nil), recipients...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return os.WriteFile(filepath.Join(dir, "keyring.lock"), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644)
 }
 
 // ReadSettings reads the three settings files under cwd/config and returns a
@@ -135,7 +164,8 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 		return SettingsView{}, err
 	}
 
-	view := SettingsView{HasPassphrase: a.passphrase != ""}
+	_, idErr := os.Stat(filepath.Join(dir, "age-identity.txt"))
+	view := SettingsView{HasIdentity: idErr == nil}
 	for _, f := range knownVars {
 		field := f // copy template (Key/Label/Secret)
 		// Precedence for display matches load order: local > secrets > project.
@@ -162,11 +192,12 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 
 // WriteSetting writes one field to the chosen tier ("project" or "local").
 //
-// A secret field saved to "project" is age-encrypted with the session passphrase
-// and stored in settings.secrets.json. A secret saved to "local", or any
-// non-secret field, is written in plaintext to its tier's file. Writing a field
-// to one tier removes any stale copy of the same key from the other writable
-// tiers, so the precedence is unambiguous.
+// A secret field saved to "project" is age-encrypted to every recipient in
+// config/keyring.json and stored in settings.secrets.json (refreshing the
+// keyring.lock fingerprint). A secret saved to "local", or any non-secret field,
+// is written in plaintext to its tier's file. Writing a field to one tier removes
+// any stale copy of the same key from the other writable tiers, so the precedence
+// is unambiguous.
 func (a *App) WriteSetting(cwd, key, value, tier string) error {
 	if tier != "project" && tier != "local" {
 		return fmt.Errorf("invalid tier %q (want project or local)", tier)
@@ -187,10 +218,11 @@ func (a *App) WriteSetting(cwd, key, value, tier string) error {
 
 	stored := value
 	if targetFile == secretsFile {
-		if a.passphrase == "" {
-			return fmt.Errorf("set a passphrase before saving a secret to the project (encrypted) tier")
+		recipients, err := readKeyringRecipients(dir)
+		if err != nil {
+			return err
 		}
-		enc, err := encryptString(value, a.passphrase)
+		enc, err := encryptToRecipients(value, recipients)
 		if err != nil {
 			return err
 		}
@@ -226,19 +258,34 @@ func (a *App) WriteSetting(cwd, key, value, tier string) error {
 			}
 		}
 	}
+
+	// After encrypting a secret to the keyring, refresh the lock fingerprint so the
+	// engine can tell the committed secrets match the current recipient set.
+	if targetFile == secretsFile {
+		recipients, _ := readKeyringRecipients(dir)
+		if err := writeLock(dir, recipients); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// encryptString encrypts a value to an ASCII-armored age blob using a scrypt
-// (passphrase) recipient. Interoperable with the TS age-encryption decryptValue.
-func encryptString(plaintext, passphrase string) (string, error) {
-	r, err := age.NewScryptRecipient(passphrase)
-	if err != nil {
-		return "", err
+// encryptToRecipients encrypts to one or more age X25519 recipients (age1...).
+func encryptToRecipients(plaintext string, recipientKeys []string) (string, error) {
+	if len(recipientKeys) == 0 {
+		return "", fmt.Errorf("keyring is empty — add a recipient before saving a secret")
+	}
+	recs := make([]age.Recipient, 0, len(recipientKeys))
+	for _, k := range recipientKeys {
+		r, err := age.ParseX25519Recipient(k)
+		if err != nil {
+			return "", err
+		}
+		recs = append(recs, r)
 	}
 	buf := &bytes.Buffer{}
 	aw := armor.NewWriter(buf)
-	w, err := age.Encrypt(aw, r)
+	w, err := age.Encrypt(aw, recs...)
 	if err != nil {
 		return "", err
 	}

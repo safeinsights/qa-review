@@ -55,10 +55,6 @@ func resolveCwd(cwd string) string {
 
 type App struct {
 	ctx context.Context
-	// Session-only age passphrase, set from the Settings panel. Held in memory to
-	// encrypt secrets on save and to unlock the shared secrets file for runs.
-	// Never persisted to disk.
-	passphrase string
 }
 
 func NewApp() *App {
@@ -77,12 +73,6 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 	cmd := exec.Command(program, args...)
 	cmd.Dir = resolveCwd(cwd)
 	cmd.Env = withGuiPath()
-	// Pass the session passphrase to the engine so it can decrypt the committed
-	// shared secrets (config/settings.secrets.json). Injected into the child's
-	// env only — never into the GUI's own environment.
-	if a.passphrase != "" {
-		cmd.Env = append(cmd.Env, "AGE_PASSPHRASE="+a.passphrase)
-	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		a.emitSpawnFailure(program, err)
@@ -247,6 +237,32 @@ func copyFile(src, dest string) error {
 func (a *App) GitPull(cwd string) (string, error) {
 	cmd := exec.Command("git", "pull")
 	cmd.Dir = resolveCwd(cwd)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Sync fast-forwards the repo (suites + keyring + secrets). It never resets:
+// returns "skipped-dirty" if the working copy has changes, "skipped-diverged"
+// if the pull can't fast-forward, or "synced" on success.
+func (a *App) Sync(cwd string) (string, error) {
+	dir := resolveCwd(cwd)
+	status, err := a.git(dir, "status", "--porcelain")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(status) != "" {
+		return "skipped-dirty", nil
+	}
+	if _, err := a.git(dir, "pull", "--ff-only"); err != nil {
+		return "skipped-diverged", nil
+	}
+	return "synced", nil
+}
+
+func (a *App) git(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
