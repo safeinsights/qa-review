@@ -2,10 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { Encrypter, armor } from 'age-encryption'
 import {
     loadSettings,
-    isEncryptedValue,
     isSecretVar,
     secretVarNames,
     PROJECT_FILE,
@@ -16,18 +14,6 @@ import {
     encryptToRecipients,
     decryptWithIdentity,
 } from '@/engine/settings'
-
-const PASS = 'correct-horse-battery-staple'
-const PASSPHRASE_VAR = 'AGE_PASSPHRASE'
-
-// Local helper: produce a passphrase-encrypted armored blob to seed the
-// loadSettings passphrase-path fixtures (the public passphrase encrypt was
-// removed in favor of X25519; Task 4 rewrites these tests).
-async function encryptWithPassphrase(plain: string, passphrase: string): Promise<string> {
-    const e = new Encrypter()
-    e.setPassphrase(passphrase)
-    return armor.encode(await e.encrypt(plain))
-}
 
 let dir: string
 
@@ -108,37 +94,57 @@ describe('loadSettings layering', () => {
         expect(vars).toEqual({})
     })
 
-    it('decrypts committed secret values with the passphrase', async () => {
-        write(PROJECT_FILE, { QA_BASE_URL: 'https://project.example' })
-        write(SECRETS_FILE, {
-            ADMIN_PASSWORD: await encryptWithPassphrase('pw-admin', PASS),
-            ADMIN_MFA_CODE: await encryptWithPassphrase('424242', PASS),
-        })
-        const vars = await loadSettings({ dir, env: { [PASSPHRASE_VAR]: PASS } })
-        expect(vars.ADMIN_PASSWORD).toBe('pw-admin')
-        expect(vars.ADMIN_MFA_CODE).toBe('424242')
-    })
-
-    it('throws a clear error when an encrypted secret needs a passphrase that is absent', async () => {
-        write(SECRETS_FILE, { ADMIN_PASSWORD: await encryptWithPassphrase('pw-admin', PASS) })
-        await expect(loadSettings({ dir, env: {} })).rejects.toThrow(/AGE_PASSPHRASE/)
-    })
-
-    it('throws a clear error when the passphrase is wrong', async () => {
-        write(SECRETS_FILE, { ADMIN_PASSWORD: await encryptWithPassphrase('pw-admin', PASS) })
-        await expect(loadSettings({ dir, env: { [PASSPHRASE_VAR]: 'nope' } })).rejects.toThrow(/Cannot decrypt ADMIN_PASSWORD/)
-    })
-
     it('passes through a plaintext value left in the secrets file (not yet encrypted)', async () => {
         write(SECRETS_FILE, { ADMIN_PASSWORD: 'plain-draft' })
         const vars = await loadSettings({ dir, env: {} })
         expect(vars.ADMIN_PASSWORD).toBe('plain-draft')
     })
+})
+
+describe('loadSettings with identities', () => {
+    function settingsDir(): string {
+        return fs.mkdtempSync(path.join(os.tmpdir(), 'settings-'))
+    }
+
+    it('decrypts secrets with the identity file in the dir', async () => {
+        const dir = settingsDir()
+        const id = await generateIdentity()
+        const pub = await publicKeyFromIdentity(id)
+        fs.writeFileSync(path.join(dir, 'age-identity.txt'), `${id}\n`)
+        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) }))
+        const vars = await loadSettings({ dir, env: {} })
+        expect(vars.ADMIN_PASSWORD).toBe('pw')
+    })
+
+    it('skips encrypted secrets (no throw) when no identity is present', async () => {
+        const dir = settingsDir()
+        const id = await generateIdentity()
+        const pub = await publicKeyFromIdentity(id)
+        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) }))
+        // No identity file written. process.env override supplies the value instead.
+        const vars = await loadSettings({ dir, env: { ADMIN_PASSWORD: 'from-env' } })
+        expect(vars.ADMIN_PASSWORD).toBe('from-env')
+    })
+
+    it('passes plaintext secrets through unchanged', async () => {
+        const dir = settingsDir()
+        fs.writeFileSync(path.join(dir, 'settings.secrets.json'), JSON.stringify({ ADMIN_EMAIL: 'a@x.com' }))
+        const vars = await loadSettings({ dir, env: {} })
+        expect(vars.ADMIN_EMAIL).toBe('a@x.com')
+    })
 
     it('lets a local override beat a decrypted committed secret', async () => {
-        write(SECRETS_FILE, { ADMIN_PASSWORD: await encryptWithPassphrase('shared', PASS) })
-        write(LOCAL_FILE, { ADMIN_PASSWORD: 'my-own' })
-        const vars = await loadSettings({ dir, env: { [PASSPHRASE_VAR]: PASS } })
-        expect(vars.ADMIN_PASSWORD).toBe('my-own')
+        const dir = settingsDir()
+        const id = await generateIdentity()
+        const pub = await publicKeyFromIdentity(id)
+        fs.writeFileSync(path.join(dir, 'age-identity.txt'), `${id}\n`)
+        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('committed', [pub]) }))
+        fs.writeFileSync(path.join(dir, 'settings.local.json'),
+            JSON.stringify({ ADMIN_PASSWORD: 'local-wins' }))
+        const vars = await loadSettings({ dir, env: {} })
+        expect(vars.ADMIN_PASSWORD).toBe('local-wins')
     })
 })

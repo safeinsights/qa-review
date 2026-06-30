@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Encrypter, Decrypter, armor, generateIdentity as ageGenerateIdentity, identityToRecipient } from 'age-encryption'
 import { SHARED_ACCOUNTS, ENVIRONMENTS } from '../../config/environments'
+import { readIdentity } from '@/engine/identity'
 
 // Flat var map the engine consumes (same shape `process.env` had). Keys are the
 // committed var names declared in config/environments.ts (ADMIN_EMAIL,
@@ -20,11 +21,6 @@ export type Vars = Record<string, string | undefined>
 export const PROJECT_FILE = 'settings.json'
 export const SECRETS_FILE = 'settings.secrets.json'
 export const LOCAL_FILE = 'settings.local.json'
-
-// Stopgap (private): the legacy passphrase env var, still consulted by the
-// not-yet-rewritten loadSettings below. Task 4 removes this along with the
-// passphrase decrypt path; it is intentionally NOT exported.
-const PASSPHRASE_VAR = 'AGE_PASSPHRASE'
 
 // An armored age blob starts with this PEM header — used to tell an encrypted
 // value apart from a plaintext one.
@@ -106,55 +102,41 @@ export async function decryptWithIdentity(armored: string, identity: string): Pr
     return d.decrypt(binary, 'text')
 }
 
-// Stopgap (private): the legacy scrypt-passphrase decrypt, used only by the
-// not-yet-rewritten loadSettings below. Task 4 removes it. Not exported.
-async function decryptValue(armored: string, passphrase: string): Promise<string> {
-    const d = new Decrypter()
-    d.addPassphrase(passphrase)
-    const binary = armor.decode(armored)
-    return d.decrypt(binary, 'text')
-}
-
 export interface LoadOptions {
-    // Override the config directory (tests). Defaults to configDir().
     dir?: string
-    // Base environment to layer on top (defaults to process.env).
     env?: Vars
+    // Override the identity secret key (tests / CI). Defaults to reading the
+    // identity file under `dir`.
+    identity?: string | null
 }
 
-// Build the flat Vars map the engine consumes by merging the three settings
-// tiers and the process environment, decrypting any committed secret values.
-//
-// Precedence (lowest -> highest): settings.json -> settings.secrets.json
-// (decrypted) -> settings.local.json -> process.env.
 export async function loadSettings(opts: LoadOptions = {}): Promise<Vars> {
     const dir = opts.dir ?? configDir()
     const env = opts.env ?? process.env
-    const passphrase = env[PASSPHRASE_VAR]
+    const identity = opts.identity !== undefined ? opts.identity : readIdentity(dir)
 
     const project = readJsonFile(path.join(dir, PROJECT_FILE))
     const secrets = readJsonFile(path.join(dir, SECRETS_FILE))
     const local = readJsonFile(path.join(dir, LOCAL_FILE))
 
-    // Decrypt the secrets tier. A plaintext value in this file is passed through
-    // (e.g. a not-yet-encrypted draft); an armored value requires the passphrase.
+    // Decrypt the secrets tier. Plaintext values pass through. Encrypted values
+    // need the local identity; with NO identity we SKIP them (leave unset) so CI
+    // can run keyless on env-var secrets. A genuinely missing required secret is
+    // caught later by env.ts read().
     const decryptedSecrets: Record<string, string> = {}
     for (const [key, value] of Object.entries(secrets)) {
         if (!isEncryptedValue(value)) {
             decryptedSecrets[key] = value
             continue
         }
-        if (!passphrase) {
-            throw new Error(`Cannot decrypt ${key}: set ${PASSPHRASE_VAR} to unlock the shared secrets file`)
-        }
+        if (!identity) continue
         try {
-            decryptedSecrets[key] = await decryptValue(value, passphrase)
+            decryptedSecrets[key] = await decryptWithIdentity(value, identity)
         } catch (e) {
-            throw new Error(`Cannot decrypt ${key}: wrong ${PASSPHRASE_VAR}? (${(e as Error).message})`)
+            throw new Error(`Cannot decrypt ${key}: your key may not be a recipient yet — ask a teammate to rekey (${(e as Error).message})`)
         }
     }
 
-    // Later spreads win. process.env last so a real env var overrides any file.
     const merged: Vars = { ...project, ...decryptedSecrets, ...local }
     for (const [k, v] of Object.entries(env)) {
         if (v !== undefined && v !== '') merged[k] = v
