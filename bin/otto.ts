@@ -6,6 +6,8 @@ import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { listCommand } from '@/cli/commands/list'
 import { migrateCommand } from '@/cli/commands/migrate'
+import { rekeyCommand } from '@/cli/commands/rekey'
+import { setSecretCommand } from '@/cli/commands/set-secret'
 
 const BOOLEANS = ['json', 'headed', 'screencast']
 
@@ -27,8 +29,12 @@ async function main() {
             return listCommand()
         case 'migrate':
             return migrateCommand(opts)
+        case 'rekey':
+            return rekeyCommand()
+        case 'set-secret':
+            return setSecretCommand(opts)
         default:
-            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate`)
+            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync`)
             process.exit(1)
     }
 }
