@@ -16,12 +16,17 @@ ALWAYS cleaning up after yourself.
 
 ## Procedure
 
-1. **Authenticate (do not reinvent).** Run:
+1. **Create the run bundle directory.** Choose a bundle dir under `results/`,
+   e.g. `results/<timestamp>_explore_<env>` (timestamp like `2026-06-29_143022`).
+   Create it (`mkdir -p`). This `bundleDir` is referenced in the final result
+   line and is where you write the action trace — the GUI reads both from there.
+
+2. **Authenticate (do not reinvent).** Run:
    `pnpm qatest login --role <role> (--pr <n> | --env <name>)`
    Capture the printed cookie line. The browser you drive must carry this
    session (set it as the Cookie header / cookies on the context).
 
-2. **Drive the browser** via your browser MCP tools to satisfy the instruction.
+3. **Drive the browser** via your browser MCP tools to satisfy the instruction.
    Break the work into named steps. For EACH step:
    - Before acting, print one line to stdout:
      `{"type":"step","name":"<step name>","status":"running","at":<epoch ms>}`
@@ -29,27 +34,37 @@ ALWAYS cleaning up after yourself.
    - On success print:
      `{"type":"step","name":"<step name>","status":"passed","at":<epoch ms>}`
      On failure print status `"failed"` with an `"error"` field, then stop.
-   - Append every concrete action to an in-memory action trace using ONLY these
-     kinds: `goto{url}`, `click{selector}`, `fill{selector,value}`,
-     `expectVisible{selector}`. Prefer stable selectors
-     (`role=`, `label=`, `text=`, `data-testid`).
+   - Append every concrete action to an in-memory action trace. Every action MUST
+     carry a `step` field (the human step name it belongs to) plus a `kind` and
+     its args. Use ONLY these kinds:
+     `{"step":"<name>","kind":"goto","url":"<url>"}`,
+     `{"step":"<name>","kind":"click","selector":"<sel>"}`,
+     `{"step":"<name>","kind":"fill","selector":"<sel>","value":"<v>"}`,
+     `{"step":"<name>","kind":"expectVisible","selector":"<sel>"}`.
+     Prefer stable selectors (`role=`, `label=`, `text=`, `data-testid`).
 
-3. **Track created entities.** If you create a study or user, record its id
+4. **Track created entities.** If you create a study or user, record its id
    (from the URL, e.g. `/.../study/<id>/...`).
 
-4. **Always clean up.** Whether the run passed or failed, run:
+5. **Always write the action trace** to `<bundleDir>/trace.json` (regardless of
+   pass/fail, so the GUI can offer "Save as suite"). Shape:
+   `{ "name": "<kebab-name-from-instruction>", "description": "<one line>",
+      "role": "<role>", "actions": [ ...the trace, each with a step field... ] }`
+
+6. **Always clean up.** Whether the run passed or failed, run:
    `pnpm qatest cleanup (--pr <n> | --env <name>) --cookie "<cookie>" --studies <ids> --users <ids>`
    Report cleanup outcome.
 
-5. **Emit the final result line:**
-   `{"type":"result","ok":<bool>,"failureCategory":<cat|null>,"steps":[...],"cleanup":{...}}`
+7. **Emit the final result line** — it MUST include `bundleDir` (the GUI needs it
+   to locate the video and the trace for promotion):
+   `{"type":"result","ok":<bool>,"failureCategory":<cat|null>,"bundleDir":"<bundleDir>","steps":[...],"cleanup":{...}}`
 
-## Saving as a suite (only when invoked with `--save <name>`)
-- Write the action trace to a file:
-  `{ "name": "<kebab-name>", "description": "<one line>", "role": "<role>",
-     "actions": [ ...the trace... ] }`
-- Run `pnpm qatest codegen --trace <file>`. If it reports a typecheck failure,
-  report that and STOP — do not claim success.
+## Promoting to a suite
+The GUI drives promotion separately (it runs `pnpm qatest codegen --trace
+<bundleDir>/trace.json` on a branch and opens a PR). You do NOT run codegen
+yourself — your job is only to leave a well-formed `<bundleDir>/trace.json` and a
+result line carrying `bundleDir`. Keep selectors stable; the trace becomes a
+dev-reviewed suite.
 
 ## Rules
 - NEVER skip cleanup, even on failure.
