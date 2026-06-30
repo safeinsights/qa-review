@@ -1,20 +1,26 @@
 import type { ActionTrace, Action } from '@/codegen/action-trace'
 
+// Escape a string for safe interpolation into a single-quoted TS string literal.
+const sq = (s: string): string => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+
 function camelConst(name: string): string {
-    const camel = name.replace(/[-_]+(.)/g, (_, c) => c.toUpperCase())
-    return camel.charAt(0).toLowerCase() + camel.slice(1) + 'Suite'
+    const camel = name.replace(/[-_\s]+(.)/g, (_, c: string) => c.toUpperCase())
+    const safe = /^\d/.test(camel) ? '_' + camel : camel
+    return safe.charAt(0).toLowerCase() + safe.slice(1) + 'Suite'
 }
 
 function actionLine(a: Action): string {
     switch (a.kind) {
-        case 'goto':
-            return `            await ctx.page.goto(\`\${ctx.baseURL}${a.url}\`, { waitUntil: 'domcontentloaded' })`
+        case 'goto': {
+            const url = a.url.replace(/`/g, '\\`').replace(/\$\{/g, '\\${')
+            return `            await ctx.page.goto(\`\${ctx.baseURL}${url}\`, { waitUntil: 'domcontentloaded' })`
+        }
         case 'click':
-            return `            await ctx.page.locator('${a.selector}').click()`
+            return `            await ctx.page.locator('${sq(a.selector)}').click()`
         case 'fill':
-            return `            await ctx.page.locator('${a.selector}').fill('${a.value}')`
+            return `            await ctx.page.locator('${sq(a.selector)}').fill('${sq(a.value)}')`
         case 'expectVisible':
-            return `            await ctx.page.locator('${a.selector}').waitFor({ state: 'visible' })`
+            return `            await ctx.page.locator('${sq(a.selector)}').waitFor({ state: 'visible' })`
     }
 }
 
@@ -36,7 +42,7 @@ export function generateSuite(trace: ActionTrace): string {
     const stepBlocks = groups
         .map((g) => {
             const body = g.actions.map(actionLine).join('\n')
-            return `        await ctx.step('${g.label}', async () => {\n${body}\n        })`
+            return `        await ctx.step('${sq(g.label)}', async () => {\n${body}\n        })`
         })
         .join('\n\n')
 
@@ -45,9 +51,9 @@ export function generateSuite(trace: ActionTrace): string {
 // Generated from an exploratory run by qatest codegen. Review/harden selectors
 // before relying on this for regression.
 export const ${camelConst(trace.name)}: Suite = {
-    name: '${trace.name}',
-    description: '${trace.description}',
-    roles: ['${trace.role}'],
+    name: '${sq(trace.name)}',
+    description: '${sq(trace.description)}',
+    roles: ['${sq(trace.role)}'],
     async run(ctx) {
 ${stepBlocks}
     },

@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { describe, it, expect } from 'vitest'
 import { generateSuite } from '@/codegen/generate-suite'
 import type { ActionTrace } from '@/codegen/action-trace'
@@ -38,5 +40,38 @@ describe('generateSuite', () => {
     it('exports a camelCase suite const derived from the name', () => {
         const src = generateSuite(trace)
         expect(src).toContain('export const adminInvitesUserSuite: Suite =')
+    })
+})
+
+describe('generateSuite escaping + identifier safety', () => {
+    it('produces compilable TS when strings contain apostrophes', () => {
+        const tricky: ActionTrace = {
+            name: 'admin-cant-invite',
+            description: "Admin can't invite a user named O'Brien",
+            role: 'admin',
+            actions: [
+                { step: "It's step one", kind: 'goto', url: '/x' },
+                { step: "It's step one", kind: 'fill', selector: "label=Name", value: "O'Brien" },
+                { step: 'Check', kind: 'expectVisible', selector: "text=O'Brien" },
+            ],
+        }
+        const out = 'src/suites/_escape-smoke.ts'
+        fs.writeFileSync(out, generateSuite(tricky))
+        try {
+            execFileSync('pnpm', ['typecheck'], { stdio: 'pipe' })
+        } finally {
+            fs.rmSync(out, { force: true })
+        }
+        // If typecheck threw, the test fails before reaching here.
+        expect(true).toBe(true)
+    })
+
+    it('produces a valid identifier for a name with a leading digit', () => {
+        const t: ActionTrace = {
+            name: '2fa-login', description: 'x', role: 'admin',
+            actions: [{ step: 'Go', kind: 'goto', url: '/x' }],
+        }
+        const src = generateSuite(t)
+        expect(src).toContain('export const _2faLoginSuite: Suite =')
     })
 })
