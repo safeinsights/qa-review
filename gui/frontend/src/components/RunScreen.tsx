@@ -63,7 +63,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
         <div className="run-screen" style={{ display: 'flex', gap: '1rem' }}>
             <div style={{ flex: 1 }}>
                 <StepChecklist steps={steps} />
-                {running ? <p>Running… (a browser window will open)</p> : null}
+                {running ? <p>Running… (the live browser appears on the right)</p> : null}
                 {error ? <p style={{ color: '#c5221f' }}>⚠ {error}</p> : null}
             </div>
             <div style={{ flex: 1 }}>
