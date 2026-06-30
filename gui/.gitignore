@@ -4,5 +4,4 @@ build/bin/
 *.exe
 qa-runner
 frontend/src/lib/wailsjs/
-build/
 frontend/package.json.md5
