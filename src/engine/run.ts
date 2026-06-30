@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import { resolveEnv } from '@/engine/env'
 import { Recorder } from '@/engine/recorder'
 import { CleanupClient } from '@/engine/cleanup'
@@ -99,7 +99,17 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 // fullPage: capture the entire scrollable page, not just the
                 // 1280×720 viewport, so the snapshot shows the whole page (the GUI
                 // scrolls it within a fixed-size pane).
-                await page.screenshot({ path: path.join(recorder.bundleDir, rel), fullPage: true })
+                //
+                // `style` is injected only for the duration of this shot (Playwright
+                // reverts it afterward). fullPage expands the viewport to the page's
+                // scroll height and takes ONE shot — which leaves the app's
+                // fixed-position footer stranded mid-image as a dark band. Hide just
+                // the footer for the capture so the page reads top-to-bottom cleanly.
+                await page.screenshot({
+                    path: path.join(recorder.bundleDir, rel),
+                    fullPage: true,
+                    style: '.mantine-AppShell-footer{ display: none !important }',
+                })
                 return rel
             } catch {
                 return undefined
@@ -156,14 +166,15 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
 // --- Production default deps ---
 
 export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
-    const here = path.dirname(fileURLToPath(import.meta.url))
-    const resultsRoot = path.resolve(here, '../../results')
+    const resultsRoot = resultsRootDir()
     return {
         vars,
         resultsRoot,
         openBrowser: async (env) => {
             const { chromium } = await import('@playwright/test')
-            const browser = await chromium.launch()
+            // channel:'chrome' drives the user's installed Google Chrome instead of
+            // Playwright's bundled Chromium, so the packaged app needs no browser download.
+            const browser = await chromium.launch({ channel: 'chrome' })
             const context = await browser.newContext({
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot }, // moved into bundle after finish
