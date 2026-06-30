@@ -29,7 +29,7 @@ export interface RunDeps {
     runCleanup: (client: CleanupClient) => Promise<RunResult['cleanup']>
     // Optional live step sink (the CLI --json mode prints each event). When
     // omitted, runs proceed without streaming.
-    onStep?: (event: import('@/engine/types').StepEvent) => void
+    onStep?: (event: StepEvent) => void
 }
 
 function categorize(error: Error): FailureCategory {
