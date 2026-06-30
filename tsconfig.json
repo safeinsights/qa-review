@@ -10,7 +10,7 @@
     "noEmit": true,
     "types": ["node"],
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"], "@/gui/*": ["gui/src/*"] }
+    "paths": { "@/*": ["src/*"], "@/gui/*": ["gui/frontend/src/*"] }
   },
   "include": ["src", "tests", "config", "bin"]
 }

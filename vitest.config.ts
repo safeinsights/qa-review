@@ -4,7 +4,7 @@ import path from 'node:path'
 export default defineConfig({
     resolve: {
         alias: {
-            '@/gui': path.resolve(__dirname, 'gui/src'),
+            '@/gui': path.resolve(__dirname, 'gui/frontend/src'),
             '@': path.resolve(__dirname, 'src'),
         },
     },
