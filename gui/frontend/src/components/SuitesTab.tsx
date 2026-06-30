@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
 import { RunScreen, type RunSpec } from './RunScreen'
+import { RunControls } from './RunControls'
 import { runProcess, onStdoutLine, onExit } from '../lib/ipc'
 
 const REPO_ROOT = '..' // gui/ lives in the repo; the engine runs from repo root
-
-const ENVS = ['qa', 'staging'] as const
-const ROLES = ['admin', 'researcher', 'reviewer'] as const
 
 export function SuitesTab() {
     const [env, setEnv] = useState<string>('qa')
@@ -22,17 +20,24 @@ export function SuitesTab() {
         let offOut: (() => void) | undefined
         let offExit: (() => void) | undefined
         ;(async () => {
-            offOut = await onStdoutLine((line) => { buf += line + '\n' })
+            offOut = await onStdoutLine((line) => {
+                buf += line + '\n'
+            })
             offExit = await onExit(() => {
                 const last = buf.trim().split('\n').pop() ?? '{}'
                 try {
                     const parsed = JSON.parse(last)
                     if (parsed.suites) setSuites(parsed.suites)
-                } catch { /* ignore */ }
+                } catch {
+                    /* ignore */
+                }
             })
             await runProcess('pnpm', ['qatest', 'list'], REPO_ROOT)
         })()
-        return () => { offOut?.(); offExit?.() }
+        return () => {
+            offOut?.()
+            offExit?.()
+        }
     }, [])
 
     const run = () => {
@@ -44,19 +49,18 @@ export function SuitesTab() {
 
     return (
         <div>
-            <div className="controls">
-                <label>Env <select value={env} onChange={(e) => setEnv(e.target.value)} disabled={!!pr}>
-                    {ENVS.map((x) => <option key={x}>{x}</option>)}
-                </select></label>
-                <label>PR # <input value={pr} onChange={(e) => setPr(e.target.value)} placeholder="(optional)" size={6} /></label>
-                <label>Role <select value={role} onChange={(e) => setRole(e.target.value)}>
-                    {ROLES.map((x) => <option key={x}>{x}</option>)}
-                </select></label>
-                <label>Suite <select value={suite} onChange={(e) => setSuite(e.target.value)}>
-                    {suites.length === 0 ? <option>signin</option> : suites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-                </select></label>
-                <button onClick={run}>▶ Run</button>
-            </div>
+            <RunControls
+                env={env}
+                setEnv={setEnv}
+                pr={pr}
+                setPr={setPr}
+                role={role}
+                setRole={setRole}
+                suite={suite}
+                setSuite={setSuite}
+                suites={suites}
+                onRun={run}
+            />
             <RunScreen spec={spec} />
         </div>
     )

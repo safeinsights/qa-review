@@ -67,5 +67,5 @@ export function BrowserPanel({ port, interactive = true }: { port: number; inter
         clientRef.current?.send({ kind: 'key', action, key: e.key, code: e.code, text })
     }
 
-    return <canvas ref={canvasRef} {...handlers} style={{ width: '100%', border: '1px solid #ccc', outline: 'none' }} />
+    return <canvas ref={canvasRef} {...handlers} style={{ width: '100%', display: 'block', outline: 'none', cursor: 'crosshair' }} />
 }

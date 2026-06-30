@@ -59,17 +59,114 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
         }
     }, [spec])
 
+    // Idle state before the first run.
+    if (!spec) {
+        return (
+            <div
+                style={{
+                    marginTop: 24,
+                    padding: '40px 24px',
+                    textAlign: 'center',
+                    color: 'var(--ink-dim)',
+                    border: '1px dashed var(--line)',
+                    borderRadius: 10,
+                    fontStyle: 'italic',
+                }}
+            >
+                Configure a run above and press <span style={{ color: 'var(--teal)', fontStyle: 'normal' }}>▶ Run</span> to
+                begin.
+            </div>
+        )
+    }
+
     return (
-        <div className="run-screen" style={{ display: 'flex', gap: '1rem' }}>
-            <div style={{ flex: 1 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 400px) 1fr', gap: 22, marginTop: 22 }}>
+            {/* Left: execution log + verdict */}
+            <section
+                style={{
+                    background: 'var(--paper-card)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 10,
+                    padding: '18px 20px',
+                    boxShadow: 'var(--shadow-card)',
+                    alignSelf: 'start',
+                }}
+            >
+                <div className="kicker" style={{ marginBottom: 12 }}>
+                    Execution log
+                </div>
                 <StepChecklist steps={steps} />
-                {running ? <p>Running… (the live browser appears on the right)</p> : null}
-                {error ? <p style={{ color: '#c5221f' }}>⚠ {error}</p> : null}
-            </div>
-            <div style={{ flex: 1 }}>
-                {port ? <BrowserPanel port={port} /> : null}
+                {running && !result ? (
+                    <p className="st-dim" style={{ marginTop: 12, fontStyle: 'italic' }}>
+                        Running… the live browser appears on the right.
+                    </p>
+                ) : null}
+                {error ? (
+                    <p
+                        style={{
+                            marginTop: 12,
+                            background: '#fbe9e7',
+                            borderLeft: '3px solid var(--red)',
+                            padding: '10px 14px',
+                            color: 'var(--red)',
+                            fontSize: 14,
+                        }}
+                    >
+                        ⚠ {error}
+                    </p>
+                ) : null}
                 {result ? <ResultPanel result={result} /> : null}
-            </div>
+            </section>
+
+            {/* Right: live browser monitor */}
+            <section
+                style={{
+                    background: 'var(--paper-card)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 10,
+                    overflow: 'hidden',
+                    boxShadow: 'var(--shadow-monitor)',
+                    alignSelf: 'start',
+                }}
+            >
+                <div
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '11px 16px',
+                        borderBottom: '1px solid var(--line)',
+                    }}
+                >
+                    <span
+                        className="mono"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--teal)', letterSpacing: 1 }}
+                    >
+                        <span className="live-dot" /> LIVE BROWSER
+                    </span>
+                    {port ? (
+                        <span className="mono st-dim" style={{ fontSize: 12 }}>
+                            127.0.0.1:{port}
+                        </span>
+                    ) : null}
+                </div>
+                {port ? (
+                    <BrowserPanel port={port} />
+                ) : (
+                    <div
+                        style={{
+                            aspectRatio: '16 / 10',
+                            display: 'grid',
+                            placeItems: 'center',
+                            background: 'var(--paper-sunken)',
+                            color: 'var(--ink-faint)',
+                            fontStyle: 'italic',
+                        }}
+                    >
+                        {running ? 'Waiting for the browser to start…' : 'No live session.'}
+                    </div>
+                )}
+            </section>
         </div>
     )
 }

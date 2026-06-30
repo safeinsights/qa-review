@@ -1,0 +1,132 @@
+/* ── SafeInsights QA Runner — Editorial / clinical theme ────────────────────
+   Warm paper, ink text, deep-teal accent. Fraunces serif display + Newsreader
+   body + IBM Plex Mono for technical detail (ids, ports, flags). Reads like a
+   precise lab report. Design tokens here; Mantine is skinned to match. */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Newsreader:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+    --paper: #f6f4ee;
+    --paper-card: #fffdf8;
+    --paper-sunken: #efece3;
+    --ink: #1a1a17;
+    --ink-dim: #6b6a62;
+    --ink-faint: #9b988c;
+    --line: #e0ddd2;
+    --line-strong: #1a1a17;
+    --teal: #0c6b5e;
+    --teal-deep: #074b41;
+    --teal-soft: #e3f1ee;
+    --green: #137a4b;
+    --red: #b3261e;
+    --amber: #9a6700;
+    --amber-bg: #fbf3e3;
+    --shadow-card: 0 2px 14px rgba(26, 26, 23, 0.05);
+    --shadow-monitor: 0 10px 34px rgba(26, 26, 23, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Newsreader', Georgia, serif;
+    font-size: 15px;
+    line-height: 1.6;
+    /* faint paper grain for warmth, not noise */
+    background-image: radial-gradient(140% 120% at 0% 0%, #faf8f2 0%, var(--paper) 55%);
+}
+
+.mono {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.86em;
+    letter-spacing: -0.01em;
+}
+
+.kicker {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+}
+
+/* status text colors */
+.st-pass { color: var(--green); }
+.st-fail { color: var(--red); }
+.st-warn { color: var(--amber); }
+.st-dim  { color: var(--ink-dim); }
+
+/* live indicator pulse */
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--teal);
+    animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* staggered fade-up for step rows + cards on appear */
+@keyframes fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.35s ease both; }
+
+/* scrollbars: thin, paper-toned */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--paper); }
+::-webkit-scrollbar-thumb { background: var(--line); border: 2px solid var(--paper); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+::selection { background: var(--teal-soft); }
+
+/* ── Mantine overrides → editorial skin ───────────────────────────────────── */
+.mantine-Input-input,
+.mantine-InputBase-input {
+    background: var(--paper-card) !important;
+    border: 1px solid var(--line) !important;
+    color: var(--ink) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 13px !important;
+}
+.mantine-Input-input:focus,
+.mantine-InputBase-input:focus {
+    border-color: var(--teal) !important;
+    box-shadow: 0 0 0 3px var(--teal-soft) !important;
+}
+.mantine-Select-dropdown,
+.mantine-Popover-dropdown {
+    background: var(--paper-card) !important;
+    border: 1px solid var(--line) !important;
+    box-shadow: var(--shadow-card) !important;
+}
+.mantine-Select-option { color: var(--ink) !important; font-family: 'IBM Plex Mono', monospace !important; font-size: 13px; }
+.mantine-Select-option[data-selected] { background: var(--teal) !important; color: #fff !important; }
+.mantine-Select-option:hover:not([data-selected]) { background: var(--teal-soft) !important; }
+
+.mantine-Tabs-tab {
+    font-family: 'IBM Plex Mono', monospace !important;
+    color: var(--ink-dim) !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    padding: 8px 2px !important;
+    margin-right: 26px !important;
+}
+.mantine-Tabs-tab[data-active] {
+    color: var(--ink) !important;
+    border-bottom-color: var(--teal) !important;
+}
+.mantine-Tabs-list { border-bottom: none !important; }
