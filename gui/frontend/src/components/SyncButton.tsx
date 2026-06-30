@@ -1,42 +1,161 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
-import { gitPull } from '../lib/ipc'
+import { sync, resetAndSync, rekey, isInDrift } from '../lib/ipc'
 
 export function SyncButton({ cwd }: { cwd: string }) {
     const [status, setStatus] = useState('')
     const [busy, setBusy] = useState(false)
+    const [syncState, setSyncState] = useState('')
+    const [drift, setDrift] = useState(false)
 
-    const pull = async () => {
+    const runSync = async () => {
         setBusy(true)
-        setStatus('Pulling…')
+        setStatus('Syncing…')
+        setDrift(false)
         try {
-            await gitPull(cwd)
-            setStatus('Up to date — restart to load new suites.')
+            const result = await sync(cwd)
+            setSyncState(result)
+            if (result === 'synced') {
+                setStatus('Up to date — restart to load new suites.')
+                try {
+                    setDrift(await isInDrift(cwd))
+                } catch {
+                    setDrift(false)
+                }
+            } else if (result === 'skipped-dirty') {
+                setStatus('Local edits present — sync skipped.')
+            } else if (result === 'skipped-diverged') {
+                setStatus('Local branch diverged — sync skipped.')
+            } else {
+                setStatus(result)
+            }
         } catch (e) {
-            setStatus('Pull failed: ' + String(e))
+            setSyncState('')
+            setStatus('Sync failed: ' + String(e))
         } finally {
             setBusy(false)
         }
     }
 
+    // Sync once on startup.
+    useEffect(() => {
+        void runSync()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    const reset = async () => {
+        if (
+            !window.confirm(
+                'Discard uncommitted edits (local commits are kept) and sync?',
+            )
+        )
+            return
+        setBusy(true)
+        setStatus('Resetting & syncing…')
+        try {
+            const result = await resetAndSync(cwd)
+            setSyncState(result)
+            if (result === 'synced') {
+                setStatus('Up to date — restart to load new suites.')
+                try {
+                    setDrift(await isInDrift(cwd))
+                } catch {
+                    setDrift(false)
+                }
+            } else {
+                setStatus(result)
+            }
+        } catch (e) {
+            setStatus('Reset failed: ' + String(e))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    const needsReset = syncState === 'skipped-dirty' || syncState === 'skipped-diverged'
+
     return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {status ? (
-                <span className="mono st-dim" style={{ fontSize: 12 }}>
-                    {status}
-                </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {status ? (
+                    <span className="mono st-dim" style={{ fontSize: 12 }}>
+                        {status}
+                    </span>
+                ) : null}
+                <Button
+                    onClick={runSync}
+                    loading={busy}
+                    variant="outline"
+                    color="dark"
+                    radius="md"
+                    size="sm"
+                    leftSection={<span aria-hidden>⟲</span>}
+                    styles={{ root: { fontFamily: '"IBM Plex Mono", monospace', fontSize: 12 } }}
+                >
+                    pull latest tests
+                </Button>
+            </div>
+            {needsReset ? (
+                <Banner
+                    text="Sync skipped — working copy has uncommitted edits or diverged."
+                    actionLabel="Reset to clean & sync"
+                    onClick={reset}
+                    busy={busy}
+                />
             ) : null}
-            <Button
-                onClick={pull}
-                loading={busy}
-                variant="outline"
-                color="dark"
-                radius="md"
-                size="sm"
-                leftSection={<span aria-hidden>⟲</span>}
-                styles={{ root: { fontFamily: '"IBM Plex Mono", monospace', fontSize: 12 } }}
-            >
-                pull latest tests
+            {drift ? (
+                <Banner
+                    text="Secrets out of sync with the keyring."
+                    actionLabel="Rekey"
+                    onClick={async () => {
+                        setBusy(true)
+                        setStatus('Rekeying…')
+                        try {
+                            await rekey(cwd)
+                            setStatus('Rekeyed.')
+                            setDrift(await isInDrift(cwd))
+                        } catch (e) {
+                            setStatus('Rekey failed: ' + String(e))
+                        } finally {
+                            setBusy(false)
+                        }
+                    }}
+                    busy={busy}
+                />
+            ) : null}
+        </div>
+    )
+}
+
+function Banner({
+    text,
+    actionLabel,
+    onClick,
+    busy,
+}: {
+    text: string
+    actionLabel: string
+    onClick: () => void
+    busy: boolean
+}) {
+    return (
+        <div
+            style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '8px 12px',
+                background: 'var(--paper-card)',
+                border: '1px solid var(--line)',
+                borderRadius: 8,
+            }}
+        >
+            <span className="mono st-dim" style={{ fontSize: 12 }}>
+                {text}
+            </span>
+            <Button onClick={onClick} loading={busy} variant="light" color="teal" size="xs">
+                {actionLabel}
             </Button>
         </div>
     )

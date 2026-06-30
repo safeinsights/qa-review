@@ -19,7 +19,7 @@ export interface SettingField {
 
 export interface SettingsView {
     fields: SettingField[]
-    hasPassphrase: boolean
+    hasIdentity: boolean
 }
 
 interface WailsApp {
@@ -32,7 +32,11 @@ interface WailsApp {
     ZipBundle(bundleDir: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
-    SetPassphrase(p: string): Promise<void>
+    Sync(cwd: string): Promise<string>
+    ResetAndSync(cwd: string): Promise<string>
+    RequestAccess(cwd: string, name: string): Promise<string>
+    Rekey(cwd: string): Promise<string>
+    IsInDrift(cwd: string): Promise<boolean>
 }
 
 interface WailsRuntime {
@@ -113,7 +117,27 @@ export async function writeSetting(cwd: string, key: string, value: string, tier
     await app().WriteSetting(cwd, key, value, tier)
 }
 
-// Set the session age passphrase (held in memory by Go; never persisted).
-export async function setPassphrase(p: string): Promise<void> {
-    await app().SetPassphrase(p)
+// Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged".
+export async function sync(cwd: string): Promise<string> {
+    return app().Sync(cwd)
+}
+
+// Discard uncommitted tracked edits (keep local commits), then sync.
+export async function resetAndSync(cwd: string): Promise<string> {
+    return app().ResetAndSync(cwd)
+}
+
+// Generate identity + open a keyring PR via `otto request-access`.
+export async function requestAccess(cwd: string, name: string): Promise<string> {
+    return app().RequestAccess(cwd, name)
+}
+
+// Re-encrypt all secrets to the current keyring.
+export async function rekey(cwd: string): Promise<string> {
+    return app().Rekey(cwd)
+}
+
+// True if secrets are out of sync with the keyring (rekey needed).
+export async function isInDrift(cwd: string): Promise<boolean> {
+    return app().IsInDrift(cwd)
 }

@@ -4,12 +4,15 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -258,6 +261,61 @@ func (a *App) Sync(cwd string) (string, error) {
 		return "skipped-diverged", nil
 	}
 	return "synced", nil
+}
+
+// RequestAccess shells out to `pnpm otto request-access --name <name>` in cwd,
+// returning combined output.
+func (a *App) RequestAccess(cwd, name string) (string, error) {
+	cmd := exec.Command("pnpm", "otto", "request-access", "--name", name)
+	cmd.Dir = resolveCwd(cwd)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Rekey shells out to `pnpm otto rekey` in cwd.
+func (a *App) Rekey(cwd string) (string, error) {
+	cmd := exec.Command("pnpm", "otto", "rekey")
+	cmd.Dir = resolveCwd(cwd)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// ResetAndSync discards ONLY uncommitted tracked edits (git restore .) — keeping
+// local commits — then runs a fast-forward Sync. Returns the Sync status string.
+func (a *App) ResetAndSync(cwd string) (string, error) {
+	dir := resolveCwd(cwd)
+	if _, err := a.git(dir, "restore", "."); err != nil {
+		return "", err
+	}
+	return a.Sync(cwd)
+}
+
+// IsInDrift reports whether config/keyring.lock is missing or doesn't match the
+// fingerprint of config/keyring.json's recipients (sha256 of sorted, "\n"-joined
+// public keys). Mirrors src/engine/keyring.ts isInDrift.
+func (a *App) IsInDrift(cwd string) (bool, error) {
+	dir := filepath.Join(resolveCwd(cwd), "config")
+	recipients, err := readKeyringRecipients(dir)
+	if err != nil {
+		return false, err
+	}
+	if len(recipients) == 0 {
+		return false, nil
+	}
+	sorted := append([]string(nil), recipients...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	want := hex.EncodeToString(sum[:])
+	lock, err := os.ReadFile(filepath.Join(dir, "keyring.lock"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(string(lock)) != want, nil
 }
 
 func (a *App) git(dir string, args ...string) (string, error) {

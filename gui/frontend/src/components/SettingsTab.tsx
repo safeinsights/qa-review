@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, PasswordInput, SegmentedControl, TextInput, Alert } from '@mantine/core'
-import { readSettings, writeSetting, setPassphrase, type SettingField } from '../lib/ipc'
+import { readSettings, writeSetting, type SettingField } from '../lib/ipc'
+import { RequestAccessButton } from './RequestAccessButton'
 
 const REPO_ROOT = '..'
 
@@ -13,8 +14,7 @@ interface Draft {
 export function SettingsTab() {
     const [fields, setFields] = useState<SettingField[]>([])
     const [drafts, setDrafts] = useState<Record<string, Draft>>({})
-    const [pass, setPass] = useState('')
-    const [passSet, setPassSet] = useState(false)
+    const [hasIdentity, setHasIdentity] = useState(false)
     const [error, setError] = useState('')
     const [savedKey, setSavedKey] = useState('')
 
@@ -22,7 +22,7 @@ export function SettingsTab() {
         try {
             const view = await readSettings(REPO_ROOT)
             setFields(view.fields)
-            setPassSet(view.hasPassphrase)
+            setHasIdentity(view.hasIdentity)
             // Seed drafts from current non-secret values; secrets start blank.
             const next: Record<string, Draft> = {}
             for (const f of view.fields) {
@@ -38,17 +38,6 @@ export function SettingsTab() {
     useEffect(() => {
         void load()
     }, [])
-
-    const applyPassphrase = async () => {
-        setError('')
-        try {
-            await setPassphrase(pass)
-            setPassSet(pass !== '')
-            await load()
-        } catch (e) {
-            setError((e as Error).message)
-        }
-    }
 
     const setDraft = (key: string, patch: Partial<Draft>) =>
         setDrafts((d) => ({ ...d, [key]: { ...d[key], ...patch } }))
@@ -66,7 +55,7 @@ export function SettingsTab() {
         }
     }
 
-    const rowProps = { drafts, setDraft, save, savedKey, passSet }
+    const rowProps = { drafts, setDraft, save, savedKey, hasIdentity }
 
     // Ungrouped fields (base URLs) render first; the rest group into account cards.
     const ungrouped = fields.filter((f) => !f.group)
@@ -74,31 +63,11 @@ export function SettingsTab() {
 
     return (
         <div style={{ maxWidth: 760 }}>
-            <Card>
-                <div className="kicker" style={{ marginBottom: 8 }}>
-                    Unlock passphrase
-                </div>
-                <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--ink-soft, #555)' }}>
-                    Required to view or save shared (committed) secrets. Held in memory for this session only — never
-                    written to disk. The same passphrase is passed to runs so they can decrypt the shared accounts.
-                </p>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-                    <PasswordInput
-                        value={pass}
-                        onChange={(e) => setPass(e.currentTarget.value)}
-                        placeholder="passphrase"
-                        style={{ flex: 1 }}
-                    />
-                    <Button onClick={applyPassphrase} variant="light" color="teal">
-                        {passSet ? 'Update' : 'Unlock'}
-                    </Button>
-                </div>
-                {passSet ? (
-                    <div className="kicker" style={{ marginTop: 8, color: 'var(--teal, #0c6b5e)' }}>
-                        ✓ passphrase set for this session
-                    </div>
-                ) : null}
-            </Card>
+            {!hasIdentity ? (
+                <Card>
+                    <RequestAccessButton cwd={REPO_ROOT} />
+                </Card>
+            ) : null}
 
             {error ? (
                 <Alert color="red" mt="md" title="Settings error" onClose={() => setError('')} withCloseButton>
@@ -133,12 +102,12 @@ interface RowProps {
     setDraft: (key: string, patch: Partial<Draft>) => void
     save: (f: SettingField) => void
     savedKey: string
-    passSet: boolean
+    hasIdentity: boolean
 }
 
-function FieldRow({ field: f, drafts, setDraft, save, savedKey, passSet }: RowProps) {
+function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity }: RowProps) {
     const draft = drafts[f.key] ?? { value: '', tier: 'project' as const }
-    const blocked = f.secret && draft.tier === 'project' && !passSet
+    const blocked = f.secret && draft.tier === 'project' && !hasIdentity
     return (
         <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -184,7 +153,7 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, passSet }: RowPr
             </div>
             {blocked ? (
                 <div className="kicker" style={{ marginTop: 6, color: '#b04a3a' }}>
-                    set the unlock passphrase above to commit this secret project-wide
+                    request access (Settings ▸ Request access) to get an identity before committing project secrets
                 </div>
             ) : null}
         </div>
