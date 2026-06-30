@@ -40,7 +40,7 @@ export async function requestAccess(opts: RequestAccessOptions): Promise<{ publi
     await git(['add', 'config/keyring.json'])
     await git(['commit', '-m', `Add ${opts.name} to keyring`])
     await git(['push', '-u', 'origin', branch])
-    // Return to the user's prior branch so a later `otto sync` doesn't get stuck
+    // Return to the user's prior branch so a later `qar sync` doesn't get stuck
     // on the (diverged) access branch. Best-effort — don't fail the request if it
     // can't switch back.
     try {
@@ -63,7 +63,7 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
 
     try {
         await execFileAsync('gh', ['pr', 'create', '--fill', '--title', `Add ${name} to keyring`,
-            '--body', 'Reviewer: run "Approve & rekey" (otto rekey on this branch) before merging.'])
+            '--body', 'Reviewer: run "Approve & rekey" (qar rekey on this branch) before merging.'])
         console.log('Opened a pull request. A teammate will approve + rekey, then merge.')
     } catch {
         console.log('Could not open a PR automatically (is `gh` installed and authed?).')

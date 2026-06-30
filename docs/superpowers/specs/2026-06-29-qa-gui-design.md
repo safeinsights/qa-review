@@ -48,7 +48,7 @@ clone).
                 │ spawns child process                        │ git / gh
                 ▼                                             ▼
    ┌────────────────────────────┐                  ┌────────────────────┐
-   │ curated:  otto run ...    │                  │ git pull (suites)  │
+   │ curated:  qar run ...    │                  │ git pull (suites)  │
    │ AI:       claude -p qa-     │                  │ branch+commit+push │
    │           explore ...       │                  │ gh pr create       │
    └─────────────┬──────────────┘                  └────────────────────┘
@@ -59,7 +59,7 @@ clone).
        │  runEngine · resolveEnv/resolvePrEnv · Recorder│
        │  · CleanupClient (guaranteed teardown)         │
        │  qa-explore skill: drives browser via MCP,     │
-       │   shells otto login/cleanup, emits same      │
+       │   shells qar login/cleanup, emits same      │
        │   StepEvents + bundle, can codegen a TS suite  │
        └──────────────────────────────────────────────┘
 ```
@@ -68,12 +68,12 @@ clone).
 
 Every run — curated or AI — is **a child process that streams `StepEvent` JSON
 on stdout and writes a result bundle**. The GUI is identical for both; only the
-spawned command differs (`otto run` vs `claude -p qa-explore`). The GUI never
+spawned command differs (`qar run` vs `claude -p qa-explore`). The GUI never
 reaches into engine internals; it reads stdout and the bundle on disk.
 
 ### Three new pieces (beyond today's engine)
 
-1. **`otto` CLI** — promote today's `bin/run-pr.ts` into a real CLI with
+1. **`qar` CLI** — promote today's `bin/run-pr.ts` into a real CLI with
    subcommands (`run`, `login`, `cleanup`, `codegen`) and a `--json` step-event
    output mode. The GUI and the skill both call it.
 2. **`qa-explore` skill** — a Claude Code skill that drives the browser via
@@ -89,7 +89,7 @@ Both run types share the GUI-side lifecycle; only the spawned command differs.
 
 **Curated suite run:**
 1. Tester picks env / role / suite → ▶ Run.
-2. GUI spawns `otto run --suite <s> --env <e> --role <r> --json`.
+2. GUI spawns `qar run --suite <s> --env <e> --role <r> --json`.
 3. Engine runs **headed** Chromium (tester watches the real browser).
 4. Engine emits one JSON line per step event to stdout:
    `{"type":"step","name":"Open dashboard","status":"running"}` then
@@ -102,8 +102,8 @@ Both run types share the GUI-side lifecycle; only the spawned command differs.
 **Exploratory (AI) run** — same shape, different command:
 - GUI spawns `claude -p` with the `qa-explore` skill, `--env`, `--role`,
   `--instruction "<plain English>"`.
-- The skill shells `otto login` → drives the browser via MCP → emits the SAME
-  `{"type":"step",...}` lines → shells `otto cleanup <ids>` (guaranteed) →
+- The skill shells `qar login` → drives the browser via MCP → emits the SAME
+  `{"type":"step",...}` lines → shells `qar cleanup <ids>` (guaranteed) →
   writes the same bundle → emits `{"type":"result",...}`.
 
 The GUI's stdout parser is **identical** for both.
@@ -118,7 +118,7 @@ run and `{"type":"result", ...RunResult}` at the end.
 ### Headed browser
 
 `defaultDeps` gains a headed launch (`headless: false`) when invoked from the GUI
-(e.g. a `--headed` flag on `otto run`), so the tester watches the real
+(e.g. a `--headed` flag on `qar run`), so the tester watches the real
 Chromium drive itself. The recorded `video.webm` is still saved into the bundle
 for replay after the run.
 
@@ -134,13 +134,13 @@ reports.
 
 **Running an exploratory test:** the GUI spawns the `qa-explore` skill via
 `claude -p`. The skill prompt instructs Claude to:
-1. Shell `otto login --env <e> --role <r>` → authenticated session (reuses the
+1. Shell `qar login --env <e> --role <r>` → authenticated session (reuses the
    engine's real Clerk + MFA login — deterministic, not the AI's job).
 2. Drive the browser via Claude Code's browser MCP to satisfy the instruction,
    and for **each concrete action**: (a) emit a `StepEvent` JSON line, and
    (b) append the action to an **action trace** (`{action, selector, value}`).
 3. Track any created entity ids (study / user) for cleanup.
-4. **Always** shell `otto cleanup <ids>` at the end (guaranteed teardown).
+4. **Always** shell `qar cleanup <ids>` at the end (guaranteed teardown).
 5. Write the same result bundle (plus the action trace) and emit the result.
 
 The **action trace** is the raw material for codegen; without it, "save as
@@ -148,7 +148,7 @@ suite" would be guessing.
 
 **Promoting a successful run to a committed suite:**
 - After a green exploratory run, the GUI shows `[ Save as suite → PR ]`.
-- Tester names it; `otto codegen` turns the action trace into a real Playwright
+- Tester names it; `qar codegen` turns the action trace into a real Playwright
   suite using the existing `Suite` interface + `ctx.step()` pattern.
 - The GUI **typechecks the generated file** before pushing; a non-compiling
   result is surfaced as an error, not pushed.
@@ -173,11 +173,11 @@ unreviewed.
 ## Tech stack
 
 - **GUI shell:** Tauri (Rust shell + web frontend) — small footprint; spawns
-  child processes (`otto`, `claude -p`, `git`, `gh`) and reads stdout.
+  child processes (`qar`, `claude -p`, `git`, `gh`) and reads stdout.
 - **GUI frontend:** React + TypeScript + Vite — matches team familiarity; kept
   minimal (thin shell).
 - **Engine CLI:** TypeScript via `tsx` — promote `bin/run-pr.ts` into a real
-  `otto` command. No new runtime.
+  `qar` command. No new runtime.
 - **AI mode:** the `qa-explore` Claude Code skill (markdown prompt + the engine
   CLI it shells out to). Runs through existing Claude Code accounts — no separate
   AI keys/billing.
@@ -187,7 +187,7 @@ unreviewed.
 ```
 qatest/
   bin/
-    otto.ts                  CLI entrypoint (run | login | cleanup | codegen), --json
+    qar.ts                  CLI entrypoint (run | login | cleanup | codegen), --json
   src/
     cli/
       commands/              run.ts, login.ts, cleanup.ts, codegen.ts
@@ -241,7 +241,7 @@ qatest/
 
 ## Open questions to confirm at implementation time
 
-- **`otto login` session hand-off:** exact shape of what `login` outputs so the
+- **`qar login` session hand-off:** exact shape of what `login` outputs so the
   skill can reuse the authenticated session (cookie string vs. storage-state file
   the skill points the MCP browser at).
 - **Action-trace fidelity:** what Claude Code's browser MCP exposes for capturing

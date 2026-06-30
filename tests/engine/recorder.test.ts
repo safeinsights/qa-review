@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 function tmpRoot() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-'))
     made.push(dir)
     return dir
 }

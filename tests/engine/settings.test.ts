@@ -18,7 +18,7 @@ import {
 let dir: string
 
 beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-settings-'))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-settings-'))
 })
 afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true })

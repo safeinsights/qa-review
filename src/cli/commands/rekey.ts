@@ -8,7 +8,7 @@ import { readKeyring, recipients, fingerprint, writeLock } from '@/engine/keyrin
 // update keyring.lock. `identity` must be able to decrypt the existing secrets.
 export async function rekeyAll(dir: string = configDir(), identity?: string): Promise<void> {
     const id = identity ?? readIdentity(dir)
-    if (!id) throw new Error('rekey: no local identity — run `otto request-access` first')
+    if (!id) throw new Error('rekey: no local identity — run `qar request-access` first')
     const keys = recipients(readKeyring(dir))
     if (keys.length === 0) throw new Error('rekey: keyring is empty')
 

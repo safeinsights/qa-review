@@ -1,5 +1,5 @@
 {
-  "name": "otto",
+  "name": "qa-review",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "qa": "tsx src/cli/index.ts",
-    "otto": "tsx bin/otto.ts"
+    "qar": "tsx bin/qar.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

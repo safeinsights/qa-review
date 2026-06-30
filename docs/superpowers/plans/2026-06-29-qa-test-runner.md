@@ -67,7 +67,7 @@ qatest/
 
 ```json
 {
-  "name": "otto",
+  "name": "qar",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -173,7 +173,7 @@ Expected: install succeeds; `tsc --noEmit` exits 0 (no source files yet, so no e
 - [ ] **Step 7: Commit**
 
 ```bash
-git init && git add -A && git commit -m "chore: scaffold otto project"
+git init && git add -A && git commit -m "chore: scaffold qar project"
 ```
 
 ---
@@ -562,7 +562,7 @@ afterEach(() => {
 })
 
 function tmpRoot() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-'))
     made.push(dir)
     return dir
 }
@@ -979,7 +979,7 @@ afterEach(() => {
     made.length = 0
 })
 function tmpRoot() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-run-'))
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-run-'))
     made.push(d)
     return d
 }

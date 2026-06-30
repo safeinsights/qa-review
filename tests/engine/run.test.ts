@@ -11,7 +11,7 @@ afterEach(() => {
     made.length = 0
 })
 function tmpRoot() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-run-'))
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-run-'))
     made.push(d)
     return d
 }

@@ -4,7 +4,7 @@ import { configDir, knownVarNames, LOCAL_FILE } from '@/engine/settings'
 import { SHARED_ACCOUNTS } from '../../../config/environments'
 
 // Minimal .env parser: KEY=VALUE per line, ignores blanks and # comments, strips
-// surrounding quotes. Enough to migrate the old otto .env; not a full dotenv.
+// surrounding quotes. Enough to migrate the old qar .env; not a full dotenv.
 function parseEnvFile(text: string): Record<string, string> {
     const out: Record<string, string> = {}
     for (const raw of text.split('\n')) {
@@ -65,7 +65,7 @@ export async function migrateCommand(opts: Record<string, string>): Promise<void
     console.log(`Migrated ${Object.keys(migrated).length} value(s) into ${localPath}`)
     console.log(`Keys: ${Object.keys(migrated).join(', ') || '(none)'}`)
     if (skipped.length) console.log(`Ignored unknown keys: ${skipped.join(', ')}`)
-    console.log('\nNext: run `otto request-access --name "..."` (or the Settings ▸ Request')
+    console.log('\nNext: run `qar request-access --name "..."` (or the Settings ▸ Request')
     console.log('access button) to get an identity, then save the shared accounts as')
     console.log('"Project (encrypted)" to commit them — they encrypt to the team keyring.')
 }

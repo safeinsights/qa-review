@@ -3,7 +3,7 @@ import { CleanupClient } from '@/engine/cleanup'
 import type { Vars } from '@/engine/settings'
 
 // Delete tracked ids via the QA cleanup endpoints, authorized by the cookie
-// passed in (e.g. from `otto login`). Usage flags:
+// passed in (e.g. from `qar login`). Usage flags:
 //   --env/--pr, --cookie <header>, --studies a,b,c  --users d,e
 export async function cleanupCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)

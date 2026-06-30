@@ -263,19 +263,19 @@ func (a *App) Sync(cwd string) (string, error) {
 	return "synced", nil
 }
 
-// RequestAccess shells out to `pnpm otto request-access --name <name>` in cwd,
+// RequestAccess shells out to `pnpm qar request-access --name <name>` in cwd,
 // returning combined output.
 func (a *App) RequestAccess(cwd, name string) (string, error) {
-	cmd := exec.Command("pnpm", "otto", "request-access", "--name", name)
+	cmd := exec.Command("pnpm", "qar", "request-access", "--name", name)
 	cmd.Dir = resolveCwd(cwd)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// Rekey shells out to `pnpm otto rekey` in cwd.
+// Rekey shells out to `pnpm qar rekey` in cwd.
 func (a *App) Rekey(cwd string) (string, error) {
-	cmd := exec.Command("pnpm", "otto", "rekey")
+	cmd := exec.Command("pnpm", "qar", "rekey")
 	cmd.Dir = resolveCwd(cwd)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
@@ -332,7 +332,7 @@ func promoteSteps(name, tracePath string) [][]string {
 	branch := "qa/" + name
 	return [][]string{
 		{"git", "checkout", "-b", branch},
-		{"pnpm", "otto", "codegen", "--trace", tracePath},
+		{"pnpm", "qar", "codegen", "--trace", tracePath},
 		{"git", "add", "src/suites"},
 		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (AI-generated, review selectors)", name)},
 		{"git", "push", "-u", "origin", branch},

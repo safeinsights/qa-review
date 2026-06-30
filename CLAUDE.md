@@ -1,7 +1,7 @@
-# otto — project notes
+# qa-review — project notes
 
-(Formerly `qatest`; the CLI command and package are now `otto`. The repo
-directory is still named `qatest`.)
+(The package is `qa-review`; the CLI command is `qar`. Formerly `qatest`, and
+briefly `otto`. The repo directory is still named `qatest`.)
 
 A QA runner for SafeInsights. A TypeScript engine uses Playwright to drive
 Chromium through the suites (plain TS objects, not Playwright test files); a
@@ -19,9 +19,9 @@ Wails (Go + React/Vite) desktop GUI wraps it for "pick suite, press Run" use.
   (data/secrets/org state), not suite selection.
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
-- `bin/otto.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
+- `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
   request-access | rekey | set-secret | sync`.
-- `gui/` — Wails app. `gui/app.go` `RunProcess()` spawns `pnpm otto run ...`
+- `gui/` — Wails app. `gui/app.go` `RunProcess()` spawns `pnpm qar run ...`
   and streams JSON step lines back to the React UI. `gui/settings.go` reads/writes
   the settings files and encrypts secrets to the keyring (`gui/app.go` also exposes
   `Sync`/`RequestAccess`/`Rekey`/`ResetAndSync`/`IsInDrift` to the React UI).
@@ -65,17 +65,17 @@ passphrase. The pieces:
 
 Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 
-- `pnpm otto request-access --name "Your Name"` — generates the local identity,
+- `pnpm qar request-access --name "Your Name"` — generates the local identity,
   adds your public key to `keyring.json`, branches, and opens a PR via `gh`. A
-  reviewer runs `otto rekey` on that branch before merging (atomic — no drift gap).
-- `pnpm otto rekey` — re-encrypts all secrets to the current keyring and updates
+  reviewer runs `qar rekey` on that branch before merging (atomic — no drift gap).
+- `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
-- `pnpm otto set-secret --key <VAR> --value <v>` — encrypts one secret to all
+- `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
   recipients (the GUI Settings "save secret" path).
-- `pnpm otto sync` — fast-forward-only `git pull` (distributes suites + keyring +
+- `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
-- **Revocation** is manual: remove the entry from `keyring.json`, run `otto rekey`,
+- **Revocation** is manual: remove the entry from `keyring.json`, run `qar rekey`,
   land via PR. A revoked user can still read OLD secrets they already pulled —
   rotate the actual password/MFA seed (and `set-secret` it) if truly sensitive.
 
@@ -84,7 +84,7 @@ Trust is enforced by **GitHub** (who can merge keyring PRs), not by the app.
 Go encrypts (`gui/settings.go`, `filippo.io/age`); the engine decrypts
 (`age-encryption` npm). X25519 interop is covered by `tests/engine/age-interop.test.ts`.
 
-- **Migration**: `pnpm otto migrate` reads a legacy `.env` into
+- **Migration**: `pnpm qar migrate` reads a legacy `.env` into
   `settings.local.json` (plaintext) so existing setups keep working.
 
 ## Running the GUI app in a browser (for debugging / driving headlessly)
@@ -123,7 +123,7 @@ and `gui/app.go` folds the engine's stderr into stdout where **stray
 SILENT in the UI. To find the real error, run the same command on the CLI:
 
 ```
-pnpm otto run --suite <suite> --role <role> --env qa
+pnpm qar run --suite <suite> --role <role> --env qa
 ```
 
 The most common cause: **a required value is missing from the settings files.**
@@ -133,21 +133,21 @@ empty/missing var. The full required set is `QA_BASE_URL`, `STAGING_BASE_URL`,
 where each lives). Settings-specific failure modes:
 - `Cannot decrypt <VAR>: your key may not be a recipient yet — ask a teammate to
   rekey` — you have a local identity, but the secrets aren't encrypted to your key.
-  A teammate runs `otto rekey` after your `keyring.json` PR merges.
+  A teammate runs `qar rekey` after your `keyring.json` PR merges.
 - No identity at all (`config/age-identity.txt` missing): encrypted secrets are
   silently SKIPPED, so a run fails later with `Missing required secret: <VAR>`.
-  Run `pnpm otto request-access --name "..."` (or the GUI's Request access button),
+  Run `pnpm qar request-access --name "..."` (or the GUI's Request access button),
   or supply the value via env / `settings.local.json`. (This skip-when-keyless
   behavior is what lets CI run without a key.)
 
 ## Useful commands
 
 - `pnpm test` (vitest), `pnpm typecheck`
-- `pnpm otto list` — list suites and their roles
-- `pnpm otto run --suite create-study --role researcher --env qa`
-- `pnpm otto run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`
-- `pnpm otto migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
-- `pnpm otto request-access --name "..."` — generate your identity + open a keyring PR
-- `pnpm otto rekey` — re-encrypt all secrets to the current keyring (reviewer step)
-- `pnpm otto sync` — fast-forward pull (suites + keyring + secrets)
+- `pnpm qar list` — list suites and their roles
+- `pnpm qar run --suite create-study --role researcher --env qa`
+- `pnpm qar run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`
+- `pnpm qar migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
+- `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
+- `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
+- `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

@@ -26,7 +26,7 @@
 
 **Modified files:**
 - `src/engine/settings.ts` — X25519 encrypt/decrypt with identities; remove passphrase path; skip-when-no-identity load behavior.
-- `bin/otto.ts` — wire the four new subcommands.
+- `bin/qar.ts` — wire the four new subcommands.
 - `gui/settings.go` — X25519 encrypt; remove `SetPassphrase`/passphrase; add `Sync()`.
 - `gui/cmd/agecrypt/main.go` — X25519 mode for the interop test.
 - `tests/engine/age-interop.test.ts` — X25519 round-trip coverage.
@@ -553,14 +553,14 @@ git commit -m "feat(settings): decrypt with local identity, skip encrypted value
 
 ---
 
-## Task 5: `otto rekey` and `otto set-secret` commands
+## Task 5: `qar rekey` and `qar set-secret` commands
 
 Re-encrypt all secrets to the current keyring (and update the lock); encrypt one edited value.
 
 **Files:**
 - Create: `src/cli/commands/rekey.ts`
 - Create: `src/cli/commands/set-secret.ts`
-- Modify: `bin/otto.ts`
+- Modify: `bin/qar.ts`
 - Test: `tests/cli/rekey.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -643,7 +643,7 @@ import { readKeyring, recipients, fingerprint, writeLock } from '@/engine/keyrin
 // update keyring.lock. `identity` must be able to decrypt the existing secrets.
 export async function rekeyAll(dir: string = configDir(), identity?: string): Promise<void> {
     const id = identity ?? readIdentity(dir)
-    if (!id) throw new Error('rekey: no local identity — run `otto request-access` first')
+    if (!id) throw new Error('rekey: no local identity — run `qar request-access` first')
     const keys = recipients(readKeyring(dir))
     if (keys.length === 0) throw new Error('rekey: keyring is empty')
 
@@ -706,9 +706,9 @@ export async function setSecretCommand(opts: Record<string, string>): Promise<vo
 Run: `pnpm test -- tests/cli/rekey.test.ts`
 Expected: PASS (both tests).
 
-- [ ] **Step 6: Wire the subcommands into bin/otto.ts**
+- [ ] **Step 6: Wire the subcommands into bin/qar.ts**
 
-In `bin/otto.ts`, add imports and cases:
+In `bin/qar.ts`, add imports and cases:
 
 ```typescript
 import { rekeyCommand } from '@/cli/commands/rekey'
@@ -734,19 +734,19 @@ Expected: PASS (the `request-access`/`sync` cases are added in Tasks 6 and 8; if
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/cli/commands/rekey.ts src/cli/commands/set-secret.ts bin/otto.ts tests/cli/rekey.test.ts
+git add src/cli/commands/rekey.ts src/cli/commands/set-secret.ts bin/qar.ts tests/cli/rekey.test.ts
 git commit -m "feat(cli): rekey + set-secret commands"
 ```
 
 ---
 
-## Task 6: `otto request-access` command
+## Task 6: `qar request-access` command
 
 Generate the local identity, add the public key to the keyring, branch, and open a PR via `gh`. The git/`gh` side effects are injected so the core is unit-testable.
 
 **Files:**
 - Create: `src/cli/commands/request-access.ts`
-- Modify: `bin/otto.ts`
+- Modify: `bin/qar.ts`
 - Test: `tests/cli/request-access.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -869,7 +869,7 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
 
     try {
         await execFileAsync('gh', ['pr', 'create', '--fill', '--title', `Add ${name} to keyring`,
-            '--body', 'Reviewer: run "Approve & rekey" (otto rekey on this branch) before merging.'])
+            '--body', 'Reviewer: run "Approve & rekey" (qar rekey on this branch) before merging.'])
         console.log('Opened a pull request. A teammate will approve + rekey, then merge.')
     } catch {
         console.log('Could not open a PR automatically (is `gh` installed and authed?).')
@@ -891,7 +891,7 @@ async function safeGitConfigEmail(): Promise<string> {
 Run: `pnpm test -- tests/cli/request-access.test.ts`
 Expected: PASS (all three tests).
 
-- [ ] **Step 5: Wire into bin/otto.ts**
+- [ ] **Step 5: Wire into bin/qar.ts**
 
 Add import and case:
 
@@ -906,19 +906,19 @@ import { requestAccessCommand } from '@/cli/commands/request-access'
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/commands/request-access.ts bin/otto.ts tests/cli/request-access.test.ts
+git add src/cli/commands/request-access.ts bin/qar.ts tests/cli/request-access.test.ts
 git commit -m "feat(cli): request-access — generate identity, add to keyring, open PR"
 ```
 
 ---
 
-## Task 7: `otto sync` command
+## Task 7: `qar sync` command
 
 Fast-forward-only `git pull`; report whether it synced, was skipped (dirty/diverged), and whether secrets are now in keyring drift.
 
 **Files:**
 - Create: `src/cli/commands/sync.ts`
-- Modify: `bin/otto.ts`
+- Modify: `bin/qar.ts`
 - Test: `tests/cli/sync.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -1008,7 +1008,7 @@ export async function syncCommand(): Promise<void> {
     const r = await syncRepo(repoDir, gitIn(repoDir))
     switch (r.status) {
         case 'synced':
-            console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `otto rekey`.' : ''))
+            console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `qar rekey`.' : ''))
             break
         case 'skipped-dirty':
             console.log('Skipped sync — you have local changes. Commit/stash them, or discard uncommitted edits and retry.')
@@ -1025,7 +1025,7 @@ export async function syncCommand(): Promise<void> {
 Run: `pnpm test -- tests/cli/sync.test.ts`
 Expected: PASS (all three tests).
 
-- [ ] **Step 5: Wire into bin/otto.ts**
+- [ ] **Step 5: Wire into bin/qar.ts**
 
 ```typescript
 import { syncCommand } from '@/cli/commands/sync'
@@ -1038,7 +1038,7 @@ import { syncCommand } from '@/cli/commands/sync'
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/commands/sync.ts bin/otto.ts tests/cli/sync.test.ts
+git add src/cli/commands/sync.ts bin/qar.ts tests/cli/sync.test.ts
 git commit -m "feat(cli): sync — fast-forward-only pull + drift report"
 ```
 
@@ -1326,13 +1326,13 @@ Wire the Go methods into the UI: a Request-access button when no identity, a syn
 
 - [ ] **Step 1: Add IPC wrappers**
 
-In `gui/frontend/src/lib/ipc.ts`, add typed wrappers calling the generated Wails bindings for `Sync(cwd)`, `RequestAccess(name)` (a new Go method that shells to `otto request-access`), `Rekey()` (shells to `otto rekey`), and `ResetAndSync(cwd)` (runs `git restore .` then `Sync`). Follow the existing wrapper style in that file.
+In `gui/frontend/src/lib/ipc.ts`, add typed wrappers calling the generated Wails bindings for `Sync(cwd)`, `RequestAccess(name)` (a new Go method that shells to `qar request-access`), `Rekey()` (shells to `qar rekey`), and `ResetAndSync(cwd)` (runs `git restore .` then `Sync`). Follow the existing wrapper style in that file.
 
 - [ ] **Step 2: Add the Go RequestAccess/Rekey/ResetAndSync methods**
 
 In `gui/app.go`, add methods that shell out to the CLI (reusing `RunProcess`-style spawning or a synchronous `exec.Command` with `withGuiPath()`):
-- `RequestAccess(cwd, name string) (string, error)` → `pnpm otto request-access --name <name>`
-- `Rekey(cwd string) (string, error)` → `pnpm otto rekey`
+- `RequestAccess(cwd, name string) (string, error)` → `pnpm qar request-access --name <name>`
+- `Rekey(cwd string) (string, error)` → `pnpm qar rekey`
 - `ResetAndSync(cwd string) (string, error)` → `git restore .` then `a.Sync(cwd)` (discards only uncommitted tracked edits, preserves local commits).
 
 Run `cd gui && go build ./...` to confirm and regenerate bindings (`wails dev`/`wails generate module`).
@@ -1342,7 +1342,7 @@ Run `cd gui && go build ./...` to confirm and regenerate bindings (`wails dev`/`
 In the main app shell (where suites/settings render):
 - If `HasIdentity` is false → show a prominent **"Request access"** button that prompts for a name and calls `RequestAccess`, then shows "PR opened — waiting for a teammate to approve & rekey".
 - On mount, call `Sync(cwd)`. On `"skipped-dirty"`/`"skipped-diverged"` show a non-blocking banner with a **"Reset to clean & sync"** button (calls `ResetAndSync`, with a confirm dialog noting it discards uncommitted edits but keeps local commits).
-- After a successful sync, if the keyring is in drift (expose a Go `IsInDrift(cwd) bool` that mirrors `src/engine/keyring.ts`, or read the result of a `otto`-side check), show a **"Secrets out of sync — Rekey"** banner. The button calls `Rekey` if the user can decrypt; otherwise shows "waiting for a teammate to rekey".
+- After a successful sync, if the keyring is in drift (expose a Go `IsInDrift(cwd) bool` that mirrors `src/engine/keyring.ts`, or read the result of a `qar`-side check), show a **"Secrets out of sync — Rekey"** banner. The button calls `Rekey` if the user can decrypt; otherwise shows "waiting for a teammate to rekey".
 
 - [ ] **Step 4: Manual verification in the browser**
 
@@ -1382,12 +1382,12 @@ Expected: ALL PASS. Fix any remaining reference to the removed passphrase API (`
 
 In `CLAUDE.md`, replace the "Settings / configuration" and the relevant "Debugging" bullets to describe the new model:
 - Secrets in `settings.secrets.json` are age-encrypted to the **keyring** (`config/keyring.json`), not a passphrase.
-- Each user has a local identity at `config/age-identity.txt` (gitignored), created by **"Request access"** / `otto request-access`.
+- Each user has a local identity at `config/age-identity.txt` (gitignored), created by **"Request access"** / `qar request-access`.
 - Unlock is the identity file, not `AGE_PASSPHRASE`. Remove the `AGE_PASSPHRASE` decrypt-failure modes; add the new one: `Cannot decrypt <VAR>: your key may not be a recipient yet — ask a teammate to rekey`.
 - **CI is keyless**: secrets come from env-var Actions secrets that override the file tiers.
-- New commands: `otto request-access`, `otto rekey`, `otto set-secret`, `otto sync`.
+- New commands: `qar request-access`, `qar rekey`, `qar set-secret`, `qar sync`.
 - Startup `git pull --ff-only` distributes suites + keyring + secrets; "Reset to clean & sync" discards only uncommitted edits.
-- Note revocation is manual: remove from keyring, `otto rekey`, and rotate the actual secret if sensitive.
+- Note revocation is manual: remove from keyring, `qar rekey`, and rotate the actual secret if sensitive.
 
 - [ ] **Step 4: Commit**
 

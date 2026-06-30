@@ -48,7 +48,7 @@ export function generateSuite(trace: ActionTrace): string {
 
     return `import type { Suite } from '@/suites/types'
 
-// Generated from an exploratory run by otto codegen. Review/harden selectors
+// Generated from an exploratory run by qar codegen. Review/harden selectors
 // before relying on this for regression.
 export const ${camelConst(trace.name)}: Suite = {
     name: '${sq(trace.name)}',

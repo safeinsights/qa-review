@@ -353,7 +353,7 @@ git add src/engine/screencast.ts package.json pnpm-lock.yaml && git commit -m "f
 - Modify: `src/engine/run-headed.ts` (expose the live page via an `onPage` hook)
 - Modify: `src/cli/commands/run.ts` (`--screencast` flag → start server, emit port)
 - Modify: `src/cli/step-stream.ts` (serialize the screencast envelope)
-- Modify: `bin/otto.ts` (add `screencast` to BOOLEANS)
+- Modify: `bin/qar.ts` (add `screencast` to BOOLEANS)
 
 **Context:** When `--screencast` is set, the run starts a `ScreencastServer` for the live page and emits one NDJSON line `{"type":"screencast","port":<n>}` so the GUI learns where to connect. The page is reached via a new `onPage` hook on the deps (the engine creates the page; the CLI needs a handle to it to attach the screencast). Headed mode is NOT required for screencast — screencast works on a headless page too (the frames ARE the view), so `--screencast` implies we can keep the browser headless (no separate window at all).
 
@@ -468,7 +468,7 @@ export async function runCommand(opts: Record<string, string>): Promise<void> {
 }
 ```
 
-- [ ] **Step 6: Add `screencast` to BOOLEANS** — in `bin/otto.ts`:
+- [ ] **Step 6: Add `screencast` to BOOLEANS** — in `bin/qar.ts`:
 
 ```typescript
 const BOOLEANS = ['json', 'headed', 'screencast']
@@ -482,7 +482,7 @@ Expected: typecheck exit 0; all tests pass. (If `parseLine` tests in `tests/cli/
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/engine/types.ts src/engine/run.ts src/cli/commands/run.ts src/cli/step-stream.ts bin/otto.ts && git commit -m "feat: --screencast run mode (starts ScreencastServer, emits ws port)"
+git add src/engine/types.ts src/engine/run.ts src/cli/commands/run.ts src/cli/step-stream.ts bin/qar.ts && git commit -m "feat: --screencast run mode (starts ScreencastServer, emits ws port)"
 ```
 
 ---
@@ -495,7 +495,7 @@ git add src/engine/types.ts src/engine/run.ts src/cli/commands/run.ts src/cli/st
 
 - [ ] **Step 1: Run a screencast run and capture the emitted port**
 
-Run: `cd /Users/nas/code/si/qatest && pnpm otto run --json --screencast --role admin --suite create-study --pr 839 2>&1 | tee /tmp/qa-screencast.log`
+Run: `cd /Users/nas/code/si/qatest && pnpm qar run --json --screencast --role admin --suite create-study --pr 839 2>&1 | tee /tmp/qa-screencast.log`
 Expected: among the NDJSON, a line `{"type":"screencast","port":<N>}` appears early; the run proceeds and passes its steps. (create-study is slower than signin, giving more time to observe frames.)
 
 - [ ] **Step 2: Connect a throwaway ws client to confirm frames flow**
@@ -722,7 +722,7 @@ Change the right pane to prefer the live panel during the run, falling back to t
 
 - [ ] **Step 3: Add `--screencast` to SuitesTab run args** — in `gui/frontend/src/components/SuitesTab.tsx`'s `run()`:
 ```typescript
-        const args = ['otto', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
+        const args = ['qar', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
 ```
 (Replace the `--headed` flag with `--screencast` — the embedded view replaces the separate window. Keep `--pr`/`--env` logic as-is.)
 

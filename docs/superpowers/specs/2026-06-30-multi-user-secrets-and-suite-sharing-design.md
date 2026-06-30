@@ -85,11 +85,11 @@ Both sides switch crypto primitives:
 Two CLI commands (GUI buttons shell out to them); both require the caller to
 already hold a valid identity that can decrypt.
 
-- **`otto rekey`** — re-encrypts **all** secrets in `settings.secrets.json` to the
+- **`qar rekey`** — re-encrypts **all** secrets in `settings.secrets.json` to the
   **current** `config/keyring.json` recipient set. Flow: read identity → decrypt
   each secret → re-encrypt each to all current recipients → write file. Used by the
   reviewer when adding a recipient, and after a revocation.
-- **`otto set-secret <VAR>`** — the edit path (also called by the GUI Settings
+- **`qar set-secret <VAR>`** — the edit path (also called by the GUI Settings
   "save secret" action). Encrypts the **one** new plaintext value to all current
   recipients and writes that single key. Replaces the Go `encryptString`-to-passphrase
   path in `WriteSetting`.
@@ -99,13 +99,13 @@ recipients, so a committed **`config/keyring.lock`** stores a fingerprint (hash)
 of the recipient set the secrets were last encrypted to. On startup (after the
 Section 5 pull) the app compares `keyring.json`'s fingerprint to `keyring.lock`:
 - mismatch → **"secrets are out of sync with the keyring — rekey needed"** banner.
-- A user who can decrypt clicks **Rekey** → runs `otto rekey`, updates
+- A user who can decrypt clicks **Rekey** → runs `qar rekey`, updates
   `keyring.lock`, pushes.
 - A user who can't yet decrypt (key added but not yet rekeyed) sees "waiting for a
   teammate to rekey".
 
 **Reviewer rekey is atomic with the access PR.** The reviewer checks out the
-access-PR branch, runs `otto rekey` (re-encrypting to the keyring that now
+access-PR branch, runs `qar rekey` (re-encrypting to the keyring that now
 includes the new key), pushes onto that same branch, then merges. The new user can
 decrypt the instant the PR merges — no drift window. The GUI can offer this as a
 one-button "Approve & rekey" reviewer action. The drift banner remains the safety
@@ -114,7 +114,7 @@ net for any out-of-band edits.
 ## Section 4 — Request-access onboarding
 
 A **"Request access"** button in the GUI (shown whenever `config/age-identity.txt`
-is absent), backed by `otto request-access --name "Jane Smith"`. The command:
+is absent), backed by `qar request-access --name "Jane Smith"`. The command:
 
 1. **Generates** an age X25519 keypair locally; writes the private key to the
    gitignored `config/age-identity.txt`.
@@ -138,7 +138,7 @@ Edge cases:
 
 ## Section 5 — Startup sync (suites + settings)
 
-On launch (and via an explicit **Sync** button / `otto sync`), run a
+On launch (and via an explicit **Sync** button / `qar sync`), run a
 **fast-forward-only `git pull`** of the repo.
 
 - **Clean + fast-forwardable** → pull succeeds, optional "synced — N suites
@@ -157,7 +157,7 @@ On launch (and via an explicit **Sync** button / `otto sync`), run a
 - **After a successful pull** → run the Section 3 keyring-drift check.
 
 Implementation: a GUI `Sync()` Go method (runs `git` in the repo dir, parses
-status/result) + React banner/actions; a `otto sync` CLI mirror for headless use.
+status/result) + React banner/actions; a `qar sync` CLI mirror for headless use.
 Git/network failures are non-fatal — the app runs with whatever is on disk.
 
 ---
@@ -165,7 +165,7 @@ Git/network failures are non-fatal — the app runs with whatever is on disk.
 ## Revocation (documented manual process)
 
 No dedicated command or UI. To revoke: remove the entry from
-`config/keyring.json` and run `otto rekey`, landed via a normal PR. The underlying
+`config/keyring.json` and run `qar rekey`, landed via a normal PR. The underlying
 operation is identical to `rekey` after any keyring change. **Note:** a revoked
 user can still read OLD secrets they already pulled; rotate those secrets (change
 the actual passwords / MFA seeds and `set-secret` them) if they are truly
@@ -187,7 +187,7 @@ sensitive.
   remove passphrase path.
 - `gui/settings.go` — X25519 encrypt, `set-secret`, remove `SetPassphrase`/session
   passphrase; new `Sync()`, request-access/rekey wiring (or shelling to CLI).
-- `bin/otto.ts` — new subcommands: `request-access`, `rekey`, `set-secret`, `sync`.
+- `bin/qar.ts` — new subcommands: `request-access`, `rekey`, `set-secret`, `sync`.
 - `tests/engine/age-interop.test.ts` — X25519 interop coverage.
 - GUI React — Request-access button, drift/rekey banner, sync banner + "Reset to
   clean & sync", "Approve & rekey" reviewer action.

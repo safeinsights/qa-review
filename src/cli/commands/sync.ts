@@ -34,7 +34,7 @@ export async function syncCommand(): Promise<void> {
     const r = await syncRepo(repoDir, gitIn(repoDir))
     switch (r.status) {
         case 'synced':
-            console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `otto rekey`.' : ''))
+            console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `qar rekey`.' : ''))
             break
         case 'skipped-dirty':
             console.log('Skipped sync — you have local changes. Commit/stash them, or discard uncommitted edits and retry.')

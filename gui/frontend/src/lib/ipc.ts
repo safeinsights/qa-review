@@ -127,7 +127,7 @@ export async function resetAndSync(cwd: string): Promise<string> {
     return app().ResetAndSync(cwd)
 }
 
-// Generate identity + open a keyring PR via `otto request-access`.
+// Generate identity + open a keyring PR via `qar request-access`.
 export async function requestAccess(cwd: string, name: string): Promise<string> {
     return app().RequestAccess(cwd, name)
 }
