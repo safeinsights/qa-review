@@ -74,7 +74,18 @@ export function SnapshotPanel({
                 </div>
             </div>
 
-            <div style={{ background: 'var(--paper-sunken)', minHeight: 200 }}>
+            {/* Fixed-height viewport matching the live browser canvas (1280×720,
+                16:9) so toggling live ↔ snapshot never resizes the pane. A
+                full-page screenshot is taller than this and scrolls vertically
+                inside it rather than being cropped. */}
+            <div
+                style={{
+                    background: 'var(--paper-sunken)',
+                    aspectRatio: '1280 / 720',
+                    overflowY: 'auto',
+                    overflowX: 'hidden',
+                }}
+            >
                 {src ? (
                     <img src={src} alt={stepName} style={{ width: '100%', display: 'block' }} />
                 ) : error ? (

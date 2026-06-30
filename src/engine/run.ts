@@ -96,7 +96,10 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
             const slug = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)
             const rel = path.join('screenshots', `${String(++stepIndex).padStart(2, '0')}-${slug}.png`)
             try {
-                await page.screenshot({ path: path.join(recorder.bundleDir, rel) })
+                // fullPage: capture the entire scrollable page, not just the
+                // 1280×720 viewport, so the snapshot shows the whole page (the GUI
+                // scrolls it within a fixed-size pane).
+                await page.screenshot({ path: path.join(recorder.bundleDir, rel), fullPage: true })
                 return rel
             } catch {
                 return undefined
