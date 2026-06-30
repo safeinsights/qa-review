@@ -16,12 +16,13 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:  "SafeInsights QA Runner",
-		Width:  1100,
-		Height: 720,
+		Width:  1200,
+		Height: 1000,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup: app.startup,
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	filippo.io/age v1.3.1
+	github.com/creack/pty v1.1.24
 	github.com/wailsapp/wails/v2 v2.12.0
 )
 

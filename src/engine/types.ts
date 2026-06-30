@@ -27,6 +27,14 @@ export interface ScreencastInfo {
     port: number
 }
 
+// Emitted once by `qar session` when the long-lived authoring browser is ready:
+// the CDP remote-debugging port (so chrome-devtools-mcp can attach via
+// --browserUrl) and the screencast ws port (so the GUI shows the live view).
+export interface SessionInfo {
+    cdpPort: number
+    screencastPort: number
+}
+
 export type RunMode = 'suite' | 'exploratory'
 
 export interface RunRequest {
