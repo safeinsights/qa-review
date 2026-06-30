@@ -1,4 +1,4 @@
 {
-  "QA_BASE_URL": "https://qa.safeinsights.org",
+  "QA_BASE_URL": "https://app.qa.safeinsights.org",
   "STAGING_BASE_URL": "https://staging.safeinsights.org"
 }
