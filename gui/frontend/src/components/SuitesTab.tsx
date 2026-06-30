@@ -36,7 +36,7 @@ export function SuitesTab() {
     }, [])
 
     const run = () => {
-        const args = ['qatest', 'run', '--json', '--headed', '--role', role, '--suite', suite]
+        const args = ['qatest', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
         if (pr) args.push('--pr', pr)
         else args.push('--env', env)
         setSpec({ program: 'pnpm', args, cwd: REPO_ROOT })

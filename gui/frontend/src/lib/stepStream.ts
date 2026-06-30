@@ -1,6 +1,7 @@
 export type StepEnvelope = { type: 'step'; name: string; status: string; error?: string; screenshot?: string }
 export type ResultEnvelope = { type: 'result'; ok: boolean; [k: string]: unknown }
-export type Envelope = StepEnvelope | ResultEnvelope
+export type ScreencastEnvelope = { type: 'screencast'; port: number }
+export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope
 
 function parse(line: string): Envelope | null {
     let obj: unknown
@@ -11,7 +12,7 @@ function parse(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result') return obj as Envelope
+        if (t === 'step' || t === 'result' || t === 'screencast') return obj as Envelope
     }
     return null
 }

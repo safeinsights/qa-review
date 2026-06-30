@@ -3,6 +3,7 @@ import { runProcess, onStdoutLine, onExit } from '../lib/ipc'
 import { StreamParser, type StepEnvelope, type ResultEnvelope } from '../lib/stepStream'
 import { StepChecklist } from './StepChecklist'
 import { ResultPanel } from './ResultPanel'
+import { BrowserPanel } from './BrowserPanel'
 
 export interface RunSpec {
     program: string
@@ -15,6 +16,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
     const [result, setResult] = useState<ResultEnvelope | null>(null)
     const [running, setRunning] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [port, setPort] = useState<number | null>(null)
     const parser = useRef(new StreamParser())
 
     useEffect(() => {
@@ -22,6 +24,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
         setSteps([])
         setResult(null)
         setError(null)
+        setPort(null)
         setRunning(true)
         parser.current = new StreamParser()
 
@@ -32,6 +35,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
             unlistenOut = await onStdoutLine((line) => {
                 for (const env of parser.current.push(line + '\n')) {
                     if (env.type === 'step') setSteps((prev) => [...prev, env])
+                    else if (env.type === 'screencast') setPort(env.port)
                     else {
                         setResult(env)
                         onDone?.(env)
@@ -62,7 +66,9 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                 {running ? <p>Running… (a browser window will open)</p> : null}
                 {error ? <p style={{ color: '#c5221f' }}>⚠ {error}</p> : null}
             </div>
-            <div style={{ flex: 1 }}>{result ? <ResultPanel result={result} /> : null}</div>
+            <div style={{ flex: 1 }}>
+                {port && !result ? <BrowserPanel port={port} /> : result ? <ResultPanel result={result} /> : null}
+            </div>
         </div>
     )
 }
