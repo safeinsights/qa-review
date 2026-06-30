@@ -14,3 +14,11 @@ export async function onStdoutLine(cb: (line: string) => void): Promise<Unlisten
 export async function onExit(cb: (code: number | null) => void): Promise<UnlistenFn> {
     return listen<number | null>('proc-exit', (e) => cb(e.payload))
 }
+
+export async function gitPull(cwd: string): Promise<string> {
+    return invoke('git_pull', { cwd })
+}
+
+export async function promoteSuite(cwd: string, name: string, tracePath: string): Promise<string> {
+    return invoke('promote_suite', { cwd, name, tracePath })
+}
