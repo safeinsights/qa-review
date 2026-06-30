@@ -5,6 +5,23 @@
 
 export type UnlistenFn = () => void
 
+// One settings field as returned by the Go backend. Secret values are masked
+// (Value is empty); `set` says whether a value already exists.
+export interface SettingField {
+    key: string
+    label: string
+    secret: boolean
+    group: string // account section: "Admin" | "Researcher" | "Reviewer" | "" (ungrouped)
+    tier: string // "project" | "secrets" | "local" | "" (unset)
+    value: string
+    set: boolean
+}
+
+export interface SettingsView {
+    fields: SettingField[]
+    hasPassphrase: boolean
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     GitPull(cwd: string): Promise<string>
@@ -13,6 +30,9 @@ interface WailsApp {
     ReadVideo(bundleDir: string): Promise<string>
     SaveScreenshotAs(bundleDir: string, rel: string): Promise<string>
     ZipBundle(bundleDir: string): Promise<string>
+    ReadSettings(cwd: string): Promise<SettingsView>
+    WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
+    SetPassphrase(p: string): Promise<void>
 }
 
 interface WailsRuntime {
@@ -81,4 +101,19 @@ export async function saveScreenshotAs(bundleDir: string, rel: string): Promise<
 // Prompt to save a zip of the whole run bundle; returns the saved path ('' if cancelled).
 export async function zipBundle(bundleDir: string): Promise<string> {
     return app().ZipBundle(bundleDir)
+}
+
+// Read the merged settings view (secret values masked) for the Settings panel.
+export async function readSettings(cwd: string): Promise<SettingsView> {
+    return app().ReadSettings(cwd)
+}
+
+// Write one field to a tier ("project" commits it; "local" is a gitignored override).
+export async function writeSetting(cwd: string, key: string, value: string, tier: string): Promise<void> {
+    await app().WriteSetting(cwd, key, value, tier)
+}
+
+// Set the session age passphrase (held in memory by Go; never persisted).
+export async function setPassphrase(p: string): Promise<void> {
+    await app().SetPassphrase(p)
 }

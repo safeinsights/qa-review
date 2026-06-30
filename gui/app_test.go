@@ -9,7 +9,7 @@ func TestPromoteArgsSequence(t *testing.T) {
 	got := promoteSteps("admin-invites", "/repo/results/x/trace.json")
 	want := [][]string{
 		{"git", "checkout", "-b", "qa/admin-invites"},
-		{"pnpm", "qatest", "codegen", "--trace", "/repo/results/x/trace.json"},
+		{"pnpm", "otto", "codegen", "--trace", "/repo/results/x/trace.json"},
 		{"git", "add", "src/suites"},
 		{"git", "commit", "-m", "test: add admin-invites suite (AI-generated, review selectors)"},
 		{"git", "push", "-u", "origin", "qa/admin-invites"},

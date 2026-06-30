@@ -1,16 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 
-// Shared, un-prefixed credentials + MFA, plus the per-env base URL.
+// Shared accounts (email + password + per-account MFA), plus the per-env base URL.
 const ENV_VARS = {
     QA_BASE_URL: 'https://qa.example.com',
     ADMIN_EMAIL: 'a@example.com',
     ADMIN_PASSWORD: 'pw-a',
+    ADMIN_MFA_CODE: '111111',
     RESEARCHER_EMAIL: 'r@example.com',
     RESEARCHER_PASSWORD: 'pw-r',
+    RESEARCHER_MFA_CODE: '222222',
     REVIEWER_EMAIL: 'v@example.com',
     REVIEWER_PASSWORD: 'pw-v',
-    MFA_CODE: '424242',
+    REVIEWER_MFA_CODE: '333333',
 }
 
 describe('resolveEnv', () => {
@@ -18,10 +20,11 @@ describe('resolveEnv', () => {
         const cfg = resolveEnv('qa', ENV_VARS)
         expect(cfg.name).toBe('qa')
         expect(cfg.baseURL).toBe('https://qa.example.com')
-        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a' })
-        expect(cfg.accounts.researcher).toEqual({ email: 'r@example.com', password: 'pw-r' })
+        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a', mfaCode: '111111' })
+        expect(cfg.accounts.researcher).toEqual({ email: 'r@example.com', password: 'pw-r', mfaCode: '222222' })
         expect(cfg.accounts.reviewer.email).toBe('v@example.com')
-        expect(cfg.mfaCode).toBe('424242')
+        expect(cfg.accounts.admin.mfaCode).toBe('111111')
+        expect(cfg.accounts.reviewer.mfaCode).toBe('333333')
     })
 
     it('throws a clear error for an unknown environment', () => {
@@ -39,10 +42,10 @@ describe('resolveEnv', () => {
         expect(() => resolveEnv('qa', withoutBase)).toThrow(/QA_BASE_URL/)
     })
 
-    it('throws a clear error when MFA_CODE is missing', () => {
+    it('throws a clear error when an account MFA code is missing', () => {
         const withoutMfa: Record<string, string | undefined> = { ...ENV_VARS }
-        delete withoutMfa.MFA_CODE
-        expect(() => resolveEnv('qa', withoutMfa)).toThrow(/MFA_CODE/)
+        delete withoutMfa.ADMIN_MFA_CODE
+        expect(() => resolveEnv('qa', withoutMfa)).toThrow(/ADMIN_MFA_CODE/)
     })
 })
 
@@ -51,8 +54,7 @@ describe('resolvePrEnv', () => {
         const cfg = resolvePrEnv(839, ENV_VARS)
         expect(cfg.name).toBe('pr839')
         expect(cfg.baseURL).toBe('https://pr839.qa.safeinsights.org')
-        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a' })
-        expect(cfg.mfaCode).toBe('424242')
+        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a', mfaCode: '111111' })
     })
 
     it('rejects a non-positive or non-integer PR number', () => {

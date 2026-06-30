@@ -1,10 +1,10 @@
-import 'dotenv/config'
 import readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import { ENVIRONMENTS } from '../../config/environments'
 import { listSuites } from '@/engine/suite-registry'
 import { runEngine, defaultDeps } from '@/engine/run'
 import { resolvePrEnv } from '@/engine/env'
+import { loadSettings, type Vars } from '@/engine/settings'
 import type { EnvConfig, Role } from '@/engine/types'
 
 const ROLES: Role[] = ['admin', 'researcher', 'reviewer']
@@ -24,7 +24,7 @@ async function pick(rl: readline.Interface, label: string, options: string[]): P
 // Resolve which environment to run against. Named stable envs (qa, staging) are
 // resolved by the engine from `env`; a PR preview is resolved here from a number
 // and passed as a pre-resolved envConfig.
-async function chooseEnv(rl: readline.Interface): Promise<{ env: string; envConfig?: EnvConfig }> {
+async function chooseEnv(rl: readline.Interface, vars: Vars): Promise<{ env: string; envConfig?: EnvConfig }> {
     const choice = await pick(rl, 'Environment', [...ENVIRONMENTS.map((e) => e.name), PR_PREVIEW_CHOICE])
     if (choice !== PR_PREVIEW_CHOICE) return { env: choice }
 
@@ -32,7 +32,7 @@ async function chooseEnv(rl: readline.Interface): Promise<{ env: string; envConf
         const answer = await rl.question('PR number: ')
         const prNumber = Number(answer.trim())
         if (Number.isInteger(prNumber) && prNumber > 0) {
-            const envConfig = resolvePrEnv(prNumber)
+            const envConfig = resolvePrEnv(prNumber, vars)
             return { env: envConfig.name, envConfig }
         }
         console.log('Please enter a positive PR number.')
@@ -40,16 +40,17 @@ async function chooseEnv(rl: readline.Interface): Promise<{ env: string; envConf
 }
 
 async function main() {
+    const vars = await loadSettings()
     const rl = readline.createInterface({ input, output })
     try {
-        const { env, envConfig } = await chooseEnv(rl)
+        const { env, envConfig } = await chooseEnv(rl, vars)
         const role = (await pick(rl, 'Role', ROLES)) as Role
         const suites = await listSuites()
         const suite = await pick(rl, 'Suite', suites.map((s) => `${s.name} — ${s.description}`))
         const suiteName = suite.split(' — ')[0]
 
         console.log(`\nRunning "${suiteName}" as ${role} on ${envConfig?.baseURL ?? env}...\n`)
-        const deps = defaultDeps()
+        const deps = defaultDeps(vars)
         const result = await runEngine({ suite: suiteName, env, role, envConfig }, deps)
 
         console.log('\n--- Result ---')

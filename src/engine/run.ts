@@ -152,11 +152,11 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
 
 // --- Production default deps ---
 
-export function defaultDeps(): RunDeps {
+export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
     const here = path.dirname(fileURLToPath(import.meta.url))
     const resultsRoot = path.resolve(here, '../../results')
     return {
-        vars: process.env,
+        vars,
         resultsRoot,
         openBrowser: async (env) => {
             const { chromium } = await import('@playwright/test')

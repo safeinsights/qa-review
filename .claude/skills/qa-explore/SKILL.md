@@ -17,7 +17,7 @@ Parse from that prompt:
 - the **instruction** — what to verify (after "Instruction:")
 - the **target environment** — `--pr <number>` or `--env <name>` as written in the prompt
 - the **role** — `admin | researcher | reviewer` (after "as role")
-Pass these through to the `pnpm qatest login/cleanup` commands below as the
+Pass these through to the `pnpm otto login/cleanup` commands below as the
 corresponding flags.
 
 ## Procedure
@@ -28,7 +28,7 @@ corresponding flags.
    line and is where you write the action trace — the GUI reads both from there.
 
 2. **Authenticate (do not reinvent).** Run:
-   `pnpm qatest login --role <role> (--pr <n> | --env <name>)`
+   `pnpm otto login --role <role> (--pr <n> | --env <name>)`
    Capture the printed cookie line. The browser you drive must carry this
    session (set it as the Cookie header / cookies on the context).
 
@@ -58,7 +58,7 @@ corresponding flags.
       "role": "<role>", "actions": [ ...the trace, each with a step field... ] }`
 
 6. **Always clean up.** Whether the run passed or failed, run:
-   `pnpm qatest cleanup (--pr <n> | --env <name>) --cookie "<cookie>" --studies <ids> --users <ids>`
+   `pnpm otto cleanup (--pr <n> | --env <name>) --cookie "<cookie>" --studies <ids> --users <ids>`
    Report cleanup outcome.
 
 7. **Emit the final result line** — it MUST include `bundleDir` (the GUI needs it
@@ -66,7 +66,7 @@ corresponding flags.
    `{"type":"result","ok":<bool>,"failureCategory":<cat|null>,"bundleDir":"<bundleDir>","steps":[...],"cleanup":{...}}`
 
 ## Promoting to a suite
-The GUI drives promotion separately (it runs `pnpm qatest codegen --trace
+The GUI drives promotion separately (it runs `pnpm otto codegen --trace
 <bundleDir>/trace.json` on a branch and opens a PR). You do NOT run codegen
 yourself — your job is only to leave a well-formed `<bundleDir>/trace.json` and a
 result line carrying `bundleDir`. Keep selectors stable; the trace becomes a
@@ -74,7 +74,7 @@ dev-reviewed suite.
 
 ## Rules
 - NEVER skip cleanup, even on failure.
-- Use the engine's `qatest login` for auth; do not attempt to log in by guessing.
+- Use the engine's `otto login` for auth; do not attempt to log in by guessing.
 - Keep selectors stable; this trace becomes a reviewed suite.
 - If you cannot accomplish the instruction, emit a `failed` step with
   `failureCategory: "ai-gave-up"` and still clean up.

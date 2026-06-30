@@ -45,7 +45,7 @@ export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?
                     .catch(() => false)
                 if (appeared) break
             }
-            await fillPin(page, env.mfaCode)
+            await fillPin(page, account.mfaCode)
             await page.getByRole('button', { name: /verify code/i }).click()
         }
 

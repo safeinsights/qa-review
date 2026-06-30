@@ -3,17 +3,18 @@ import { runEngine, defaultDeps } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
 import { stepLine, resultLine, screencastLine } from '@/cli/step-stream'
 import { ScreencastServer } from '@/engine/screencast'
+import type { Vars } from '@/engine/settings'
 import type { Role, StepEvent } from '@/engine/types'
 import type { Page } from '@playwright/test'
 
-export async function runCommand(opts: Record<string, string>): Promise<void> {
+export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
     const suite = opts.suite ?? 'signin'
     const json = opts.json === 'true'
     const headed = opts.headed === 'true'
     const screencast = opts.screencast === 'true'
 
-    const envConfig = opts.pr ? resolvePrEnv(Number(opts.pr)) : resolveEnv(opts.env ?? 'qa')
+    const envConfig = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
 
     const onStep = json ? (e: StepEvent) => process.stdout.write(stepLine(e)) : undefined
 
@@ -27,7 +28,7 @@ export async function runCommand(opts: Record<string, string>): Promise<void> {
 
     // Screencast IS the view, so it doesn't need a headed window. Use headed only
     // if explicitly asked AND not screencasting.
-    const base = headed && !screencast ? headedDeps(onStep) : { ...defaultDeps(), onStep }
+    const base = headed && !screencast ? headedDeps(onStep, vars) : { ...defaultDeps(vars), onStep }
     const deps = { ...base, onPage }
 
     try {

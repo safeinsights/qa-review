@@ -7,8 +7,8 @@ import type { StepEvent } from '@/engine/types'
 // Like defaultDeps(), but launches a VISIBLE Chromium so a QA tester can watch
 // the run, and wires an optional live step sink. Reuses defaultDeps for
 // everything except the browser launch.
-export function headedDeps(onStep?: (e: StepEvent) => void): RunDeps {
-    const base = defaultDeps()
+export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars']): RunDeps {
+    const base = defaultDeps(vars)
     const here = path.dirname(fileURLToPath(import.meta.url))
     const resultsRoot = path.resolve(here, '../../results')
     return {

@@ -67,7 +67,7 @@ qatest/
 
 ```json
 {
-  "name": "qatest",
+  "name": "otto",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -173,7 +173,7 @@ Expected: install succeeds; `tsc --noEmit` exits 0 (no source files yet, so no e
 - [ ] **Step 7: Commit**
 
 ```bash
-git init && git add -A && git commit -m "chore: scaffold qatest project"
+git init && git add -A && git commit -m "chore: scaffold otto project"
 ```
 
 ---
@@ -562,7 +562,7 @@ afterEach(() => {
 })
 
 function tmpRoot() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qatest-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-'))
     made.push(dir)
     return dir
 }
@@ -979,7 +979,7 @@ afterEach(() => {
     made.length = 0
 })
 function tmpRoot() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'qatest-run-'))
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-run-'))
     made.push(d)
     return d
 }

@@ -2,4 +2,5 @@ node_modules/
 results/
 .env
 .env.local
+config/settings.local.json
 *.log

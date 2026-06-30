@@ -55,6 +55,10 @@ func resolveCwd(cwd string) string {
 
 type App struct {
 	ctx context.Context
+	// Session-only age passphrase, set from the Settings panel. Held in memory to
+	// encrypt secrets on save and to unlock the shared secrets file for runs.
+	// Never persisted to disk.
+	passphrase string
 }
 
 func NewApp() *App {
@@ -73,6 +77,12 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 	cmd := exec.Command(program, args...)
 	cmd.Dir = resolveCwd(cwd)
 	cmd.Env = withGuiPath()
+	// Pass the session passphrase to the engine so it can decrypt the committed
+	// shared secrets (config/settings.secrets.json). Injected into the child's
+	// env only — never into the GUI's own environment.
+	if a.passphrase != "" {
+		cmd.Env = append(cmd.Env, "AGE_PASSPHRASE="+a.passphrase)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		a.emitSpawnFailure(program, err)
@@ -248,7 +258,7 @@ func promoteSteps(name, tracePath string) [][]string {
 	branch := "qa/" + name
 	return [][]string{
 		{"git", "checkout", "-b", branch},
-		{"pnpm", "qatest", "codegen", "--trace", tracePath},
+		{"pnpm", "otto", "codegen", "--trace", tracePath},
 		{"git", "add", "src/suites"},
 		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (AI-generated, review selectors)", name)},
 		{"git", "push", "-u", "origin", branch},

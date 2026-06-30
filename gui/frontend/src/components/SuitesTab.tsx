@@ -38,7 +38,7 @@ export function SuitesTab() {
                     /* ignore */
                 }
             })
-            await runProcess('pnpm', ['qatest', 'list'], REPO_ROOT)
+            await runProcess('pnpm', ['otto', 'list'], REPO_ROOT)
         })()
         return () => {
             offOut?.()
@@ -61,7 +61,7 @@ export function SuitesTab() {
     }, [allowedRoles, role])
 
     const run = () => {
-        const args = ['qatest', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
+        const args = ['otto', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
         if (pr) args.push('--pr', pr)
         else args.push('--env', env)
         setSpec({ program: 'pnpm', args, cwd: REPO_ROOT })

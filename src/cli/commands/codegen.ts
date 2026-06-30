@@ -10,7 +10,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 export async function codegenCommand(opts: Record<string, string>): Promise<void> {
     if (!opts.trace) {
-        console.error('Usage: qatest codegen --trace <path> [--out <file>]')
+        console.error('Usage: otto codegen --trace <path> [--out <file>]')
         process.exit(1)
     }
     const raw = fs.readFileSync(opts.trace, 'utf8')

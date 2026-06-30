@@ -58,7 +58,6 @@ export interface RunResult {
 export interface EnvConfig {
     name: string
     baseURL: string
-    accounts: Record<Role, { email: string; password: string }>
-    // Fixed second-factor code for the shared test accounts (same on every env).
-    mfaCode: string
+    // Each account carries its own second-factor (MFA) code.
+    accounts: Record<Role, { email: string; password: string; mfaCode: string }>
 }

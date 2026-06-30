@@ -11,17 +11,16 @@ afterEach(() => {
     made.length = 0
 })
 function tmpRoot() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'qatest-run-'))
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'otto-run-'))
     made.push(d)
     return d
 }
 
 const ENV_VARS = {
     QA_BASE_URL: 'https://qa.example.com',
-    ADMIN_EMAIL: 'a@example.com', ADMIN_PASSWORD: 'p',
-    RESEARCHER_EMAIL: 'r@example.com', RESEARCHER_PASSWORD: 'p',
-    REVIEWER_EMAIL: 'v@example.com', REVIEWER_PASSWORD: 'p',
-    MFA_CODE: '424242',
+    ADMIN_EMAIL: 'a@example.com', ADMIN_PASSWORD: 'p', ADMIN_MFA_CODE: '424242',
+    RESEARCHER_EMAIL: 'r@example.com', RESEARCHER_PASSWORD: 'p', RESEARCHER_MFA_CODE: '424242',
+    REVIEWER_EMAIL: 'v@example.com', REVIEWER_PASSWORD: 'p', REVIEWER_MFA_CODE: '424242',
 }
 
 function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {

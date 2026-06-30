@@ -1,6 +1,6 @@
-import 'dotenv/config'
 import { resolvePrEnv } from '@/engine/env'
 import { runEngine, defaultDeps } from '@/engine/run'
+import { loadSettings } from '@/engine/settings'
 import type { Role } from '@/engine/types'
 
 // Ad-hoc runner for driving a suite against a PR preview without the interactive
@@ -9,12 +9,13 @@ import type { Role } from '@/engine/types'
 async function main() {
     const [prArg, roleArg = 'admin', suiteArg = 'signin'] = process.argv.slice(2)
     const prNumber = Number(prArg)
-    const envConfig = resolvePrEnv(prNumber)
+    const vars = await loadSettings()
+    const envConfig = resolvePrEnv(prNumber, vars)
     console.log(`Running "${suiteArg}" as ${roleArg} on ${envConfig.baseURL}\n`)
 
     const result = await runEngine(
         { suite: suiteArg, env: envConfig.name, role: roleArg as Role, envConfig },
-        defaultDeps(),
+        defaultDeps(vars),
     )
 
     console.log('--- Result ---')

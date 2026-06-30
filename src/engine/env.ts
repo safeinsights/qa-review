@@ -1,24 +1,28 @@
-import { ENVIRONMENTS, SHARED_ACCOUNTS, MFA_CODE_VAR, prBaseUrl } from '../../config/environments'
+import { ENVIRONMENTS, SHARED_ACCOUNTS, prBaseUrl } from '../../config/environments'
 import type { EnvConfig, Role } from '@/engine/types'
 
 type Vars = Record<string, string | undefined>
 
 function read(vars: Vars, key: string): string {
     const value = vars[key]
-    if (!value) throw new Error(`Missing required secret: ${key} (set it in .env)`)
+    if (!value) throw new Error(`Missing required secret: ${key} (set it in the Settings panel or config/settings.local.json)`)
     return value
 }
 
-// Resolve the shared test accounts + MFA code used by every environment (stable
-// or PR preview). Throws clear, actionable errors so a run never starts
-// half-configured.
-function resolveSharedCredentials(vars: Vars): Pick<EnvConfig, 'accounts' | 'mfaCode'> {
+// Resolve the shared test accounts (email + password + per-account MFA code) used
+// by every environment (stable or PR preview). Throws clear, actionable errors so
+// a run never starts half-configured.
+function resolveSharedCredentials(vars: Vars): Pick<EnvConfig, 'accounts'> {
     const accounts = {} as EnvConfig['accounts']
     for (const role of Object.keys(SHARED_ACCOUNTS) as Role[]) {
         const a = SHARED_ACCOUNTS[role]
-        accounts[role] = { email: read(vars, a.emailVar), password: read(vars, a.passwordVar) }
+        accounts[role] = {
+            email: read(vars, a.emailVar),
+            password: read(vars, a.passwordVar),
+            mfaCode: read(vars, a.mfaVar),
+        }
     }
-    return { accounts, mfaCode: read(vars, MFA_CODE_VAR) }
+    return { accounts }
 }
 
 // Resolve a named, stable environment (qa, staging) from the committed

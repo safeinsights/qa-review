@@ -4,9 +4,9 @@
 
 **Goal:** Replace the Tauri (Rust) desktop shell with a Wails v2 (Go) shell so the Go team can maintain it, while keeping the existing React frontend, the TypeScript engine/CLI, and the qa-explore skill exactly as they are.
 
-**Architecture:** The shell is thin: it spawns the `qatest` CLI / `claude` as child processes, streams their stdout (NDJSON) to the webview as events, and runs a few git/gh commands. Only two things are Tauri-specific — the Go/Rust backend (3 command handlers) and `gui/src/lib/ipc.ts` (the JS bridge). We rewrite the backend in Go (Wails) and reimplement `ipc.ts`'s bodies against the Wails runtime **while keeping its exported function signatures byte-for-byte identical** — so every React component imports the same API and needs zero changes.
+**Architecture:** The shell is thin: it spawns the `otto` CLI / `claude` as child processes, streams their stdout (NDJSON) to the webview as events, and runs a few git/gh commands. Only two things are Tauri-specific — the Go/Rust backend (3 command handlers) and `gui/src/lib/ipc.ts` (the JS bridge). We rewrite the backend in Go (Wails) and reimplement `ipc.ts`'s bodies against the Wails runtime **while keeping its exported function signatures byte-for-byte identical** — so every React component imports the same API and needs zero changes.
 
-**Tech Stack:** Wails v2 (Go backend + OS webview), Go (`os/exec`, `bufio.Scanner`, goroutines), the existing React + TypeScript + Vite frontend, the existing TS/Playwright engine + `qatest` CLI (unchanged).
+**Tech Stack:** Wails v2 (Go backend + OS webview), Go (`os/exec`, `bufio.Scanner`, goroutines), the existing React + TypeScript + Vite frontend, the existing TS/Playwright engine + `otto` CLI (unchanged).
 
 ---
 
@@ -274,7 +274,7 @@ func TestPromoteArgsSequence(t *testing.T) {
 	got := promoteSteps("admin-invites", "/repo/results/x/trace.json")
 	want := [][]string{
 		{"git", "checkout", "-b", "qa/admin-invites"},
-		{"pnpm", "qatest", "codegen", "--trace", "/repo/results/x/trace.json"},
+		{"pnpm", "otto", "codegen", "--trace", "/repo/results/x/trace.json"},
 		{"git", "add", "src/suites"},
 		{"git", "commit", "-m", "test: add admin-invites suite (AI-generated, review selectors)"},
 		{"git", "push", "-u", "origin", "qa/admin-invites"},
@@ -377,7 +377,7 @@ func promoteSteps(name, tracePath string) [][]string {
 	branch := "qa/" + name
 	return [][]string{
 		{"git", "checkout", "-b", branch},
-		{"pnpm", "qatest", "codegen", "--trace", tracePath},
+		{"pnpm", "otto", "codegen", "--trace", tracePath},
 		{"git", "add", "src/suites"},
 		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (AI-generated, review selectors)", name)},
 		{"git", "push", "-u", "origin", branch},

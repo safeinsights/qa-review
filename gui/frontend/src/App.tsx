@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Tabs } from '@mantine/core'
 import { SuitesTab } from './components/SuitesTab'
 import { ExploratoryTab } from './components/ExploratoryTab'
+import { SettingsTab } from './components/SettingsTab'
 import { SyncButton } from './components/SyncButton'
 
 export function App() {
@@ -40,6 +41,7 @@ export function App() {
                 <Tabs.List>
                     <Tabs.Tab value="suites">Suites</Tabs.Tab>
                     <Tabs.Tab value="exploratory">Exploratory</Tabs.Tab>
+                    <Tabs.Tab value="settings">Settings</Tabs.Tab>
                 </Tabs.List>
 
                 <Tabs.Panel value="suites" pt="lg">
@@ -47,6 +49,9 @@ export function App() {
                 </Tabs.Panel>
                 <Tabs.Panel value="exploratory" pt="lg">
                     <ExploratoryTab />
+                </Tabs.Panel>
+                <Tabs.Panel value="settings" pt="lg">
+                    <SettingsTab />
                 </Tabs.Panel>
             </Tabs>
         </div>

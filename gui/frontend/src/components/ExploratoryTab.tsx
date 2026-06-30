@@ -25,7 +25,7 @@ export function ExploratoryTab() {
         const target = pr ? `--pr ${pr}` : `--env ${env}`
         const prompt = `/qa-explore Run this against ${target} as role ${role}. Instruction: ${instruction}`
         // --dangerously-skip-permissions so the headless run can drive the browser
-        // + shell qatest without interactive permission prompts.
+        // + shell otto without interactive permission prompts.
         const args = ['-p', '--dangerously-skip-permissions', prompt]
         setSpec({ program: 'claude', args, cwd: REPO_ROOT })
     }
