@@ -9,10 +9,16 @@ You drive a real browser to carry out a plain-English QA instruction against a
 live environment, reporting progress in the same format the engine uses, and
 ALWAYS cleaning up after yourself.
 
-## Inputs (from the invocation)
-- `--instruction "<plain English>"` — what to verify
-- `--env <name>` or `--pr <number>` — target environment
-- `--role <admin|researcher|reviewer>` — which test account
+## Inputs (parsed from the prompt text)
+The GUI invokes this skill as a single `claude -p` prompt (claude takes the
+prompt positionally and rejects unknown `--flags`), e.g.:
+`/qa-explore Run this against --pr 839 as role admin. Instruction: <plain English>`
+Parse from that prompt:
+- the **instruction** — what to verify (after "Instruction:")
+- the **target environment** — `--pr <number>` or `--env <name>` as written in the prompt
+- the **role** — `admin | researcher | reviewer` (after "as role")
+Pass these through to the `pnpm qatest login/cleanup` commands below as the
+corresponding flags.
 
 ## Procedure
 

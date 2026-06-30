@@ -16,9 +16,15 @@ export function ExploratoryTab() {
 
     const run = () => {
         setResult(null)
-        const args = ['-p', '/qa-explore', '--role', role, '--instruction', instruction]
-        if (pr) args.push('--pr', pr)
-        else args.push('--env', env)
+        // `claude` takes the prompt as a positional arg; skills resolve via
+        // /skill-name IN the prompt, and context must be embedded in the prompt
+        // text (claude rejects unknown --flags). So build one prompt string that
+        // invokes the qa-explore skill with the env/role/instruction baked in.
+        const target = pr ? `--pr ${pr}` : `--env ${env}`
+        const prompt = `/qa-explore Run this against ${target} as role ${role}. Instruction: ${instruction}`
+        // --dangerously-skip-permissions so the headless run can drive the browser
+        // + shell qatest without interactive permission prompts.
+        const args = ['-p', '--dangerously-skip-permissions', prompt]
         setSpec({ program: 'claude', args, cwd: REPO_ROOT })
     }
 

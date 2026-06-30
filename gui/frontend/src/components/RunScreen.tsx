@@ -14,12 +14,14 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
     const [steps, setSteps] = useState<StepEnvelope[]>([])
     const [result, setResult] = useState<ResultEnvelope | null>(null)
     const [running, setRunning] = useState(false)
+    const [error, setError] = useState<string | null>(null)
     const parser = useRef(new StreamParser())
 
     useEffect(() => {
         if (!spec) return
         setSteps([])
         setResult(null)
+        setError(null)
         setRunning(true)
         parser.current = new StreamParser()
 
@@ -37,7 +39,14 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                 }
             })
             unlistenExit = await onExit(() => setRunning(false))
-            await runProcess(spec.program, spec.args, spec.cwd)
+            try {
+                await runProcess(spec.program, spec.args, spec.cwd)
+            } catch (e) {
+                // A failed spawn (e.g. the tool isn't on PATH) used to vanish
+                // silently — show it so the run never looks dead for no reason.
+                setError(`Could not start "${spec.program}": ${String(e)}`)
+                setRunning(false)
+            }
         })()
 
         return () => {
@@ -51,6 +60,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
             <div style={{ flex: 1 }}>
                 <StepChecklist steps={steps} />
                 {running ? <p>Running… (a browser window will open)</p> : null}
+                {error ? <p style={{ color: '#c5221f' }}>⚠ {error}</p> : null}
             </div>
             <div style={{ flex: 1 }}>{result ? <ResultPanel result={result} /> : null}</div>
         </div>
