@@ -4,11 +4,17 @@ import { StreamParser, type StepEnvelope, type ResultEnvelope } from '../lib/ste
 import { StepChecklist } from './StepChecklist'
 import { ResultPanel } from './ResultPanel'
 import { BrowserPanel } from './BrowserPanel'
+import { SnapshotPanel } from './SnapshotPanel'
 
 export interface RunSpec {
     program: string
     args: string[]
     cwd: string
+}
+
+interface Selected {
+    index: number
+    step: StepEnvelope
 }
 
 export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r: ResultEnvelope) => void }) {
@@ -17,7 +23,11 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
     const [running, setRunning] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [port, setPort] = useState<number | null>(null)
+    const [selected, setSelected] = useState<Selected | null>(null)
     const parser = useRef(new StreamParser())
+
+    // bundleDir is needed to load/zip artifacts; it arrives on the result envelope.
+    const bundleDir = (result?.bundleDir as string | undefined) ?? null
 
     useEffect(() => {
         if (!spec) return
@@ -25,6 +35,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
         setResult(null)
         setError(null)
         setPort(null)
+        setSelected(null)
         setRunning(true)
         parser.current = new StreamParser()
 
@@ -46,8 +57,6 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
             try {
                 await runProcess(spec.program, spec.args, spec.cwd)
             } catch (e) {
-                // A failed spawn (e.g. the tool isn't on PATH) used to vanish
-                // silently — show it so the run never looks dead for no reason.
                 setError(`Could not start "${spec.program}": ${String(e)}`)
                 setRunning(false)
             }
@@ -79,6 +88,11 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
         )
     }
 
+    // A snapshot can be shown once we know the bundleDir (post-result) and the
+    // selected step has a screenshot path.
+    const showSnapshot = selected && bundleDir && selected.step.screenshot
+    const stepCount = new Set(steps.map((s) => s.name)).size
+
     return (
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 400px) 1fr', gap: 22, marginTop: 22 }}>
             {/* Left: execution log + verdict */}
@@ -95,7 +109,16 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                 <div className="kicker" style={{ marginBottom: 12 }}>
                     Execution log
                 </div>
-                <StepChecklist steps={steps} />
+                <StepChecklist
+                    steps={steps}
+                    selectedIndex={selected?.index ?? null}
+                    onSelect={(index, step) => setSelected({ index, step })}
+                />
+                {bundleDir && stepCount > 0 ? (
+                    <p className="st-dim" style={{ marginTop: 10, fontSize: 12, fontStyle: 'italic' }}>
+                        Tip: click a step with 📷 to view its snapshot.
+                    </p>
+                ) : null}
                 {running && !result ? (
                     <p className="st-dim" style={{ marginTop: 12, fontStyle: 'italic' }}>
                         Running… the live browser appears on the right.
@@ -118,7 +141,7 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                 {result ? <ResultPanel result={result} /> : null}
             </section>
 
-            {/* Right: live browser monitor */}
+            {/* Right: live browser monitor OR step snapshot */}
             <section
                 style={{
                     background: 'var(--paper-card)',
@@ -129,42 +152,55 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                     alignSelf: 'start',
                 }}
             >
-                <div
-                    style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '11px 16px',
-                        borderBottom: '1px solid var(--line)',
-                    }}
-                >
-                    <span
-                        className="mono"
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--teal)', letterSpacing: 1 }}
-                    >
-                        <span className="live-dot" /> LIVE BROWSER
-                    </span>
-                    {port ? (
-                        <span className="mono st-dim" style={{ fontSize: 12 }}>
-                            127.0.0.1:{port}
-                        </span>
-                    ) : null}
-                </div>
-                {port ? (
-                    <BrowserPanel port={port} />
+                {showSnapshot ? (
+                    <SnapshotPanel
+                        bundleDir={bundleDir}
+                        rel={selected!.step.screenshot!}
+                        stepName={selected!.step.name}
+                        index={selected!.index}
+                        total={stepCount}
+                        onBackToLive={() => setSelected(null)}
+                    />
                 ) : (
-                    <div
-                        style={{
-                            aspectRatio: '16 / 10',
-                            display: 'grid',
-                            placeItems: 'center',
-                            background: 'var(--paper-sunken)',
-                            color: 'var(--ink-faint)',
-                            fontStyle: 'italic',
-                        }}
-                    >
-                        {running ? 'Waiting for the browser to start…' : 'No live session.'}
-                    </div>
+                    <>
+                        <div
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '11px 16px',
+                                borderBottom: '1px solid var(--line)',
+                            }}
+                        >
+                            <span
+                                className="mono"
+                                style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--teal)', letterSpacing: 1 }}
+                            >
+                                <span className="live-dot" /> LIVE BROWSER
+                            </span>
+                            {port ? (
+                                <span className="mono st-dim" style={{ fontSize: 12 }}>
+                                    127.0.0.1:{port}
+                                </span>
+                            ) : null}
+                        </div>
+                        {port ? (
+                            <BrowserPanel port={port} />
+                        ) : (
+                            <div
+                                style={{
+                                    aspectRatio: '16 / 10',
+                                    display: 'grid',
+                                    placeItems: 'center',
+                                    background: 'var(--paper-sunken)',
+                                    color: 'var(--ink-faint)',
+                                    fontStyle: 'italic',
+                                }}
+                            >
+                                {running ? 'Waiting for the browser to start…' : 'No live session.'}
+                            </div>
+                        )}
+                    </>
                 )}
             </section>
         </div>

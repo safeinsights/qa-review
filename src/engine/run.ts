@@ -12,6 +12,9 @@ export interface BrowserHandle {
     page: import('@playwright/test').Page
     cookieHeader: string
     close: () => Promise<void>
+    // Stop tracing into <bundleDir>/trace.zip. Called BEFORE close() (tracing must
+    // stop while the context is still open). Optional so test fakes can omit it.
+    saveTraceTo?: (bundleDir: string) => Promise<void>
     saveVideoTo?: (bundleDir: string) => Promise<void>
 }
 
@@ -132,6 +135,8 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
             failed: ['cleanup-call-threw'],
             error: (e as Error).message,
         }))
+        // Stop tracing into the bundle BEFORE closing the context.
+        await handle?.saveTraceTo?.(recorder.bundleDir).catch(() => {})
         await handle?.close().catch(() => {})
         // Best-effort: the recorded video is only finalized after the context
         // closes, so persist it into the bundle now. A missing video never fails the run.
@@ -160,6 +165,10 @@ export function defaultDeps(): RunDeps {
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot }, // moved into bundle after finish
             })
+            // Capture a Playwright trace (DOM snapshots + screenshots + network +
+            // console) so a tester can replay the whole run at trace.playwright.dev.
+            // Best-effort: tracing must never fail the run.
+            await context.tracing.start({ screenshots: true, snapshots: true, sources: true }).catch(() => {})
             const page = await context.newPage()
             const video = page.video()
             let browserClosed = false
@@ -171,11 +180,16 @@ export function defaultDeps(): RunDeps {
             return {
                 page,
                 cookieHeader: '',
-                // Close ONLY the context here — this finalizes the video while
-                // keeping `video.saveAs()` usable. The browser is closed in
-                // saveVideoTo (or as a fallback below if saveVideoTo is absent).
+                // Stop tracing (writing trace.zip into the bundle) BEFORE the
+                // context closes, then close the context — which finalizes the
+                // video while keeping `video.saveAs()` usable. Browser closes in
+                // saveVideoTo (or the fallback below).
                 close: async () => {
                     await context.close().catch(() => {})
+                },
+                saveTraceTo: async (bundleDir: string) => {
+                    // Stop tracing straight into the bundle. Must run BEFORE close().
+                    await context.tracing.stop({ path: path.join(bundleDir, 'trace.zip') }).catch(() => {})
                 },
                 saveVideoTo: async (bundleDir: string) => {
                     // Persist the finalized video into the run bundle so

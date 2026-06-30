@@ -27,8 +27,8 @@ async function allSuites(): Promise<Suite[]> {
     return cache
 }
 
-export async function listSuites(): Promise<{ name: string; description: string }[]> {
-    return (await allSuites()).map((s) => ({ name: s.name, description: s.description }))
+export async function listSuites(): Promise<{ name: string; description: string; roles: string[] }[]> {
+    return (await allSuites()).map((s) => ({ name: s.name, description: s.description, roles: s.roles }))
 }
 
 export async function getSuite(name: string): Promise<Suite> {

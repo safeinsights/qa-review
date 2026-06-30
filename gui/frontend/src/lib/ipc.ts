@@ -9,6 +9,9 @@ interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     GitPull(cwd: string): Promise<string>
     PromoteSuite(cwd: string, name: string, tracePath: string): Promise<string>
+    ReadScreenshot(bundleDir: string, rel: string): Promise<string>
+    SaveScreenshotAs(bundleDir: string, rel: string): Promise<string>
+    ZipBundle(bundleDir: string): Promise<string>
 }
 
 interface WailsRuntime {
@@ -53,4 +56,19 @@ export async function gitPull(cwd: string): Promise<string> {
 
 export async function promoteSuite(cwd: string, name: string, tracePath: string): Promise<string> {
     return app().PromoteSuite(cwd, name, tracePath)
+}
+
+// Read a per-step screenshot as a base64 data URI (webviews block file://).
+export async function readScreenshot(bundleDir: string, rel: string): Promise<string> {
+    return app().ReadScreenshot(bundleDir, rel)
+}
+
+// Prompt to save one screenshot; returns the saved path ('' if cancelled).
+export async function saveScreenshotAs(bundleDir: string, rel: string): Promise<string> {
+    return app().SaveScreenshotAs(bundleDir, rel)
+}
+
+// Prompt to save a zip of the whole run bundle; returns the saved path ('' if cancelled).
+export async function zipBundle(bundleDir: string): Promise<string> {
+    return app().ZipBundle(bundleDir)
 }

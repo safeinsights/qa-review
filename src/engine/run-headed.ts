@@ -21,6 +21,7 @@ export function headedDeps(onStep?: (e: StepEvent) => void): RunDeps {
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot },
             })
+            await context.tracing.start({ screenshots: true, snapshots: true, sources: true }).catch(() => {})
             const page = await context.newPage()
             const video = page.video()
             let browserClosed = false
@@ -34,6 +35,9 @@ export function headedDeps(onStep?: (e: StepEvent) => void): RunDeps {
                 cookieHeader: '',
                 close: async () => {
                     await context.close().catch(() => {})
+                },
+                saveTraceTo: async (bundleDir: string) => {
+                    await context.tracing.stop({ path: path.join(bundleDir, 'trace.zip') }).catch(() => {})
                 },
                 saveVideoTo: async (bundleDir: string) => {
                     try {

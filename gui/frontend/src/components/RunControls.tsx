@@ -1,7 +1,7 @@
 import { Select, TextInput, Button } from '@mantine/core'
 
 const ENVS = ['qa', 'staging']
-const ROLES = ['admin', 'researcher', 'reviewer']
+const ALL_ROLES = ['admin', 'researcher', 'reviewer']
 
 export interface RunControlsProps {
     env: string
@@ -10,23 +10,30 @@ export interface RunControlsProps {
     setPr: (v: string) => void
     role: string
     setRole: (v: string) => void
+    // Roles the selected suite permits. Empty = unknown (suites not loaded yet) →
+    // fall back to all roles. One = fixed (shown read-only). Many = constrained.
+    allowedRoles?: string[]
     // Suite selector is optional (Exploratory has no suite picker).
     suite?: string
     setSuite?: (v: string) => void
-    suites?: { name: string; description: string }[]
+    suites?: { name: string; description: string; roles: string[] }[]
     onRun: () => void
     runDisabled?: boolean
     runLabel?: string
 }
 
 // The shared editorial control bar: labeled mono fields + a teal Run button.
-// Used by both the Suites and Exploratory tabs so the cockpit reads consistently.
+// The Role is governed by the selected Suite (a suite declares which role it runs
+// as), so we show Suite first and adapt the Role field to avoid invalid combos.
 export function RunControls(p: RunControlsProps) {
     const showSuite = p.suite !== undefined && p.setSuite
     const suiteData = (p.suites && p.suites.length > 0 ? p.suites.map((s) => s.name) : ['signin']).map((name) => ({
         value: name,
         label: name,
     }))
+    const allowed = p.allowedRoles ?? []
+    const roleOptions = allowed.length > 0 ? allowed : ALL_ROLES
+    const roleFixed = allowed.length === 1
 
     return (
         <div
@@ -54,22 +61,7 @@ export function RunControls(p: RunControlsProps) {
                 />
             </Field>
             <Field label="PR #">
-                <TextInput
-                    value={p.pr}
-                    onChange={(e) => p.setPr(e.currentTarget.value)}
-                    placeholder="optional"
-                    w={90}
-                />
-            </Field>
-            <Field label="Role">
-                <Select
-                    data={ROLES}
-                    value={p.role}
-                    onChange={(v) => v && p.setRole(v)}
-                    allowDeselect={false}
-                    w={150}
-                    comboboxProps={{ withinPortal: true }}
-                />
+                <TextInput value={p.pr} onChange={(e) => p.setPr(e.currentTarget.value)} placeholder="optional" w={90} />
             </Field>
             {showSuite ? (
                 <Field label="Suite">
@@ -83,6 +75,35 @@ export function RunControls(p: RunControlsProps) {
                     />
                 </Field>
             ) : null}
+            <Field label={roleFixed ? 'Role (from suite)' : 'Role'}>
+                {roleFixed ? (
+                    // Single valid role: show it read-only — no footgun.
+                    <div
+                        className="mono"
+                        style={{
+                            border: '1px solid var(--line)',
+                            background: 'var(--paper-sunken)',
+                            borderRadius: 8,
+                            padding: '7px 11px',
+                            color: 'var(--ink-dim)',
+                            fontSize: 13,
+                            width: 150,
+                        }}
+                        title="This suite always runs as this role"
+                    >
+                        {p.role}
+                    </div>
+                ) : (
+                    <Select
+                        data={roleOptions}
+                        value={p.role}
+                        onChange={(v) => v && p.setRole(v)}
+                        allowDeselect={false}
+                        w={150}
+                        comboboxProps={{ withinPortal: true }}
+                    />
+                )}
+            </Field>
             <Button
                 onClick={p.onRun}
                 disabled={p.runDisabled}

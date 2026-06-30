@@ -1,16 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { RunScreen, type RunSpec } from './RunScreen'
 import { RunControls } from './RunControls'
 import { runProcess, onStdoutLine, onExit } from '../lib/ipc'
 
 const REPO_ROOT = '..' // gui/ lives in the repo; the engine runs from repo root
 
+interface SuiteInfo {
+    name: string
+    description: string
+    roles: string[]
+}
+
 export function SuitesTab() {
     const [env, setEnv] = useState<string>('qa')
     const [pr, setPr] = useState<string>('')
     const [role, setRole] = useState<string>('admin')
     const [suite, setSuite] = useState<string>('signin')
-    const [suites, setSuites] = useState<{ name: string; description: string }[]>([])
+    const [suites, setSuites] = useState<SuiteInfo[]>([])
     const [spec, setSpec] = useState<RunSpec | null>(null)
 
     // NOTE: this fetch reuses the global stdout-line/proc-exit events, same as a
@@ -40,6 +46,20 @@ export function SuitesTab() {
         }
     }, [])
 
+    // The role is determined BY the suite — a suite declares which role(s) it runs
+    // as. Showing a free role dropdown was a footgun (e.g. create-study only works
+    // as researcher). Constrain role to the selected suite's allowed roles.
+    const selectedSuite = useMemo(() => suites.find((s) => s.name === suite), [suites, suite])
+    const allowedRoles = selectedSuite?.roles ?? []
+
+    // Keep `role` valid: when the suite changes, snap role to its first allowed
+    // role if the current one isn't permitted.
+    useEffect(() => {
+        if (allowedRoles.length > 0 && !allowedRoles.includes(role)) {
+            setRole(allowedRoles[0])
+        }
+    }, [allowedRoles, role])
+
     const run = () => {
         const args = ['qatest', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
         if (pr) args.push('--pr', pr)
@@ -56,6 +76,7 @@ export function SuitesTab() {
                 setPr={setPr}
                 role={role}
                 setRole={setRole}
+                allowedRoles={allowedRoles}
                 suite={suite}
                 setSuite={setSuite}
                 suites={suites}

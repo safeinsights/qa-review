@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +116,105 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 func (a *App) emitSpawnFailure(program string, err error) {
 	runtime.EventsEmit(a.ctx, "stdout-line", fmt.Sprintf("[qa-runner] could not start %q: %v", program, err))
 	runtime.EventsEmit(a.ctx, "proc-exit", -1)
+}
+
+// ReadScreenshot reads a per-step screenshot PNG from disk and returns it as a
+// base64 data URI, so the webview can show it as an <img src>. (Webviews block
+// file:// resources, so we pipe the bytes through the Go backend instead.)
+// `bundleDir` is the run's absolute bundle path; `rel` is the bundle-relative
+// screenshot path carried on each step event.
+func (a *App) ReadScreenshot(bundleDir string, rel string) (string, error) {
+	full := filepath.Join(bundleDir, rel)
+	// Guard against path traversal escaping the bundle dir.
+	if !strings.HasPrefix(filepath.Clean(full), filepath.Clean(bundleDir)) {
+		return "", fmt.Errorf("screenshot path outside bundle")
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "", err
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// SaveScreenshotAs prompts the tester for a location and copies one screenshot
+// (bundle-relative `rel` under `bundleDir`) there. Returns the saved path, or ""
+// if the dialog was cancelled.
+func (a *App) SaveScreenshotAs(bundleDir string, rel string) (string, error) {
+	src := filepath.Join(bundleDir, rel)
+	if !strings.HasPrefix(filepath.Clean(src), filepath.Clean(bundleDir)) {
+		return "", fmt.Errorf("screenshot path outside bundle")
+	}
+	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: filepath.Base(rel),
+		Title:           "Save screenshot",
+	})
+	if err != nil || dest == "" {
+		return "", err
+	}
+	if err := copyFile(src, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// ZipBundle prompts for a location and writes a .zip of the entire run bundle
+// (screenshots + video + trace.zip + report + summary). Returns the saved path,
+// or "" if cancelled.
+func (a *App) ZipBundle(bundleDir string) (string, error) {
+	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: filepath.Base(bundleDir) + ".zip",
+		Title:           "Download all run artifacts",
+	})
+	if err != nil || dest == "" {
+		return "", err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+	zw := zip.NewWriter(out)
+	defer zw.Close()
+
+	walkErr := filepath.Walk(bundleDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(bundleDir, p)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		w, err := zw.Create(rel)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(w, f)
+		return err
+	})
+	if walkErr != nil {
+		return "", walkErr
+	}
+	return dest, nil
+}
+
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 // GitPull runs `git pull` in cwd and returns combined output.
