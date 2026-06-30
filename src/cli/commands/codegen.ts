@@ -1,12 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
 import { parseTrace } from '@/codegen/action-trace'
 import { generateSuite } from '@/codegen/generate-suite'
+import { repoDir, suitesCompiledDir } from '@/engine/paths'
+import { compileSuite } from '@/cli/commands/build-suites'
 
-// Repo root, anchored to this file's location (src/cli/commands -> ../../..).
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+// Repo root for writing the generated suite into src/suites. In the packaged app
+// this is the cloned repo (QAR_REPO_DIR); for `pnpm qar` it's this checkout.
+const REPO_ROOT = repoDir()
 
 export async function codegenCommand(opts: Record<string, string>): Promise<void> {
     if (!opts.trace) {
@@ -28,14 +29,16 @@ export async function codegenCommand(opts: Record<string, string>): Promise<void
     fs.writeFileSync(outPath, generateSuite(trace))
     console.log(`wrote ${outPath}`)
 
+    // Compile the generated suite to suites-compiled/<name>.mjs so the bundled
+    // engine can load it without a TS toolchain. A compile (i.e. type/syntax)
+    // error means the generated suite is bad — remove it and fail, preserving the
+    // previous "generated suite failed; removed it" UX.
     try {
-        execFileSync('pnpm', ['typecheck'], { stdio: 'pipe', cwd: REPO_ROOT })
+        await compileSuite(outPath, suitesCompiledDir())
     } catch (e) {
         fs.rmSync(outPath, { force: true })
-        const err = e as { stdout?: Buffer; stderr?: Buffer }
-        const detail = err.stdout?.toString() || err.stderr?.toString() || (e as Error).message
-        console.error('Generated suite failed typecheck; removed it.\n' + detail)
+        console.error('Generated suite failed to compile; removed it.\n' + (e as Error).message)
         process.exit(1)
     }
-    console.log(`ok: ${outPath} typechecks`)
+    console.log(`ok: ${outPath} compiled`)
 }
