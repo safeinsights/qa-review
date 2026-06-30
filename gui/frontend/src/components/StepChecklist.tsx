@@ -18,11 +18,10 @@ export function StepChecklist({
     const rows = [...byName.values()]
 
     if (rows.length === 0) {
-        return (
-            <p className="st-dim" style={{ margin: '4px 0', fontStyle: 'italic' }}>
-                No steps yet — press Run.
-            </p>
-        )
+        // The log only appears once a run has started; the parent already shows a
+        // "Running…" line while steps are pending, so render nothing here. (No more
+        // "press Run" — that was misleading once a run was underway.)
+        return null
     }
 
     return (

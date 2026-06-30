@@ -10,6 +10,8 @@ import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { syncCommand } from '@/cli/commands/sync'
+import { buildSuitesCommand } from '@/cli/commands/build-suites'
+import { sessionCommand } from '@/cli/commands/session'
 
 const BOOLEANS = ['json', 'headed', 'screencast']
 
@@ -39,8 +41,12 @@ async function main() {
             return setSecretCommand(opts)
         case 'sync':
             return syncCommand()
+        case 'build-suites':
+            return buildSuitesCommand()
+        case 'session':
+            return sessionCommand(opts, await loadSettings())
         default:
-            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync`)
+            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | build-suites | session`)
             process.exit(1)
     }
 }

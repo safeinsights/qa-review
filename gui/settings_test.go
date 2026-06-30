@@ -82,6 +82,7 @@ func readJSON(t *testing.T, path string) map[string]string {
 
 func TestWriteSettingRouting(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +121,7 @@ func TestWriteSettingRouting(t *testing.T) {
 
 func TestWriteSettingMovesBetweenTiers(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +143,7 @@ func TestWriteSettingMovesBetweenTiers(t *testing.T) {
 
 func TestWriteSecretToProjectRequiresKeyring(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +156,7 @@ func TestWriteSecretToProjectRequiresKeyring(t *testing.T) {
 
 func TestReadSettingsReportsIdentityAndMasksSecrets(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}

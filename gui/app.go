@@ -7,13 +7,19 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	goruntime "runtime"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -36,28 +42,30 @@ func withGuiPath() []string {
 	}
 	out := make([]string, 0, len(env))
 	for _, e := range env {
-		if !strings.HasPrefix(e, "PATH=") {
-			out = append(out, e)
+		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "QAR_REPO_DIR=") {
+			continue
 		}
+		out = append(out, e)
 	}
-	return append(out, "PATH="+path)
+	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives.
+	return append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
 }
 
-// resolveCwd makes a (possibly relative) cwd absolute against the app's working
-// directory, so spawns don't depend on where the binary was launched from.
-func resolveCwd(cwd string) string {
-	if filepath.IsAbs(cwd) {
-		return cwd
-	}
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return cwd
-	}
-	return abs
-}
+// appVersion is reported in issue reports. Override at build time with
+// -ldflags "-X main.appVersion=<v>"; defaults to "dev" for local/wails-dev runs.
+var appVersion = "dev"
 
 type App struct {
 	ctx context.Context
+	// authoring session state (one at a time): the qar-session process, the live
+	// CDP/screencast ports, the temp MCP config, and the claude PTY.
+	sessionMu      sync.Mutex
+	sessionCmd     *exec.Cmd
+	sessionMcpPath string
+	pty            ptySession
+	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
+	runMu  sync.Mutex
+	runCmd *exec.Cmd
 }
 
 func NewApp() *App {
@@ -68,27 +76,332 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
+// shutdown runs when the app is quitting — tear down any live authoring session
+// so we never orphan a Chrome (remote-debugging) or claude process.
+func (a *App) shutdown(ctx context.Context) {
+	a.StopSession()
+}
+
+// Preflight reports required external tools/apps that are missing, so the UI can
+// show a blocking banner. Empty slice means all good.
+func (a *App) Preflight() []string {
+	return preflightMissing()
+}
+
+// IsRepoReady reports whether the qa-review repo has been cloned. The frontend
+// shows a one-time "Set up tests" prompt when this is false.
+func (a *App) IsRepoReady() bool {
+	return repoReady()
+}
+
+// DefaultRepoDir is the suggested clone location shown in the setup UI.
+func (a *App) DefaultRepoDir() string {
+	return defaultRepoDir()
+}
+
+// ChooseDirectory opens a native folder picker so the user can choose where the
+// repo is cloned. Returns the chosen absolute path, or "" if cancelled.
+func (a *App) ChooseDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Choose where to store the QA test repository",
+	})
+}
+
+// Setup clones the qa-review repo into `dir` (or the default when empty) and
+// compiles its suites, so the app becomes usable on first launch. The chosen
+// location is persisted for future launches. Idempotent.
+func (a *App) Setup(dir string) (string, error) {
+	// gh/git clone requires the target dir to not already exist (or be empty).
+	// Clone into <dir>/qa-review when the user picked a parent folder; if they
+	// pointed at an empty/new dir, use it directly.
+	target := strings.TrimSpace(dir)
+	if target == "" {
+		target = defaultRepoDir()
+	} else if entries, err := os.ReadDir(target); err == nil && len(entries) > 0 {
+		// Non-empty existing dir → clone into a child so we don't clobber it.
+		target = filepath.Join(target, "qa-review")
+	}
+	if err := setRepoDir(target); err != nil {
+		return "", err
+	}
+	out, err := cloneRepo()
+	if err != nil {
+		return out, err
+	}
+	if buildOut, err := engineCmd("build-suites").CombinedOutput(); err != nil {
+		return out + "\n" + string(buildOut), fmt.Errorf("cloned, but compiling suites failed: %s", string(buildOut))
+	}
+	return out, nil
+}
+
 // RunProcess spawns `program args...` in cwd, emitting "stdout-line" (string)
 // for each stdout line and "proc-exit" (int exit code) when it finishes. Mirrors
 // the previous Tauri run_process command. Runs the scan in a goroutine so the
 // call returns immediately; the frontend drives the UI off the events.
 func (a *App) RunProcess(program string, args []string, cwd string) error {
 	cmd := exec.Command(program, args...)
-	cmd.Dir = resolveCwd(cwd)
+	// cwd from the frontend is vestigial — spawns run in the cloned repo dir.
+	cmd.Dir = repoDir()
 	cmd.Env = withGuiPath()
+	return a.streamCmd(cmd, program)
+}
+
+// RunEngine streams the bundled engine (`qar <args...>`) into the same
+// stdout-line/proc-exit events as RunProcess. The engine path lives entirely in
+// Go (engineCmd) so the frontend never has to know about node/pnpm/bundle paths.
+func (a *App) RunEngine(args []string) error {
+	cmd := engineCmd(args...)
+	return a.streamCmd(cmd, "qar "+strings.Join(args, " "))
+}
+
+// authoringAllowedTools is the SCOPED pre-approval set for the interactive
+// authoring session — the browser MCP tools, qar (login/cleanup/run), and file
+// authoring under src/suites. We do NOT use --dangerously-skip-permissions:
+// claude runs in a real PTY, so anything OUTSIDE this allowlist (e.g. arbitrary
+// shell, git push) still prompts the user LIVE in the terminal. The allowlist
+// just keeps routine, safe operations from spamming prompts.
+// NOTE: Bash matching keys on the command prefix, so a compound like
+// `cd /path && pnpm qar ...` does NOT match `Bash(pnpm qar:*)`. The qa-explore
+// skill is therefore told to NOT prefix commands with `cd` (claude already runs
+// IN the repo dir) and to keep each Bash call to a single command, so these
+// prefixes match and the routine, safe operations don't spam permission prompts.
+// Anything outside this set (arbitrary shell, git push, rm, …) still prompts live.
+var authoringAllowedTools = []string{
+	"mcp__chrome-devtools",
+	"Bash(pnpm qar:*)",
+	"Bash(qar:*)",
+	"Bash(pnpm typecheck:*)",
+	"Bash(pnpm test:*)",
+	// Safe, read-only shell helpers the skill uses to set up the run bundle and
+	// read command output. Each is harmless on its own.
+	"Bash(mkdir:*)",
+	"Bash(ls:*)",
+	"Bash(cat:*)",
+	"Bash(date:*)",
+	"Bash(echo:*)",
+	"Read",
+	"Write",
+	"Edit",
+}
+
+// StartAuthoringSession boots an interactive "author a suite" session:
+//  1. start `qar session --role <r> (--env|--pr)`, wait for its ready line
+//     (cdpPort + screencastPort) — this GATES claude start (no race),
+//  2. write a per-session MCP config pointing chrome-devtools-mcp at that CDP port,
+//  3. emit "session-ready" {screencastPort} so the GUI shows the live browser,
+//  4. spawn claude in a PTY pointed at that shared browser, and send the initial
+//     instruction as claude's first input.
+//
+// One session at a time: starting a new one stops the old.
+func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
+	a.teardownSession() // clean slate, silently (don't flip the UI we're about to show)
+
+	// 1. Start the engine session.
+	args := []string{"session", "--role", role}
+	if strings.TrimSpace(pr) != "" {
+		args = append(args, "--pr", pr)
+	} else {
+		args = append(args, "--env", env)
+	}
+	cmd := engineCmd(args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		a.emitSpawnFailure(program, err)
+		return err
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		a.emitSpawnFailure("qar session", err)
+		return err
+	}
+	a.sessionMu.Lock()
+	a.sessionCmd = cmd
+	a.sessionMu.Unlock()
+
+	// 2. Wait for the session ready line (cdpPort + screencastPort) with a timeout.
+	type sessionInfo struct {
+		Type           string `json:"type"`
+		CdpPort        int    `json:"cdpPort"`
+		ScreencastPort int    `json:"screencastPort"`
+	}
+	ready := make(chan sessionInfo, 1)
+	var lastOutput strings.Builder
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+		sent := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !sent {
+				var info sessionInfo
+				if json.Unmarshal([]byte(line), &info) == nil && info.Type == "session" {
+					ready <- info
+					sent = true
+					continue
+				}
+			}
+			lastOutput.WriteString(line + "\n")
+			// Surface any other engine output (login errors etc.) to the terminal.
+			runtime.EventsEmit(a.ctx, "session-log", line)
+		}
+	}()
+
+	// Fail fast if the engine process exits before emitting the ready line (e.g.
+	// a stale repo without the `session` command, or a login error) — don't make
+	// the user wait out the full timeout.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	var info sessionInfo
+	select {
+	case info = <-ready:
+	case err := <-exited:
+		a.teardownSession()
+		out := strings.TrimSpace(lastOutput.String())
+		if out == "" {
+			out = fmt.Sprintf("the engine exited (%v) before the browser was ready", err)
+		}
+		return fmt.Errorf("could not start the session:\n%s", out)
+	case <-time.After(90 * time.Second):
+		a.teardownSession()
+		return fmt.Errorf("timed out waiting for the browser session to start")
+	}
+
+	// 3. Per-session MCP config + announce the live browser to the GUI.
+	mcpPath, err := writeSessionMcpConfig(info.CdpPort)
+	if err != nil {
+		a.StopSession()
+		return err
+	}
+	a.sessionMu.Lock()
+	a.sessionMcpPath = mcpPath
+	a.sessionMu.Unlock()
+	runtime.EventsEmit(a.ctx, "session-ready", info.ScreencastPort)
+
+	// 4. Spawn claude in a PTY against the shared browser.
+	claudeArgs := []string{
+		"--permission-mode", "default",
+		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		"--add-dir", repoDir(),
+		"--mcp-config", mcpPath,
+	}
+	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
+		a.StopSession()
+		return err
+	}
+
+	// Send the opening instruction once claude's TUI is up (small delay so the
+	// prompt box is ready to receive it). Same split text-then-CR submit as the
+	// "Save as suite" path, so the user never has to press Enter by hand.
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
+	}()
+	return nil
+}
+
+// composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
+// with the env/role/instruction. The browser is already launched + logged in.
+func composeAuthoringPrompt(env, pr, role, instruction string) string {
+	target := "--env " + env
+	if strings.TrimSpace(pr) != "" {
+		target = "--pr " + pr
+	}
+	return fmt.Sprintf("/qa-explore The browser is already open and logged in as %s against %s. Instruction: %s", role, target, instruction)
+}
+
+// WriteToPty forwards base64-encoded keystrokes from the xterm terminal to claude.
+func (a *App) WriteToPty(b64 string) error {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return err
+	}
+	return a.pty.write(data)
+}
+
+// ResizePty resizes claude's PTY when the terminal pane resizes.
+func (a *App) ResizePty(rows, cols int) error {
+	return a.pty.resize(uint16(rows), uint16(cols))
+}
+
+// submitToPty types a line into claude and submits it. Claude's TUI captures a
+// long block written together with its trailing CR as multi-line *paste* content,
+// so the Enter never registers as a submit (the user had to press Enter by hand).
+// Writing the CR as a separate event after a short delay makes the TUI treat it
+// as a distinct submit keystroke. Used for BOTH the opening instruction and the
+// "Save as suite" finalizing instruction so they behave identically.
+func (a *App) submitToPty(text string) error {
+	if err := a.pty.write([]byte(text)); err != nil {
+		return err
+	}
+	time.Sleep(120 * time.Millisecond)
+	return a.pty.write([]byte("\r"))
+}
+
+// SendToPty submits a finalizing instruction into the live session ("Save as suite").
+func (a *App) SendToPty(text string) error {
+	return a.submitToPty(text)
+}
+
+// teardownSession stops the claude PTY, the qar session process (browser +
+// screencast), and removes the temp MCP config. Returns whether anything was
+// actually running (so callers can decide whether to emit "session-ended").
+func (a *App) teardownSession() bool {
+	running := a.pty.running()
+	a.pty.stop()
+
+	a.sessionMu.Lock()
+	cmd := a.sessionCmd
+	mcpPath := a.sessionMcpPath
+	a.sessionCmd = nil
+	a.sessionMcpPath = ""
+	a.sessionMu.Unlock()
+
+	if cmd != nil {
+		running = true
+		if cmd.Process != nil {
+			// Signal only — a single cmd.Wait() runs in StartAuthoringSession's
+			// `exited` goroutine and reaps the process (calling Wait twice races).
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+	}
+	if mcpPath != "" {
+		_ = os.Remove(mcpPath)
+	}
+	return running
+}
+
+// StopSession (bound) tears down the authoring session and tells the GUI it ended
+// — but only emits "session-ended" if something was actually running, so the
+// pre-start clean-slate teardown in StartAuthoringSession doesn't flip the UI.
+func (a *App) StopSession() {
+	if a.teardownSession() {
+		runtime.EventsEmit(a.ctx, "session-ended")
+	}
+}
+
+// streamCmd starts cmd, folding stderr into stdout, emitting each stdout line as
+// a "stdout-line" event and a final "proc-exit" with the exit code. `label` names
+// the process in spawn-failure messages.
+func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		a.emitSpawnFailure(label, err)
 		return err
 	}
 	cmd.Stderr = cmd.Stdout // fold stderr into the same stream (stray lines ignored by the parser)
+	// Own process group so StopRun can signal the engine AND its children (the
+	// Chromium it launches), not just the parent.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		// Surface spawn failures (e.g. program not found) as a visible line + a
 		// non-zero exit, so the UI shows WHY nothing happened instead of silently
 		// doing nothing.
-		a.emitSpawnFailure(program, err)
+		a.emitSpawnFailure(label, err)
 		return err
 	}
+	a.runMu.Lock()
+	a.runCmd = cmd
+	a.runMu.Unlock()
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // allow long NDJSON lines
@@ -108,7 +421,33 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 				code = -1
 			}
 		}
+		a.runMu.Lock()
+		if a.runCmd == cmd {
+			a.runCmd = nil
+		}
+		a.runMu.Unlock()
 		runtime.EventsEmit(a.ctx, "proc-exit", code)
+	}()
+	return nil
+}
+
+// StopRun terminates the in-flight Suites/engine run (and its children, e.g. the
+// Chromium the engine launched) by signalling its process group. No-op if nothing
+// is running. The reader goroutine in streamCmd reaps the process and emits the
+// final proc-exit, so the UI returns to idle on its own.
+func (a *App) StopRun() error {
+	a.runMu.Lock()
+	cmd := a.runCmd
+	a.runMu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	// Setpgid made the child a group leader (PGID == PID); -pid hits the whole group.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	go func() {
+		time.Sleep(3 * time.Second)
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}()
 	return nil
 }
@@ -166,6 +505,29 @@ func (a *App) SaveScreenshotAs(bundleDir string, rel string) (string, error) {
 	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		DefaultFilename: filepath.Base(rel),
 		Title:           "Save screenshot",
+	})
+	if err != nil || dest == "" {
+		return "", err
+	}
+	if err := copyFile(src, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// SaveTrace prompts for a location and copies out just the bundle's trace.zip —
+// the standalone Playwright trace that replays at trace.playwright.dev. (The
+// "Download all" zip nests trace.zip inside an outer archive, which the trace
+// viewer rejects; this hands the tester the inner file directly.) Returns the
+// saved path, or "" if cancelled / no trace was captured.
+func (a *App) SaveTrace(bundleDir string) (string, error) {
+	src := filepath.Join(bundleDir, "trace.zip")
+	if _, err := os.Stat(src); err != nil {
+		return "", fmt.Errorf("no trace.zip in this run bundle")
+	}
+	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: "trace.zip",
+		Title:           "Save Playwright trace",
 	})
 	if err != nil || dest == "" {
 		return "", err
@@ -236,10 +598,10 @@ func copyFile(src, dest string) error {
 	return err
 }
 
-// GitPull runs `git pull` in cwd and returns combined output.
+// GitPull runs `git pull` in the cloned repo and returns combined output.
 func (a *App) GitPull(cwd string) (string, error) {
 	cmd := exec.Command("git", "pull")
-	cmd.Dir = resolveCwd(cwd)
+	cmd.Dir = repoDir()
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -249,7 +611,7 @@ func (a *App) GitPull(cwd string) (string, error) {
 // returns "skipped-dirty" if the working copy has changes, "skipped-diverged"
 // if the pull can't fast-forward, or "synced" on success.
 func (a *App) Sync(cwd string) (string, error) {
-	dir := resolveCwd(cwd)
+	dir := repoDir()
 	status, err := a.git(dir, "status", "--porcelain")
 	if err != nil {
 		return "", err
@@ -260,33 +622,32 @@ func (a *App) Sync(cwd string) (string, error) {
 	if _, err := a.git(dir, "pull", "--ff-only"); err != nil {
 		return "skipped-diverged", nil
 	}
+	// Newly-pulled .ts suites must be compiled to .mjs for the bundled engine to
+	// load them. A compile failure shouldn't block the sync result, but we surface
+	// it so the user knows new suites may not appear.
+	if out, err := engineCmd("build-suites").CombinedOutput(); err != nil {
+		return "synced", fmt.Errorf("synced, but compiling suites failed: %s", string(out))
+	}
 	return "synced", nil
 }
 
-// RequestAccess shells out to `pnpm qar request-access --name <name>` in cwd,
-// returning combined output.
+// RequestAccess runs the bundled engine's `request-access --name <name>` (generate
+// identity + open a keyring PR) in the cloned repo, returning combined output.
 func (a *App) RequestAccess(cwd, name string) (string, error) {
-	cmd := exec.Command("pnpm", "qar", "request-access", "--name", name)
-	cmd.Dir = resolveCwd(cwd)
-	cmd.Env = withGuiPath()
-	out, err := cmd.CombinedOutput()
+	out, err := engineCmd("request-access", "--name", name).CombinedOutput()
 	return string(out), err
 }
 
-// Rekey shells out to `pnpm qar rekey` in cwd.
+// Rekey runs the bundled engine's `rekey` (re-encrypt secrets to the keyring).
 func (a *App) Rekey(cwd string) (string, error) {
-	cmd := exec.Command("pnpm", "qar", "rekey")
-	cmd.Dir = resolveCwd(cwd)
-	cmd.Env = withGuiPath()
-	out, err := cmd.CombinedOutput()
+	out, err := engineCmd("rekey").CombinedOutput()
 	return string(out), err
 }
 
 // ResetAndSync discards ONLY uncommitted tracked edits (git restore .) — keeping
 // local commits — then runs a fast-forward Sync. Returns the Sync status string.
 func (a *App) ResetAndSync(cwd string) (string, error) {
-	dir := resolveCwd(cwd)
-	if _, err := a.git(dir, "restore", "."); err != nil {
+	if _, err := a.git(repoDir(), "restore", "."); err != nil {
 		return "", err
 	}
 	return a.Sync(cwd)
@@ -296,7 +657,7 @@ func (a *App) ResetAndSync(cwd string) (string, error) {
 // fingerprint of config/keyring.json's recipients (sha256 of sorted, "\n"-joined
 // public keys). Mirrors src/engine/keyring.ts isInDrift.
 func (a *App) IsInDrift(cwd string) (bool, error) {
-	dir := filepath.Join(resolveCwd(cwd), "config")
+	dir := filepath.Join(repoDir(), "config")
 	recipients, err := readKeyringRecipients(dir)
 	if err != nil {
 		return false, err
@@ -326,29 +687,99 @@ func (a *App) git(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// promoteSteps is the ordered command sequence for promoting a trace to a suite
-// PR. Pure (no I/O) so it is unit-testable.
-func promoteSteps(name, tracePath string) [][]string {
+// validSuiteName guards the suite name used in a branch + filename. We only need
+// it to be filesystem- and git-branch-safe and reasonably short: letters, digits,
+// hyphen, underscore, up to 40 chars. (Kept in sync with the frontend's check.)
+var validSuiteName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+// SuiteFileExists reports whether the claude-authored src/suites/<name>.ts exists
+// in the repo. The "Open PR" button uses this to refuse to promote a suite that
+// was never written.
+func (a *App) SuiteFileExists(name string) bool {
+	if !validSuiteName.MatchString(name) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(repoDir(), "src", "suites", name+".ts"))
+	return err == nil
+}
+
+// promoteSteps is the ordered git/PR command sequence run AFTER the suite source
+// has been captured and restored onto a clean branch (see PromoteSuite). Pure (no
+// I/O) so it's unit-testable. The "qar" step is routed through the bundled engine.
+//
+// It is deliberately SURGICAL: it stages ONLY this suite's two files
+// (src/suites/<name>.ts and its compiled suites-compiled/<name>.mjs), never the
+// whole directories — otherwise every suite authored in earlier attempts plus any
+// other dirty file would ride along into the PR.
+// PromoteSuite has already cut the clean qa/<name> branch off origin/main and
+// written the suite source onto it, so these steps must NOT switch branches again
+// (that would discard the restored file).
+func promoteSteps(name string) [][]string {
 	branch := "qa/" + name
+	suiteFile := "src/suites/" + name + ".ts"
+	compiledFile := "suites-compiled/" + name + ".mjs"
 	return [][]string{
-		{"git", "checkout", "-b", branch},
-		{"pnpm", "qar", "codegen", "--trace", tracePath},
-		{"git", "add", "src/suites"},
-		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (AI-generated, review selectors)", name)},
+		{"qar", "build-suites"}, // compile src/suites/*.ts -> suites-compiled/*.mjs
+		// Stage ONLY this suite's two files — never the whole dirs.
+		{"git", "add", "--", suiteFile, compiledFile},
+		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (authored interactively, review selectors)", name), "--", suiteFile, compiledFile},
 		{"git", "push", "-u", "origin", branch},
 		{"gh", "pr", "create", "--fill"},
 	}
 }
 
-// PromoteSuite runs the promote sequence in cwd, stopping on the first failure,
-// and returns the final step's output (the PR URL from `gh pr create`).
-func (a *App) PromoteSuite(cwd, name, tracePath string) (string, error) {
+// PromoteSuite opens a clean, single-suite PR for the claude-authored
+// src/suites/<name>.ts. To guarantee the PR contains EXACTLY this one suite — not
+// other attempts' suites, drifted commits, or unrelated dirty files — it does NOT
+// trust the current working tree or branch:
+//
+//  1. capture the authored suite source into memory,
+//  2. fetch the latest upstream main,
+//  3. cut a fresh branch off origin/main (a clean base),
+//  4. write the captured source back, compile it, and commit only those two files.
+//
+// Capturing the bytes up front (rather than git-stashing) means it works whether the
+// suite was untracked, modified, or already committed on a stale qa/* branch.
+func (a *App) PromoteSuite(name string) (string, error) {
+	if !validSuiteName.MatchString(name) {
+		return "", fmt.Errorf("invalid suite name %q: use letters, digits, - and _ only (max 40 chars)", name)
+	}
+	repo := repoDir()
+	suitePath := filepath.Join(repo, "src", "suites", name+".ts")
+
+	// 1. Capture the authored source before any git surgery.
+	src, err := os.ReadFile(suitePath)
+	if err != nil {
+		return "", fmt.Errorf("no authored suite at %s — write + verify it first: %w", suitePath, err)
+	}
+
+	// 2-3. Get a clean branch off the latest upstream main.
+	if out, err := a.git(repo, "fetch", "origin", "main"); err != nil {
+		return "", fmt.Errorf("git fetch origin main failed: %s", out)
+	}
+	if out, err := a.git(repo, "checkout", "-B", "qa/"+name, "origin/main"); err != nil {
+		return "", fmt.Errorf("git checkout failed: %s", out)
+	}
+
+	// 4. Restore the captured source onto the clean branch (origin/main may not have
+	// it, or may have an older version), then run the rest of the git/PR sequence.
+	if err := os.MkdirAll(filepath.Dir(suitePath), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(suitePath, src, 0o644); err != nil {
+		return "", fmt.Errorf("could not restore suite file: %w", err)
+	}
+
 	var last string
-	abs := resolveCwd(cwd)
-	for _, step := range promoteSteps(name, tracePath) {
-		cmd := exec.Command(step[0], step[1:]...)
-		cmd.Dir = abs
-		cmd.Env = withGuiPath()
+	for _, step := range promoteSteps(name) {
+		var cmd *exec.Cmd
+		if step[0] == "qar" {
+			cmd = engineCmd(step[1:]...) // bundled engine; sets Dir + env itself
+		} else {
+			cmd = exec.Command(step[0], step[1:]...)
+			cmd.Dir = repo
+			cmd.Env = withGuiPath()
+		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("%s failed: %s", strings.Join(step, " "), string(out))
@@ -356,4 +787,210 @@ func (a *App) PromoteSuite(cwd, name, tracePath string) (string, error) {
 		last = string(out)
 	}
 	return last, nil
+}
+
+// ReportIssue opens a GitHub issue on the qa-review repo via `gh issue create`,
+// assembling a body from the user's note plus everything we can gather to help
+// debug: app/system info, repo state, missing tools, and — depending on which tab
+// the user is on — the current Suites run state OR the full authoring transcript.
+// `tab` is "suites" or "exploratory"; `runState` is the Suites-run summary the
+// frontend builds (ignored on the exploratory tab). Returns the new issue URL.
+func (a *App) ReportIssue(title, note, tab, runState string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "QA Runner issue report"
+	}
+
+	var b strings.Builder
+	if n := strings.TrimSpace(note); n != "" {
+		b.WriteString(n + "\n\n")
+	}
+
+	b.WriteString("## Context\n")
+	if tab == "exploratory" {
+		b.WriteString("- **Where:** Author a Suite (interactive Claude session)\n\n")
+		transcript := a.pty.transcriptText()
+		b.WriteString("## Claude session transcript\n")
+		if strings.TrimSpace(transcript) == "" {
+			b.WriteString("_(no transcript captured — no session was running)_\n")
+		} else {
+			b.WriteString("```\n" + transcript + "\n```\n")
+		}
+	} else {
+		b.WriteString("- **Where:** Suites\n\n")
+		b.WriteString("## Run state\n")
+		if strings.TrimSpace(runState) == "" {
+			b.WriteString("_(no run state — nothing has been run yet)_\n")
+		} else {
+			b.WriteString("```\n" + runState + "\n```\n")
+		}
+	}
+
+	b.WriteString("\n## Setup Doctor\n")
+	b.WriteString(doctorMarkdown(a.RunDoctor()))
+
+	b.WriteString("\n## Debug info\n")
+	b.WriteString(a.debugInfo())
+
+	// gh reads the body from a file to avoid arg-length limits on long transcripts.
+	bodyFile, err := os.CreateTemp("", "qar-issue-*.md")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(bodyFile.Name())
+	if _, err := bodyFile.WriteString(b.String()); err != nil {
+		bodyFile.Close()
+		return "", err
+	}
+	bodyFile.Close()
+
+	cmd := exec.Command("gh", "issue", "create",
+		"--repo", qaReviewSlug,
+		"--title", title,
+		"--body-file", bodyFile.Name(),
+	)
+	cmd.Dir = repoDir()
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("gh issue create failed: %s", strings.TrimSpace(string(out)))
+	}
+	// gh prints the issue URL as the last line of stdout.
+	url := strings.TrimSpace(string(out))
+	if lines := strings.Split(url, "\n"); len(lines) > 0 {
+		url = strings.TrimSpace(lines[len(lines)-1])
+	}
+	return url, nil
+}
+
+// debugInfo gathers a best-effort markdown block of environment + repo state for
+// an issue report. Every probe is non-fatal: a failing one is reported inline
+// rather than aborting the report.
+func (a *App) debugInfo() string {
+	repo := repoDir()
+	var b strings.Builder
+	row := func(k, v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			v = "(unknown)"
+		}
+		b.WriteString(fmt.Sprintf("- **%s:** %s\n", k, v))
+	}
+
+	row("App version", appVersion)
+	row("OS / arch", goruntime.GOOS+" / "+goruntime.GOARCH)
+	row("Repo dir", repo)
+
+	branch, _ := a.git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+	row("Git branch", branch)
+	commit, _ := a.git(repo, "rev-parse", "--short", "HEAD")
+	row("Git commit", commit)
+	status, _ := a.git(repo, "status", "--porcelain")
+	dirty := "clean"
+	if strings.TrimSpace(status) != "" {
+		dirty = fmt.Sprintf("%d uncommitted file(s)", len(strings.Split(strings.TrimSpace(status), "\n")))
+	}
+	row("Working tree", dirty)
+
+	// Tool presence/versions, gh auth, Chrome, and identity are reported in detail by
+	// the "Setup Doctor" section above, so we don't duplicate them here.
+	drift, _ := a.IsInDrift("")
+	row("Keyring drift", fmt.Sprintf("%t", drift))
+	row("Authoring session live", fmt.Sprintf("%t", a.pty.running()))
+	return b.String()
+}
+
+// doctorMarkdown renders Setup Doctor results as a markdown checklist for an issue.
+func doctorMarkdown(checks []DoctorCheck) string {
+	var b strings.Builder
+	for _, c := range checks {
+		mark := "✓"
+		if !c.OK {
+			mark = "✗"
+		}
+		b.WriteString(fmt.Sprintf("- %s **%s** — %s\n", mark, c.Name, strings.TrimSpace(c.Detail)))
+		if !c.OK && strings.TrimSpace(c.Hint) != "" {
+			b.WriteString("  - hint: " + strings.TrimSpace(c.Hint) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// DoctorCheck is one prerequisite result for the Settings "Setup Doctor".
+type DoctorCheck struct {
+	Name   string `json:"name"`   // human label, e.g. "GitHub CLI (gh)"
+	OK     bool   `json:"ok"`     // passed?
+	Detail string `json:"detail"` // version / "authenticated" on success; the error on failure
+	Hint   string `json:"hint"`   // remediation shown when !OK
+}
+
+// runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
+// finds Homebrew tools) and returns the trimmed first line of combined output.
+func runTool(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	return line, err
+}
+
+// RunDoctor checks every prerequisite app/state and validates it (not just "on
+// PATH"): required CLIs and their versions, gh authentication, Chrome, the cloned
+// repo, and the keyring identity. The Settings "Setup Doctor" modal renders one
+// row per check with a ✓/✗ and any error.
+func (a *App) RunDoctor() []DoctorCheck {
+	checks := []DoctorCheck{}
+
+	// Required CLIs (presence + version).
+	for _, t := range []struct{ label, bin, flag, hint string }{
+		{"git", "git", "--version", "Install git (e.g. xcode-select --install or Homebrew)."},
+		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh"},
+		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH."},
+		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node"},
+	} {
+		if !toolOnPath(t.bin) {
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint})
+			continue
+		}
+		ver, err := runTool(t.bin, t.flag)
+		if err != nil {
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint})
+			continue
+		}
+		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
+	}
+
+	// gh must be authenticated (PR + issue + clone flows depend on it).
+	if toolOnPath("gh") {
+		out, err := runTool("gh", "auth", "status")
+		if err != nil {
+			checks = append(checks, DoctorCheck{Name: "GitHub auth", OK: false, Detail: "not logged in", Hint: "Run `gh auth login` in a terminal."})
+		} else {
+			checks = append(checks, DoctorCheck{Name: "GitHub auth", OK: true, Detail: out})
+		}
+	}
+
+	// Google Chrome (Playwright launches the user's Chrome via channel:'chrome').
+	if chromeInstalled() {
+		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: true, Detail: "installed"})
+	} else {
+		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: false, Detail: "not found in /Applications", Hint: "Install Google Chrome — the runner drives it for tests."})
+	}
+
+	// The cloned qa-review repo (suites + config live here).
+	if repoReady() {
+		checks = append(checks, DoctorCheck{Name: "Test repository", OK: true, Detail: repoDir()})
+	} else {
+		checks = append(checks, DoctorCheck{Name: "Test repository", OK: false, Detail: "not cloned at " + repoDir(), Hint: "Use the first-launch setup (or the Suites tab) to clone the repository."})
+	}
+
+	// Keyring identity — needed to decrypt shared secrets (without it, encrypted
+	// values are skipped and runs fail with "Missing required secret").
+	if _, err := os.Stat(filepath.Join(repoDir(), "config", "age-identity.txt")); err == nil {
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present"})
+	} else {
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "no config/age-identity.txt", Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
+	}
+
+	return checks
 }

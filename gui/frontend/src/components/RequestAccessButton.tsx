@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, TextInput, Group, Text } from '@mantine/core'
 import { requestAccess } from '../lib/ipc'
 
-export function RequestAccessButton({ cwd }: { cwd: string }) {
+export function RequestAccessButton() {
     const [name, setName] = useState('')
     const [busy, setBusy] = useState(false)
     const [msg, setMsg] = useState('')
@@ -12,7 +12,7 @@ export function RequestAccessButton({ cwd }: { cwd: string }) {
         setBusy(true)
         setMsg('')
         try {
-            const out = await requestAccess(cwd, name.trim())
+            const out = await requestAccess(name.trim())
             setMsg(out || 'Access requested — a teammate will approve & rekey.')
         } catch (e) {
             setMsg('Request failed: ' + String(e))

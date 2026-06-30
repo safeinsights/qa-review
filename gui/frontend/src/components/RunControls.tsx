@@ -20,6 +20,9 @@ export interface RunControlsProps {
     onRun: () => void
     runDisabled?: boolean
     runLabel?: string
+    // When running, the action button becomes a red Stop that calls onStop.
+    running?: boolean
+    onStop?: () => void
 }
 
 // The shared editorial control bar: labeled mono fields + a teal Run button.
@@ -104,17 +107,30 @@ export function RunControls(p: RunControlsProps) {
                     />
                 )}
             </Field>
-            <Button
-                onClick={p.onRun}
-                disabled={p.runDisabled}
-                color="teal"
-                radius="md"
-                size="md"
-                style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
-                leftSection={<span aria-hidden>▶</span>}
-            >
-                {p.runLabel ?? 'Run'}
-            </Button>
+            {p.running ? (
+                <Button
+                    onClick={p.onStop}
+                    color="red"
+                    radius="md"
+                    size="md"
+                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(176,74,58,0.22)' }}
+                    leftSection={<span aria-hidden>■</span>}
+                >
+                    Stop
+                </Button>
+            ) : (
+                <Button
+                    onClick={p.onRun}
+                    disabled={p.runDisabled}
+                    color="teal"
+                    radius="md"
+                    size="md"
+                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
+                    leftSection={<span aria-hidden>▶</span>}
+                >
+                    {p.runLabel ?? 'Run'}
+                </Button>
+            )}
         </div>
     )
 }

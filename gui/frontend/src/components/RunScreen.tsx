@@ -1,23 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
-import { runProcess, onStdoutLine, onExit } from '../lib/ipc'
+import { runProcess, runEngine, onStdoutLine, onExit } from '../lib/ipc'
 import { StreamParser, type StepEnvelope, type ResultEnvelope } from '../lib/stepStream'
+import { setRunState } from '../lib/runState'
 import { StepChecklist } from './StepChecklist'
 import { ResultPanel } from './ResultPanel'
 import { BrowserPanel } from './BrowserPanel'
 import { SnapshotPanel } from './SnapshotPanel'
 
-export interface RunSpec {
-    program: string
-    args: string[]
-    cwd: string
-}
+// A run is the bundled engine (`qar <args>`, kind 'engine') or an arbitrary
+// process (kind 'process'). All command paths live in Go.
+export type RunSpec =
+    | { kind: 'engine'; args: string[] }
+    | { kind: 'process'; program: string; args: string[] }
 
 interface Selected {
     index: number
     step: StepEnvelope
 }
 
-export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r: ResultEnvelope) => void }) {
+export function RunScreen({
+    spec,
+    onDone,
+    onRunningChange,
+}: {
+    spec: RunSpec | null
+    onDone?: (r: ResultEnvelope) => void
+    onRunningChange?: (running: boolean) => void
+}) {
     const [steps, setSteps] = useState<StepEnvelope[]>([])
     const [result, setResult] = useState<ResultEnvelope | null>(null)
     const [running, setRunning] = useState(false)
@@ -28,6 +37,18 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
 
     // bundleDir is needed to load/zip artifacts; it arrives on the result envelope.
     const bundleDir = (result?.bundleDir as string | undefined) ?? null
+
+    // Mirror the run into the module-level store so the header's "Report Issue"
+    // button can attach the current state regardless of which tab is active.
+    useEffect(() => {
+        const specArgs = spec?.kind === 'engine' ? spec.args : spec ? [spec.program, ...spec.args] : null
+        setRunState({ spec: specArgs, steps, result, running, error })
+    }, [spec, steps, result, running, error])
+
+    // Let the parent (which owns the Run/Stop button) track run state.
+    useEffect(() => {
+        onRunningChange?.(running)
+    }, [running, onRunningChange])
 
     useEffect(() => {
         if (!spec) return
@@ -55,9 +76,11 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
             })
             unlistenExit = await onExit(() => setRunning(false))
             try {
-                await runProcess(spec.program, spec.args, spec.cwd)
+                if (spec.kind === 'engine') await runEngine(spec.args)
+                else await runProcess(spec.program, spec.args, '')
             } catch (e) {
-                setError(`Could not start "${spec.program}": ${String(e)}`)
+                const what = spec.kind === 'engine' ? 'qar' : spec.program
+                setError(`Could not start "${what}": ${String(e)}`)
                 setRunning(false)
             }
         })()

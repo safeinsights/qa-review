@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { RunScreen, type RunSpec } from './RunScreen'
 import { RunControls } from './RunControls'
-import { runProcess, onStdoutLine, onExit } from '../lib/ipc'
-
-const REPO_ROOT = '..' // gui/ lives in the repo; the engine runs from repo root
+import { runEngine, onStdoutLine, onExit, stopRun } from '../lib/ipc'
 
 interface SuiteInfo {
     name: string
@@ -18,6 +16,7 @@ export function SuitesTab() {
     const [suite, setSuite] = useState<string>('signin')
     const [suites, setSuites] = useState<SuiteInfo[]>([])
     const [spec, setSpec] = useState<RunSpec | null>(null)
+    const [running, setRunning] = useState(false)
 
     // NOTE: this fetch reuses the global stdout-line/proc-exit events, same as a
     // run. It only runs once on mount before any run is started, so it's safe.
@@ -38,7 +37,7 @@ export function SuitesTab() {
                     /* ignore */
                 }
             })
-            await runProcess('pnpm', ['qar', 'list'], REPO_ROOT)
+            await runEngine(['list'])
         })()
         return () => {
             offOut?.()
@@ -61,10 +60,15 @@ export function SuitesTab() {
     }, [allowedRoles, role])
 
     const run = () => {
-        const args = ['qar', 'run', '--json', '--screencast', '--role', role, '--suite', suite]
+        const args = ['run', '--json', '--screencast', '--role', role, '--suite', suite]
         if (pr) args.push('--pr', pr)
         else args.push('--env', env)
-        setSpec({ program: 'pnpm', args, cwd: REPO_ROOT })
+        // New object identity each run so RunScreen re-fires even for an identical spec.
+        setSpec({ kind: 'engine', args })
+    }
+
+    const stop = async () => {
+        await stopRun()
     }
 
     return (
@@ -81,8 +85,10 @@ export function SuitesTab() {
                 setSuite={setSuite}
                 suites={suites}
                 onRun={run}
+                running={running}
+                onStop={stop}
             />
-            <RunScreen spec={spec} />
+            <RunScreen spec={spec} onRunningChange={setRunning} />
         </div>
     )
 }

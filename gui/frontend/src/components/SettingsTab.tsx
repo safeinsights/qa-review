@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, PasswordInput, SegmentedControl, TextInput, Alert } from '@mantine/core'
 import { readSettings, writeSetting, type SettingField } from '../lib/ipc'
 import { RequestAccessButton } from './RequestAccessButton'
-
-const REPO_ROOT = '..'
+import { SetupDoctorButton } from './SetupDoctorButton'
 
 // Per-field local edit state: the value being typed and the chosen tier.
 interface Draft {
@@ -20,7 +19,7 @@ export function SettingsTab() {
 
     const load = async () => {
         try {
-            const view = await readSettings(REPO_ROOT)
+            const view = await readSettings()
             setFields(view.fields)
             setHasIdentity(view.hasIdentity)
             // Seed drafts from current non-secret values; secrets start blank.
@@ -47,7 +46,7 @@ export function SettingsTab() {
         setSavedKey('')
         const draft = drafts[f.key]
         try {
-            await writeSetting(REPO_ROOT, f.key, draft.value, draft.tier)
+            await writeSetting(f.key, draft.value, draft.tier)
             setSavedKey(f.key)
             await load()
         } catch (e) {
@@ -63,9 +62,21 @@ export function SettingsTab() {
 
     return (
         <div style={{ maxWidth: 760 }}>
+            <Card>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                    <div>
+                        <div style={{ fontWeight: 600 }}>Setup Doctor</div>
+                        <div className="kicker" style={{ marginTop: 2 }}>
+                            check every prerequisite app is installed and valid
+                        </div>
+                    </div>
+                    <SetupDoctorButton />
+                </div>
+            </Card>
+
             {!hasIdentity ? (
-                <Card>
-                    <RequestAccessButton cwd={REPO_ROOT} />
+                <Card mt="md">
+                    <RequestAccessButton />
                 </Card>
             ) : null}
 

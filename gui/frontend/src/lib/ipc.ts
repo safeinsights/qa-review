@@ -22,13 +22,37 @@ export interface SettingsView {
     hasIdentity: boolean
 }
 
+// One prerequisite result from the Setup Doctor.
+export interface DoctorCheck {
+    name: string
+    ok: boolean
+    detail: string
+    hint: string
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
+    RunEngine(args: string[]): Promise<void>
+    StopRun(): Promise<void>
+    StartAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void>
+    WriteToPty(b64: string): Promise<void>
+    ResizePty(rows: number, cols: number): Promise<void>
+    SendToPty(text: string): Promise<void>
+    StopSession(): Promise<void>
+    Setup(dir: string): Promise<string>
+    ChooseDirectory(): Promise<string>
+    DefaultRepoDir(): Promise<string>
+    Preflight(): Promise<string[]>
+    IsRepoReady(): Promise<boolean>
     GitPull(cwd: string): Promise<string>
-    PromoteSuite(cwd: string, name: string, tracePath: string): Promise<string>
+    PromoteSuite(name: string): Promise<string>
+    SuiteFileExists(name: string): Promise<boolean>
+    ReportIssue(title: string, note: string, tab: string, runState: string): Promise<string>
+    RunDoctor(): Promise<DoctorCheck[]>
     ReadScreenshot(bundleDir: string, rel: string): Promise<string>
     ReadVideo(bundleDir: string): Promise<string>
     SaveScreenshotAs(bundleDir: string, rel: string): Promise<string>
+    SaveTrace(bundleDir: string): Promise<string>
     ZipBundle(bundleDir: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
@@ -67,6 +91,91 @@ export async function runProcess(program: string, args: string[], cwd: string): 
     await app().RunProcess(program, args, cwd)
 }
 
+// Run the bundled engine (`qar <args>`). The engine/node/bundle paths live in Go;
+// the frontend only supplies the qar args.
+export async function runEngine(args: string[]): Promise<void> {
+    await app().RunEngine(args)
+}
+
+// Stop the in-flight Suites/engine run (kills the engine + its Chromium).
+export async function stopRun(): Promise<void> {
+    await app().StopRun()
+}
+
+// --- Interactive authoring session (terminal + shared browser) ---
+
+// Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.
+// The GUI then receives `session-ready` (screencast port) + `pty-output` events.
+export async function startAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void> {
+    await app().StartAuthoringSession(env, pr, role, instruction)
+}
+
+// Forward terminal keystrokes (base64) to claude's PTY.
+export async function writeToPty(b64: string): Promise<void> {
+    await app().WriteToPty(b64)
+}
+
+export async function resizePty(rows: number, cols: number): Promise<void> {
+    await app().ResizePty(rows, cols)
+}
+
+// Send a line of text + Enter to claude (e.g. the "Save as suite" instruction).
+export async function sendToPty(text: string): Promise<void> {
+    await app().SendToPty(text)
+}
+
+export async function stopSession(): Promise<void> {
+    await app().StopSession()
+}
+
+// Raw PTY output bytes (base64) from claude's terminal.
+export async function onPtyOutput(cb: (b64: string) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('pty-output', (...data) => cb(String(data[0])))
+}
+
+export async function onPtyExit(cb: (code: number | null) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('pty-exit', (...data) => cb(typeof data[0] === 'number' ? data[0] : null))
+}
+
+// Fires with the screencast port once the shared browser is ready to display.
+export async function onSessionReady(cb: (screencastPort: number) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('session-ready', (...data) => cb(Number(data[0])))
+}
+
+export async function onSessionEnded(cb: () => void): Promise<UnlistenFn> {
+    return rt().EventsOn('session-ended', () => cb())
+}
+
+// Non-ready engine output (login errors etc.) surfaced before the terminal opens.
+export async function onSessionLog(cb: (line: string) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('session-log', (...data) => cb(String(data[0])))
+}
+
+// Clone + compile suites on first launch into `dir` (empty = default location).
+export async function setup(dir: string): Promise<string> {
+    return app().Setup(dir)
+}
+
+// Open a native folder picker; '' if cancelled.
+export async function chooseDirectory(): Promise<string> {
+    return app().ChooseDirectory()
+}
+
+// The default clone location shown in the setup UI.
+export async function defaultRepoDir(): Promise<string> {
+    return app().DefaultRepoDir()
+}
+
+// Required external tools/apps that are missing ([] means all present).
+export async function preflight(): Promise<string[]> {
+    return app().Preflight()
+}
+
+// Whether the qa-review repo has been cloned yet.
+export async function isRepoReady(): Promise<boolean> {
+    return app().IsRepoReady()
+}
+
 export async function onStdoutLine(cb: (line: string) => void): Promise<UnlistenFn> {
     return rt().EventsOn('stdout-line', (...data) => cb(String(data[0])))
 }
@@ -75,12 +184,31 @@ export async function onExit(cb: (code: number | null) => void): Promise<Unliste
     return rt().EventsOn('proc-exit', (...data) => cb(typeof data[0] === 'number' ? data[0] : null))
 }
 
-export async function gitPull(cwd: string): Promise<string> {
-    return app().GitPull(cwd)
+// The Go backend ignores the cwd arg (it uses the cloned repo dir), so the
+// wrappers below pass '' and no longer take a cwd from callers.
+export async function gitPull(): Promise<string> {
+    return app().GitPull('')
 }
 
-export async function promoteSuite(cwd: string, name: string, tracePath: string): Promise<string> {
-    return app().PromoteSuite(cwd, name, tracePath)
+// Compile the claude-authored src/suites/<name>.ts and open a PR.
+export async function promoteSuite(name: string): Promise<string> {
+    return app().PromoteSuite(name)
+}
+
+// Whether claude has actually written src/suites/<name>.ts yet (gates "Open PR").
+export async function suiteFileExists(name: string): Promise<boolean> {
+    return app().SuiteFileExists(name)
+}
+
+// Open a GitHub issue with debug context (Suites run state, or the full authoring
+// transcript) auto-attached. Returns the new issue URL.
+export async function reportIssue(title: string, note: string, tab: string, runState: string): Promise<string> {
+    return app().ReportIssue(title, note, tab, runState)
+}
+
+// Check + validate every prerequisite app/state for the Setup Doctor.
+export async function runDoctor(): Promise<DoctorCheck[]> {
+    return app().RunDoctor()
 }
 
 // Read a per-step screenshot as a base64 data URI (webviews block file://).
@@ -102,42 +230,48 @@ export async function saveScreenshotAs(bundleDir: string, rel: string): Promise<
     return app().SaveScreenshotAs(bundleDir, rel)
 }
 
+// Prompt to save just the bundle's trace.zip (replays at trace.playwright.dev);
+// returns the saved path ('' if cancelled).
+export async function saveTrace(bundleDir: string): Promise<string> {
+    return app().SaveTrace(bundleDir)
+}
+
 // Prompt to save a zip of the whole run bundle; returns the saved path ('' if cancelled).
 export async function zipBundle(bundleDir: string): Promise<string> {
     return app().ZipBundle(bundleDir)
 }
 
 // Read the merged settings view (secret values masked) for the Settings panel.
-export async function readSettings(cwd: string): Promise<SettingsView> {
-    return app().ReadSettings(cwd)
+export async function readSettings(): Promise<SettingsView> {
+    return app().ReadSettings('')
 }
 
 // Write one field to a tier ("project" commits it; "local" is a gitignored override).
-export async function writeSetting(cwd: string, key: string, value: string, tier: string): Promise<void> {
-    await app().WriteSetting(cwd, key, value, tier)
+export async function writeSetting(key: string, value: string, tier: string): Promise<void> {
+    await app().WriteSetting('', key, value, tier)
 }
 
 // Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged".
-export async function sync(cwd: string): Promise<string> {
-    return app().Sync(cwd)
+export async function sync(): Promise<string> {
+    return app().Sync('')
 }
 
 // Discard uncommitted tracked edits (keep local commits), then sync.
-export async function resetAndSync(cwd: string): Promise<string> {
-    return app().ResetAndSync(cwd)
+export async function resetAndSync(): Promise<string> {
+    return app().ResetAndSync('')
 }
 
 // Generate identity + open a keyring PR via `qar request-access`.
-export async function requestAccess(cwd: string, name: string): Promise<string> {
-    return app().RequestAccess(cwd, name)
+export async function requestAccess(name: string): Promise<string> {
+    return app().RequestAccess('', name)
 }
 
 // Re-encrypt all secrets to the current keyring.
-export async function rekey(cwd: string): Promise<string> {
-    return app().Rekey(cwd)
+export async function rekey(): Promise<string> {
+    return app().Rekey('')
 }
 
 // True if secrets are out of sync with the keyring (rekey needed).
-export async function isInDrift(cwd: string): Promise<boolean> {
-    return app().IsInDrift(cwd)
+export async function isInDrift(): Promise<boolean> {
+    return app().IsInDrift('')
 }

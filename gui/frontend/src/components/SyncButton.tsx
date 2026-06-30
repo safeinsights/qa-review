@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
 import { sync, resetAndSync, rekey, isInDrift } from '../lib/ipc'
 
-export function SyncButton({ cwd }: { cwd: string }) {
+export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } = {}) {
     const [status, setStatus] = useState('')
     const [busy, setBusy] = useState(false)
     const [syncState, setSyncState] = useState('')
@@ -13,12 +13,12 @@ export function SyncButton({ cwd }: { cwd: string }) {
         setStatus('Syncing…')
         setDrift(false)
         try {
-            const result = await sync(cwd)
+            const result = await sync()
             setSyncState(result)
             if (result === 'synced') {
-                setStatus('Up to date — restart to load new suites.')
+                setStatus('Up to date — new suites are ready.')
                 try {
-                    setDrift(await isInDrift(cwd))
+                    setDrift(await isInDrift())
                 } catch {
                     setDrift(false)
                 }
@@ -53,12 +53,12 @@ export function SyncButton({ cwd }: { cwd: string }) {
         setBusy(true)
         setStatus('Resetting & syncing…')
         try {
-            const result = await resetAndSync(cwd)
+            const result = await resetAndSync()
             setSyncState(result)
             if (result === 'synced') {
-                setStatus('Up to date — restart to load new suites.')
+                setStatus('Up to date — new suites are ready.')
                 try {
-                    setDrift(await isInDrift(cwd))
+                    setDrift(await isInDrift())
                 } catch {
                     setDrift(false)
                 }
@@ -75,8 +75,8 @@ export function SyncButton({ cwd }: { cwd: string }) {
     const needsReset = syncState === 'skipped-dirty' || syncState === 'skipped-diverged'
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }}>
                 {status ? (
                     <span className="mono st-dim" style={{ fontSize: 12 }}>
                         {status}
@@ -94,6 +94,7 @@ export function SyncButton({ cwd }: { cwd: string }) {
                 >
                     pull latest tests
                 </Button>
+                {extraActions}
             </div>
             {needsReset ? (
                 <Banner
@@ -111,9 +112,9 @@ export function SyncButton({ cwd }: { cwd: string }) {
                         setBusy(true)
                         setStatus('Rekeying…')
                         try {
-                            await rekey(cwd)
+                            await rekey()
                             setStatus('Rekeyed.')
-                            setDrift(await isInDrift(cwd))
+                            setDrift(await isInDrift())
                         } catch (e) {
                             setStatus('Rekey failed: ' + String(e))
                         } finally {

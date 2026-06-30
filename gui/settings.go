@@ -77,8 +77,11 @@ type SettingsView struct {
 	HasIdentity bool `json:"hasIdentity"`
 }
 
+// configDirFor returns the cloned repo's config/ dir. The cwd param is vestigial
+// (kept for the existing bound-method signatures) — config lives in the user-writable
+// clone, not at a cwd-relative offset.
 func configDirFor(cwd string) string {
-	return filepath.Join(resolveCwd(cwd), "config")
+	return filepath.Join(repoDir(), "config")
 }
 
 // readSettingsFile reads one JSON settings file into a string map. A missing or
