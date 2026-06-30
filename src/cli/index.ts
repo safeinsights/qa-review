@@ -44,7 +44,7 @@ async function main() {
     try {
         const { env, envConfig } = await chooseEnv(rl)
         const role = (await pick(rl, 'Role', ROLES)) as Role
-        const suites = listSuites()
+        const suites = await listSuites()
         const suite = await pick(rl, 'Suite', suites.map((s) => `${s.name} — ${s.description}`))
         const suiteName = suite.split(' — ')[0]
 

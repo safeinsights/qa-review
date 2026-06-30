@@ -45,7 +45,7 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     const startedAt = Date.now()
     const mode = req.mode ?? 'suite'
     const env = req.envConfig ?? resolveEnv(req.env, deps.vars)
-    const suite = suiteOverride ?? getSuite(req.suite)
+    const suite = suiteOverride ?? (await getSuite(req.suite))
 
     // Collected step events for a future live-streaming consumer (e.g. the CLI/GUI
     // progress view). Not read here; recorder.finish() is the source of truth for steps.
