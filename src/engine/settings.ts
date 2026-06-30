@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Encrypter, Decrypter, armor } from 'age-encryption'
+import { Encrypter, Decrypter, armor, generateIdentity as ageGenerateIdentity, identityToRecipient } from 'age-encryption'
 import { SHARED_ACCOUNTS, ENVIRONMENTS } from '../../config/environments'
 
 // Flat var map the engine consumes (same shape `process.env` had). Keys are the
@@ -21,9 +21,10 @@ export const PROJECT_FILE = 'settings.json'
 export const SECRETS_FILE = 'settings.secrets.json'
 export const LOCAL_FILE = 'settings.local.json'
 
-// Passphrase used to decrypt the committed secrets file. The GUI passes it to
-// the spawned engine; standalone CLI reads it from the environment.
-export const PASSPHRASE_VAR = 'AGE_PASSPHRASE'
+// Stopgap (private): the legacy passphrase env var, still consulted by the
+// not-yet-rewritten loadSettings below. Task 4 removes this along with the
+// passphrase decrypt path; it is intentionally NOT exported.
+const PASSPHRASE_VAR = 'AGE_PASSPHRASE'
 
 // An armored age blob starts with this PEM header — used to tell an encrypted
 // value apart from a plaintext one.
@@ -78,21 +79,40 @@ function readJsonFile(file: string): Record<string, string> {
     return out
 }
 
-// Decrypt a single armored age value with the scrypt passphrase.
-export async function decryptValue(armored: string, passphrase: string): Promise<string> {
+// Generate a new age X25519 identity (the secret key string, "AGE-SECRET-KEY-1…").
+export async function generateIdentity(): Promise<string> {
+    return ageGenerateIdentity()
+}
+
+// Derive the public recipient ("age1…") from an identity secret key.
+export async function publicKeyFromIdentity(identity: string): Promise<string> {
+    return identityToRecipient(identity)
+}
+
+// Encrypt a value to one or more X25519 recipients ("age1…"). Returns an armored blob.
+export async function encryptToRecipients(plain: string, recipients: string[]): Promise<string> {
+    if (recipients.length === 0) throw new Error('encryptToRecipients: no recipients (keyring is empty)')
+    const e = new Encrypter()
+    for (const r of recipients) e.addRecipient(r)
+    const binary = await e.encrypt(plain)
+    return armor.encode(binary)
+}
+
+// Decrypt an armored blob with an X25519 identity secret key.
+export async function decryptWithIdentity(armored: string, identity: string): Promise<string> {
     const d = new Decrypter()
-    d.addPassphrase(passphrase)
+    d.addIdentity(identity)
     const binary = armor.decode(armored)
     return d.decrypt(binary, 'text')
 }
 
-// Encrypt a single value to an armored age blob with the scrypt passphrase.
-// Mirrors the Go encrypt path in the GUI so either side can produce/consume it.
-export async function encryptValue(plain: string, passphrase: string): Promise<string> {
-    const e = new Encrypter()
-    e.setPassphrase(passphrase)
-    const binary = await e.encrypt(plain)
-    return armor.encode(binary)
+// Stopgap (private): the legacy scrypt-passphrase decrypt, used only by the
+// not-yet-rewritten loadSettings below. Task 4 removes it. Not exported.
+async function decryptValue(armored: string, passphrase: string): Promise<string> {
+    const d = new Decrypter()
+    d.addPassphrase(passphrase)
+    const binary = armor.decode(armored)
+    return d.decrypt(binary, 'text')
 }
 
 export interface LoadOptions {
