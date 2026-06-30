@@ -3,4 +3,5 @@ results/
 .env
 .env.local
 config/settings.local.json
+config/age-identity.txt
 *.log
