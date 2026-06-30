@@ -30,6 +30,9 @@ export interface RunDeps {
     // Optional live step sink (the CLI --json mode prints each event). When
     // omitted, runs proceed without streaming.
     onStep?: (event: StepEvent) => void
+    // Called once with the live Playwright page just after it's created, so a
+    // caller (the CLI --screencast mode) can attach a screencast to it.
+    onPage?: (page: import('@playwright/test').Page) => void | Promise<void>
 }
 
 function categorize(error: Error): FailureCategory {
@@ -79,6 +82,7 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         }
         // The cleanup client authorizes via the admin session cookie.
         ;(cleanup as unknown as { cookieHeader: string }).cookieHeader = cookieHeader
+        await deps.onPage?.(handle.page)
 
         let stepIndex = 0
         const page = handle.page

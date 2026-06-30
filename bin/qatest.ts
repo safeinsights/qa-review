@@ -6,7 +6,7 @@ import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { listCommand } from '@/cli/commands/list'
 
-const BOOLEANS = ['json', 'headed']
+const BOOLEANS = ['json', 'headed', 'screencast']
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)

@@ -1,8 +1,9 @@
-import type { StepEvent, RunResult } from '@/engine/types'
+import type { StepEvent, RunResult, ScreencastInfo } from '@/engine/types'
 
 export type StepEnvelope = { type: 'step' } & StepEvent
 export type ResultEnvelope = { type: 'result' } & RunResult
-export type Envelope = StepEnvelope | ResultEnvelope
+export type ScreencastEnvelope = { type: 'screencast' } & ScreencastInfo
+export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope
 
 export function stepLine(event: StepEvent): string {
     return JSON.stringify({ type: 'step', ...event }) + '\n'
@@ -10,6 +11,10 @@ export function stepLine(event: StepEvent): string {
 
 export function resultLine(result: RunResult): string {
     return JSON.stringify({ type: 'result', ...result }) + '\n'
+}
+
+export function screencastLine(info: ScreencastInfo): string {
+    return JSON.stringify({ type: 'screencast', ...info }) + '\n'
 }
 
 // Parse one stdout line into an Envelope, or null if it isn't one of ours
@@ -23,7 +28,7 @@ export function parseLine(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result') return obj as Envelope
+        if (t === 'step' || t === 'result' || t === 'screencast') return obj as Envelope
     }
     return null
 }

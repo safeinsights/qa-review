@@ -21,6 +21,12 @@ export interface StepEvent {
     error?: string
 }
 
+// Emitted once at run start when --screencast is active, telling the GUI which
+// localhost WebSocket port to connect to for the live browser view.
+export interface ScreencastInfo {
+    port: number
+}
+
 export type RunMode = 'suite' | 'exploratory'
 
 export interface RunRequest {
