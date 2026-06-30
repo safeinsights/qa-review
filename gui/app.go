@@ -43,6 +43,11 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 		for scanner.Scan() {
 			runtime.EventsEmit(a.ctx, "stdout-line", scanner.Text())
 		}
+		if err := scanner.Err(); err != nil {
+			// A scan error (e.g. a line exceeding the buffer) would otherwise be
+			// swallowed, leaving the UI thinking output ended cleanly. Surface it.
+			runtime.EventsEmit(a.ctx, "stdout-line", fmt.Sprintf("[qa-runner] output read error: %v", err))
+		}
 		code := 0
 		if err := cmd.Wait(); err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -92,12 +97,4 @@ func (a *App) PromoteSuite(cwd, name, tracePath string) (string, error) {
 		last = string(out)
 	}
 	return last, nil
-}
-
-// scanLines splits buf into complete lines and a trailing remainder (the partial
-// last line). Pure helper kept for unit testing the line-splitting contract.
-func scanLines(buf string) ([]string, string) {
-	parts := strings.Split(buf, "\n")
-	rest := parts[len(parts)-1]
-	return parts[:len(parts)-1], rest
 }
