@@ -67,7 +67,8 @@ export function RunScreen({ spec, onDone }: { spec: RunSpec | null; onDone?: (r:
                 {error ? <p style={{ color: '#c5221f' }}>⚠ {error}</p> : null}
             </div>
             <div style={{ flex: 1 }}>
-                {port && !result ? <BrowserPanel port={port} /> : result ? <ResultPanel result={result} /> : null}
+                {port ? <BrowserPanel port={port} /> : null}
+                {result ? <ResultPanel result={result} /> : null}
             </div>
         </div>
     )

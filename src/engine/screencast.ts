@@ -9,6 +9,7 @@ import { frameBytes, parseInput, toCdpMouse, toCdpKey, type CdpFrameMeta } from 
 export class ScreencastServer {
     private wss: WebSocketServer
     readonly port: number
+    private clients = new Set<WebSocket>()
 
     private constructor(wss: WebSocketServer, port: number) {
         this.wss = wss
@@ -28,6 +29,8 @@ export class ScreencastServer {
 
     private wire(page: Page) {
         this.wss.on('connection', async (socket: WebSocket) => {
+            this.clients.add(socket)
+            socket.on('close', () => this.clients.delete(socket))
             const cdp = await page.context().newCDPSession(page)
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,6 +69,26 @@ export class ScreencastServer {
                 await (cdp as any).send('Page.stopScreencast').catch(() => {})
                 await cdp.detach().catch(() => {})
             })
+        })
+    }
+
+    // Keep the server open after the run so the GUI panel finishes showing the
+    // live view. Resolves when: no client ever connects (short wait), the
+    // connected client(s) disconnect, or `graceMs` elapses — whichever first.
+    async waitForClientThenClose(graceMs: number): Promise<void> {
+        // Give a late-connecting client a moment to attach first.
+        await new Promise((r) => setTimeout(r, 1000))
+        if (this.clients.size === 0) return // nobody watching → don't hold the run open
+
+        await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, graceMs)
+            const check = () => {
+                if (this.clients.size === 0) {
+                    clearTimeout(timer)
+                    resolve()
+                }
+            }
+            for (const c of this.clients) c.on('close', check)
         })
     }
 

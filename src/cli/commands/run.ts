@@ -47,6 +47,14 @@ export async function runCommand(opts: Record<string, string>): Promise<void> {
             console.log(`report: ${result.bundleDir}/report.html`)
         }
         if (!result.ok) process.exitCode = 1
+
+        // Screencast: the suite's browser work is short, but the GUI panel should
+        // keep showing the live view (and its last frame) a bit longer. Hold the
+        // server open until the GUI client disconnects, or a grace timeout — so
+        // the panel never loses the connection race or blanks the instant the run
+        // ends. (The page is still open here; runEngine's teardown ran inside it,
+        // but we keep the ws alive for the final frames + viewing grace.)
+        if (server) await server.waitForClientThenClose(15000)
     } finally {
         await server?.close()
     }
