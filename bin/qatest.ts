@@ -4,6 +4,7 @@ import { runCommand } from '@/cli/commands/run'
 import { loginCommand } from '@/cli/commands/login'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
+import { listCommand } from '@/cli/commands/list'
 
 const BOOLEANS = ['json', 'headed']
 
@@ -19,8 +20,10 @@ async function main() {
             return cleanupCommand(opts)
         case 'codegen':
             return codegenCommand(opts)
+        case 'list':
+            return listCommand()
         default:
-            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen`)
+            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list`)
             process.exit(1)
     }
 }
