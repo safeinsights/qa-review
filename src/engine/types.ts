@@ -39,7 +39,7 @@ export interface RunResult {
     failureCategory?: FailureCategory
     steps: StepEvent[]
     bundleDir: string // absolute path to the result bundle folder
-    cleanup: { ok: boolean; deleted: string[]; failed: string[]; error?: string }
+    cleanup: { ok: boolean; deleted: string[]; failed: string[]; error?: string; statuses?: Record<string, number> }
     env: string
     role: Role
     mode: RunMode
