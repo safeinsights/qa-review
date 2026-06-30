@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Build a standalone, Developer-ID-signed, notarized macOS .dmg of the QA Runner.
+#
+# Pipeline: esbuild engine -> stage Resources (node + engine bundle + Playwright)
+# -> wails build -> codesign (hardened runtime) -> notarize + staple -> .dmg.
+#
+# Prerequisites on the build host: pnpm, Go, wails, Xcode CLT (codesign,
+# notarytool, stapler), and (for signing) a Developer ID Application cert in the
+# keychain + a notarytool credential profile.
+#
+# Fill in the SIGNING placeholders below (or export them in your environment).
+set -euo pipefail
+
+# ---- Config / placeholders -------------------------------------------------
+NODE_VERSION="${NODE_VERSION:-22.14.0}"          # pinned bundled node (LTS)
+NODE_ARCH="${NODE_ARCH:-arm64}"                  # darwin-arm64 build
+APP_NAME="qa-runner"
+
+# SIGNING — fill these in (or export before running):
+#   DEVELOPER_ID:    "Developer ID Application: Your Org (TEAMID)"
+#   NOTARY_PROFILE:  a notarytool keychain profile name created via
+#                    `xcrun notarytool store-credentials`
+DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application: REPLACE_ME (TEAMID)}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-REPLACE_ME_NOTARY_PROFILE}"
+SIGN="${SIGN:-1}"                                 # set SIGN=0 to skip sign+notarize
+
+# ---- Paths -----------------------------------------------------------------
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GUI="$ROOT/gui"
+ENGINE_OUT="$GUI/build/engine"
+STAGE="$GUI/build/stage"                          # Resources payload staged here
+APP="$GUI/build/bin/$APP_NAME.app"
+RES="$APP/Contents/Resources"
+ENTITLEMENTS="$GUI/build/darwin/entitlements.plist"
+DMG="$GUI/build/$APP_NAME.dmg"
+
+echo "==> 1/7 install deps"
+cd "$ROOT"
+pnpm install --frozen-lockfile
+
+echo "==> 2/7 bundle engine (esbuild)"
+node "$ROOT/esbuild.config.mjs"
+
+echo "==> 3/7 stage Resources payload"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/runtime" "$STAGE/engine"
+# 3a. engine bundle (the browser MCP config is generated per-session at runtime
+#     by writeSessionMcpConfig, so nothing static to ship here).
+cp "$ENGINE_OUT/qar.bundle.mjs" "$STAGE/engine/qar.bundle.mjs"
+# 3b. pinned node runtime (downloaded for reproducibility)
+NODE_PKG="node-v$NODE_VERSION-darwin-$NODE_ARCH"
+NODE_URL="https://nodejs.org/dist/v$NODE_VERSION/$NODE_PKG.tar.gz"
+TMP="$(mktemp -d)"
+echo "    downloading $NODE_URL"
+curl -fsSL "$NODE_URL" -o "$TMP/node.tar.gz"
+tar -xzf "$TMP/node.tar.gz" -C "$TMP"
+cp "$TMP/$NODE_PKG/bin/node" "$STAGE/runtime/node"
+chmod +x "$STAGE/runtime/node"
+# 3c. Playwright node_modules (NON-symlinked, self-contained). pnpm's store is
+#     symlinked, so do a throwaway npm install of just the pinned versions into a
+#     temp dir and copy the resolved tree. channel:'chrome' needs the driver, not
+#     the bundled browsers, so skip the browser download.
+PW_VERSION="$(node -e "console.log(require('@playwright/test/package.json').version)")"
+echo "    staging @playwright/test@$PW_VERSION (no browser download)"
+mkdir -p "$TMP/pw" && cd "$TMP/pw"
+npm init -y >/dev/null 2>&1
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
+    "@playwright/test@$PW_VERSION" >/dev/null 2>&1
+mkdir -p "$STAGE/engine/node_modules"
+cp -R "$TMP/pw/node_modules/." "$STAGE/engine/node_modules/"
+cd "$ROOT"
+rm -rf "$TMP"
+
+echo "==> 4/7 wails build"
+cd "$GUI"
+wails build -platform "darwin/$NODE_ARCH" -clean
+# Copy the staged payload into the freshly built .app.
+mkdir -p "$RES/runtime" "$RES/engine"
+cp -R "$STAGE/." "$RES/"
+
+if [ "$SIGN" != "1" ]; then
+    echo "==> SIGN=0 — leaving $APP unsigned (dev build). Done."
+    exit 0
+fi
+
+echo "==> 5/7 codesign (inside-out, hardened runtime)"
+# Sign nested Mach-O executables first (node + any Playwright .node/helpers),
+# then the .app last. --options runtime enables the hardened runtime.
+sign() { codesign --force --timestamp --options runtime \
+    --entitlements "$ENTITLEMENTS" --sign "$DEVELOPER_ID" "$1"; }
+
+# Every nested Mach-O (node, *.node native addons, Playwright's node/ffmpeg).
+while IFS= read -r f; do
+    if file "$f" | grep -q "Mach-O"; then sign "$f"; fi
+done < <(find "$RES" -type f \( -perm -u+x -o -name '*.node' \))
+sign "$APP"
+
+echo "==> 6/7 notarize + staple"
+ZIP="$GUI/build/$APP_NAME.zip"
+/usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
+xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+xcrun stapler staple "$APP"
+rm -f "$ZIP"
+
+echo "==> 7/7 build + sign + notarize .dmg"
+rm -f "$DMG"
+# create-dmg (brew install create-dmg) gives a /Applications symlink + layout.
+if command -v create-dmg >/dev/null 2>&1; then
+    create-dmg --volname "$APP_NAME" --app-drop-link 480 160 "$DMG" "$APP" || true
+else
+    /usr/bin/hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
+fi
+codesign --force --timestamp --sign "$DEVELOPER_ID" "$DMG"
+xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+xcrun stapler staple "$DMG"
+
+echo "==> Done: $DMG"
+echo "    Verify: spctl -a -vvv \"$APP\"  &&  stapler validate \"$DMG\""

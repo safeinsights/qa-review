@@ -1,5 +1,8 @@
 node_modules/
 results/
+suites-compiled/
+gui/build/engine/
+gui/build/stage/
 .env
 .env.local
 config/settings.local.json

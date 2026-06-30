@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import { defaultDeps } from '@/engine/run'
 import type { RunDeps } from '@/engine/run'
 import type { StepEvent } from '@/engine/types'
@@ -9,14 +9,14 @@ import type { StepEvent } from '@/engine/types'
 // everything except the browser launch.
 export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars']): RunDeps {
     const base = defaultDeps(vars)
-    const here = path.dirname(fileURLToPath(import.meta.url))
-    const resultsRoot = path.resolve(here, '../../results')
+    const resultsRoot = resultsRootDir()
     return {
         ...base,
         onStep,
         openBrowser: async (env) => {
             const { chromium } = await import('@playwright/test')
-            const browser = await chromium.launch({ headless: false })
+            // Visible browser, but still the user's installed Chrome (channel:'chrome').
+            const browser = await chromium.launch({ headless: false, channel: 'chrome' })
             const context = await browser.newContext({
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot },
