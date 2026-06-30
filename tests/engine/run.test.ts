@@ -111,4 +111,12 @@ describe('runEngine', () => {
         expect(result.ok).toBe(true)
         expect(result.failureCategory).toBe('cleanup')
     })
+
+    it('invokes deps.onStep for each step event as it happens', async () => {
+        const seen: string[] = []
+        const d = deps({ onStep: (e) => seen.push(`${e.name}:${e.status}`) })
+        await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(seen).toContain('do thing:running')
+        expect(seen).toContain('do thing:passed')
+    })
 })

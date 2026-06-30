@@ -27,6 +27,9 @@ export interface RunDeps {
         bundleDir: string,
     ) => Promise<string>
     runCleanup: (client: CleanupClient) => Promise<RunResult['cleanup']>
+    // Optional live step sink (the CLI --json mode prints each event). When
+    // omitted, runs proceed without streaming.
+    onStep?: (event: import('@/engine/types').StepEvent) => void
 }
 
 function categorize(error: Error): FailureCategory {
@@ -49,7 +52,10 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     const events: StepEvent[] = []
     const recorder = new Recorder(
         { root: deps.resultsRoot, suite: suite.name, env: env.name, role: req.role, mode, startedAt },
-        (e) => events.push(e),
+        (e) => {
+            events.push(e)
+            deps.onStep?.(e)
+        },
     )
 
     const cleanup = new CleanupClient(env.baseURL, '')
