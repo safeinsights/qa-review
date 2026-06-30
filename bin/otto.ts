@@ -9,6 +9,7 @@ import { migrateCommand } from '@/cli/commands/migrate'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { setSecretCommand } from '@/cli/commands/set-secret'
+import { syncCommand } from '@/cli/commands/sync'
 
 const BOOLEANS = ['json', 'headed', 'screencast']
 
@@ -36,6 +37,8 @@ async function main() {
             return rekeyCommand()
         case 'set-secret':
             return setSecretCommand(opts)
+        case 'sync':
+            return syncCommand()
         default:
             console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync`)
             process.exit(1)
