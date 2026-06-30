@@ -10,6 +10,7 @@ interface WailsApp {
     GitPull(cwd: string): Promise<string>
     PromoteSuite(cwd: string, name: string, tracePath: string): Promise<string>
     ReadScreenshot(bundleDir: string, rel: string): Promise<string>
+    ReadVideo(bundleDir: string): Promise<string>
     SaveScreenshotAs(bundleDir: string, rel: string): Promise<string>
     ZipBundle(bundleDir: string): Promise<string>
 }
@@ -61,6 +62,15 @@ export async function promoteSuite(cwd: string, name: string, tracePath: string)
 // Read a per-step screenshot as a base64 data URI (webviews block file://).
 export async function readScreenshot(bundleDir: string, rel: string): Promise<string> {
     return app().ReadScreenshot(bundleDir, rel)
+}
+
+// Read the run's video.webm and return an object URL playable by <video> (the
+// raw bytes come from Go as base64; we decode to a Blob to avoid a huge data:
+// URL). Caller should URL.revokeObjectURL when done.
+export async function readVideoObjectUrl(bundleDir: string): Promise<string> {
+    const b64 = await app().ReadVideo(bundleDir)
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+    return URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }))
 }
 
 // Prompt to save one screenshot; returns the saved path ('' if cancelled).

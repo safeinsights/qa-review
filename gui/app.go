@@ -136,6 +136,22 @@ func (a *App) ReadScreenshot(bundleDir string, rel string) (string, error) {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
+// ReadVideo reads the run's recorded video.webm and returns it as base64 (no data
+// URI prefix — the webview decodes it into a Blob and createObjectURL's it, which
+// avoids a multi-MB data: URL on the <video src>). Webviews block file://, so the
+// bytes come through the backend.
+func (a *App) ReadVideo(bundleDir string) (string, error) {
+	full := filepath.Join(bundleDir, "video.webm")
+	if !strings.HasPrefix(filepath.Clean(full), filepath.Clean(bundleDir)) {
+		return "", fmt.Errorf("video path outside bundle")
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
 // SaveScreenshotAs prompts the tester for a location and copies one screenshot
 // (bundle-relative `rel` under `bundleDir`) there. Returns the saved path, or ""
 // if the dialog was cancelled.

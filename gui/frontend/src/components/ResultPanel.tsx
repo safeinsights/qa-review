@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
-import { zipBundle } from '../lib/ipc'
+import { zipBundle, readVideoObjectUrl } from '../lib/ipc'
 import type { ResultEnvelope } from '../lib/stepStream'
 
 // The verdict block: a serif PASSED/FAILED headline with a status dot, an amber
@@ -13,6 +13,30 @@ export function ResultPanel({ result }: { result: ResultEnvelope }) {
     const cleanup = result.cleanup as { ok: boolean; failed: string[] } | undefined
     const [zipStatus, setZipStatus] = useState<string | null>(null)
     const [zipping, setZipping] = useState(false)
+    const [videoUrl, setVideoUrl] = useState<string | null>(null)
+
+    // Load video.webm through Go (webviews block file://) as a blob: URL, and
+    // revoke it on unmount / when the bundle changes to avoid leaking memory.
+    useEffect(() => {
+        if (!bundleDir) return
+        let url: string | null = null
+        let alive = true
+        readVideoObjectUrl(bundleDir)
+            .then((u) => {
+                if (alive) {
+                    url = u
+                    setVideoUrl(u)
+                } else {
+                    URL.revokeObjectURL(u)
+                }
+            })
+            .catch(() => alive && setVideoUrl(null))
+        return () => {
+            alive = false
+            if (url) URL.revokeObjectURL(url)
+            setVideoUrl(null)
+        }
+    }, [bundleDir])
 
     const downloadAll = async () => {
         if (!bundleDir) return
@@ -79,11 +103,28 @@ export function ResultPanel({ result }: { result: ResultEnvelope }) {
                     <div className="kicker" style={{ marginBottom: 6 }}>
                         Recording
                     </div>
-                    <video
-                        src={`file://${bundleDir}/video.webm`}
-                        controls
-                        style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)', background: '#000' }}
-                    />
+                    {videoUrl ? (
+                        <video
+                            src={videoUrl}
+                            controls
+                            style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)', background: '#000' }}
+                        />
+                    ) : (
+                        <div
+                            style={{
+                                aspectRatio: '16 / 10',
+                                display: 'grid',
+                                placeItems: 'center',
+                                background: 'var(--paper-sunken)',
+                                borderRadius: 8,
+                                color: 'var(--ink-faint)',
+                                fontStyle: 'italic',
+                                fontSize: 13,
+                            }}
+                        >
+                            Loading recording…
+                        </div>
+                    )}
                 </div>
             ) : null}
 
