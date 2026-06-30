@@ -40,6 +40,14 @@ export async function requestAccess(opts: RequestAccessOptions): Promise<{ publi
     await git(['add', 'config/keyring.json'])
     await git(['commit', '-m', `Add ${opts.name} to keyring`])
     await git(['push', '-u', 'origin', branch])
+    // Return to the user's prior branch so a later `otto sync` doesn't get stuck
+    // on the (diverged) access branch. Best-effort — don't fail the request if it
+    // can't switch back.
+    try {
+        await git(['checkout', '-'])
+    } catch {
+        // stay on the access branch; the PR is already pushed
+    }
     return { publicKey, created, branch }
 }
 

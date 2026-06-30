@@ -65,6 +65,7 @@ export async function migrateCommand(opts: Record<string, string>): Promise<void
     console.log(`Migrated ${Object.keys(migrated).length} value(s) into ${localPath}`)
     console.log(`Keys: ${Object.keys(migrated).join(', ') || '(none)'}`)
     if (skipped.length) console.log(`Ignored unknown keys: ${skipped.join(', ')}`)
-    console.log('\nNext: in the Settings panel, set a passphrase and re-save the shared')
-    console.log('accounts as "Project (encrypted)" to commit them for the team.')
+    console.log('\nNext: run `otto request-access --name "..."` (or the Settings ▸ Request')
+    console.log('access button) to get an identity, then save the shared accounts as')
+    console.log('"Project (encrypted)" to commit them — they encrypt to the team keyring.')
 }
