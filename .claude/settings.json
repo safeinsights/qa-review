@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm qar:*)",
+      "Bash(qar:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "excludedCommands": [
+      "pnpm qar",
+      "qar"
+    ]
+  }
+}

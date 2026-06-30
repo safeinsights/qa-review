@@ -1,80 +1,67 @@
 ---
 name: qa-explore
-description: Run a plain-English QA test against a live SafeInsights environment by driving the browser, then optionally save it as a suite. Use when given a QA instruction + env + role.
+description: Interactively author a SafeInsights Playwright test suite by driving a live, already-logged-in browser, then writing and verifying the suite file. Use when given a QA instruction + env + role inside the QA Runner's authoring session.
 ---
 
 # qa-explore
 
-You drive a real browser to carry out a plain-English QA instruction against a
-live environment, reporting progress in the same format the engine uses, and
-ALWAYS cleaning up after yourself.
+You help a QA staff member author a reusable Playwright **test suite** by driving a
+real, already-open browser to carry out a plain-English instruction, then writing
+the suite to a file and verifying it passes. You run **interactively in a terminal**
+— talk to the user in plain language, ask when unsure, and let them approve actions.
 
-## Inputs (parsed from the prompt text)
-The GUI invokes this skill as a single `claude -p` prompt (claude takes the
-prompt positionally and rejects unknown `--flags`), e.g.:
-`/qa-explore Run this against --pr 839 as role admin. Instruction: <plain English>`
-Parse from that prompt:
-- the **instruction** — what to verify (after "Instruction:")
-- the **target environment** — `--pr <number>` or `--env <name>` as written in the prompt
-- the **role** — `admin | researcher | reviewer` (after "as role")
-Pass these through to the `pnpm qar login/cleanup` commands below as the
-corresponding flags.
+## The environment you're in
+- The browser is **already launched and logged in** (the QA Runner ran `qar session`
+  before you started). Drive it with the **`chrome-devtools` MCP tools** — do NOT
+  launch your own browser, and do NOT log in again for the primary role. In
+  particular do NOT run `qar login` — the session is already authenticated.
+- The repo is at **`$QAR_REPO_DIR`** and **is already your working directory.**
+  The engine CLI is **`${QAR_BIN:-pnpm qar}`** (`$QAR_BIN` in the packaged app,
+  else `pnpm qar`).
+- The prompt names the **role**, **target** (`--env <name>` or `--pr <n>`), and the
+  **instruction**. The browser is already on that environment as that role.
 
-## Procedure
+## Keeping the session smooth (IMPORTANT — read before running anything)
+This runs in a permission-scoped terminal the QA staffer watches. To avoid
+needless permission prompts and noise:
+- **Never prefix a command with `cd`** — you are already in `$QAR_REPO_DIR`.
+  A compound like `cd … && pnpm qar …` does NOT match the pre-approved allowlist,
+  so it forces a permission prompt. Run `pnpm qar …` directly.
+- **One command per Bash call.** Don't chain with `&&`, `;`, or pipes when you can
+  avoid it — chained/piped commands fall outside the allowlist and prompt. The
+  pre-approved commands are: `pnpm qar …` (and `qar …`), `pnpm typecheck`,
+  `pnpm test`, and the read-only helpers `mkdir`, `ls`, `cat`, `date`, `echo`.
+- **Be quiet.** Don't narrate every tool call. Do the work, then give the user a
+  short, plain-language result. Skip pasting raw JSON step lines and long logs.
 
-1. **Create the run bundle directory.** Choose a bundle dir under `results/`,
-   e.g. `results/<timestamp>_explore_<env>` (timestamp like `2026-06-29_143022`).
-   Create it (`mkdir -p`). This `bundleDir` is referenced in the final result
-   line and is where you write the action trace — the GUI reads both from there.
-
-2. **Authenticate (do not reinvent).** Run:
-   `pnpm qar login --role <role> (--pr <n> | --env <name>)`
-   Capture the printed cookie line. The browser you drive must carry this
-   session (set it as the Cookie header / cookies on the context).
-
-3. **Drive the browser** via your browser MCP tools to satisfy the instruction.
-   Break the work into named steps. For EACH step:
-   - Before acting, print one line to stdout:
-     `{"type":"step","name":"<step name>","status":"running","at":<epoch ms>}`
-   - Do the concrete browser action(s).
-   - On success print:
-     `{"type":"step","name":"<step name>","status":"passed","at":<epoch ms>}`
-     On failure print status `"failed"` with an `"error"` field, then stop.
-   - Append every concrete action to an in-memory action trace. Every action MUST
-     carry a `step` field (the human step name it belongs to) plus a `kind` and
-     its args. Use ONLY these kinds:
-     `{"step":"<name>","kind":"goto","url":"<url>"}`,
-     `{"step":"<name>","kind":"click","selector":"<sel>"}`,
-     `{"step":"<name>","kind":"fill","selector":"<sel>","value":"<v>"}`,
-     `{"step":"<name>","kind":"expectVisible","selector":"<sel>"}`.
-     Prefer stable selectors (`role=`, `label=`, `text=`, `data-testid`).
-
-4. **Track created entities.** If you create a study or user, record its id
-   (from the URL, e.g. `/.../study/<id>/...`).
-
-5. **Always write the action trace** to `<bundleDir>/trace.json` (regardless of
-   pass/fail, so the GUI can offer "Save as suite"). Shape:
-   `{ "name": "<kebab-name-from-instruction>", "description": "<one line>",
-      "role": "<role>", "actions": [ ...the trace, each with a step field... ] }`
-
-6. **Always clean up.** Whether the run passed or failed, run:
-   `pnpm qar cleanup (--pr <n> | --env <name>) --cookie "<cookie>" --studies <ids> --users <ids>`
-   Report cleanup outcome.
-
-7. **Emit the final result line** — it MUST include `bundleDir` (the GUI needs it
-   to locate the video and the trace for promotion):
-   `{"type":"result","ok":<bool>,"failureCategory":<cat|null>,"bundleDir":"<bundleDir>","steps":[...],"cleanup":{...}}`
-
-## Promoting to a suite
-The GUI drives promotion separately (it runs `pnpm qar codegen --trace
-<bundleDir>/trace.json` on a branch and opens a PR). You do NOT run codegen
-yourself — your job is only to leave a well-formed `<bundleDir>/trace.json` and a
-result line carrying `bundleDir`. Keep selectors stable; the trace becomes a
-dev-reviewed suite.
+## What to do
+1. **Carry out the instruction in the browser** using the chrome-devtools MCP tools
+   (navigate, click, fill, snapshot to read the page). Confirm each meaningful step
+   actually worked by reading the resulting page. Keep the user informed.
+2. **Track anything you create** (study/user ids from the URL, e.g.
+   `/.../study/<id>/...`) so it can be cleaned up.
+3. **When the user asks to save it as a suite** (they'll give it a short name),
+   **write `src/suites/<name>.ts`** following `src/suites/types.ts`
+   (`Suite` + `RunContext`). Use an existing suite (`src/suites/create-study.ts`) as
+   the template:
+   - export a `const <name>Suite: Suite` with `name`, `description`, `roles`, `run(ctx)`.
+   - wrap each action in `await ctx.step('<human name>', async () => { … })`.
+   - use `ctx.page` (Playwright Page), `ctx.baseURL`, `ctx.tag` for unique titles, and
+     `ctx.trackStudy(id)` / `ctx.trackUser(id)` for anything you create (cleanup).
+   - prefer **stable selectors**: `getByRole`, `getByLabel`, `getByTestId`, `text=`.
+4. **Run and debug the suite until it passes:**
+   `${QAR_BIN:-pnpm qar} run --suite <name> --role <role> (--env <name> | --pr <n>)`
+   Read failures, fix the selectors/steps in the `.ts`, and re-run until green. Tell
+   the user when it passes.
+5. **Clean up** anything you created while exploring:
+   `${QAR_BIN:-pnpm qar} cleanup (--env <name> | --pr <n>) --studies <ids> --users <ids>`
 
 ## Rules
-- NEVER skip cleanup, even on failure.
-- Use the engine's `qar login` for auth; do not attempt to log in by guessing.
-- Keep selectors stable; this trace becomes a reviewed suite.
-- If you cannot accomplish the instruction, emit a `failed` step with
-  `failureCategory: "ai-gave-up"` and still clean up.
+- Drive the EXISTING browser via chrome-devtools MCP; never open your own.
+- The suite file is the deliverable — make it self-contained and re-runnable, with
+  stable selectors a reviewer can trust.
+- Always clean up created entities.
+- There is **no machine-readable output contract** — this is an interactive terminal
+  session. Communicate with the user in plain language.
+- The QA Runner's "Save as suite → Open PR" button compiles your `src/suites/<name>.ts`
+  (`qar build-suites`) and opens the PR; you just need to leave a passing suite file.
