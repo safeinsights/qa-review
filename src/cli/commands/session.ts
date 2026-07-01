@@ -1,38 +1,10 @@
-import net from 'node:net'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { loginAs } from '@/engine/auth'
+import { launchChromeWithCdp } from '@/engine/cdp-launch'
 import { ScreencastServer } from '@/engine/screencast'
 import { sessionLine } from '@/cli/step-stream'
 import type { Vars } from '@/engine/settings'
 import type { Role } from '@/engine/types'
-
-// Pick a currently-free TCP port by binding to 0 and reading the assignment.
-// There's a small TOCTOU window before chromium grabs it; the caller retries once.
-function freePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-        const srv = net.createServer()
-        srv.once('error', reject)
-        srv.listen(0, '127.0.0.1', () => {
-            const addr = srv.address()
-            const port = typeof addr === 'object' && addr ? addr.port : 0
-            srv.close(() => resolve(port))
-        })
-    })
-}
-
-// Launch the user's Chrome with a fixed remote-debugging port so chrome-devtools-mcp
-// can attach over CDP (--browserUrl). Playwright's isolated temp user-data-dir
-// satisfies Chrome 136+'s "no remote debugging on the default profile" rule.
-async function launchWithCdp(baseURL: string, cdpPort: number) {
-    const { chromium } = await import('@playwright/test')
-    const browser = await chromium.launch({
-        channel: 'chrome',
-        args: [`--remote-debugging-port=${cdpPort}`],
-    })
-    const context = await browser.newContext({ baseURL })
-    const page = await context.newPage()
-    return { browser, context, page }
-}
 
 // `qar session --role <r> (--env <name> | --pr <n>)` — a LONG-LIVED authoring
 // session. Launches a logged-in browser with a CDP port, starts the screencast,
@@ -44,17 +16,7 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
 
     // Launch with a fixed CDP port (retry once if the picked port got taken).
-    let launched: Awaited<ReturnType<typeof launchWithCdp>> | undefined
-    let cdpPort = 0
-    for (let attempt = 0; attempt < 2 && !launched; attempt++) {
-        cdpPort = await freePort()
-        try {
-            launched = await launchWithCdp(env.baseURL, cdpPort)
-        } catch (e) {
-            if (attempt === 1) throw e
-        }
-    }
-    const { browser, context, page } = launched!
+    const { browser, context, page, cdpPort } = await launchChromeWithCdp({ baseURL: env.baseURL })
 
     await loginAs(page, env, role)
 
