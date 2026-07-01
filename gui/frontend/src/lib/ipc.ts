@@ -50,6 +50,7 @@ interface WailsApp {
     GitPull(cwd: string): Promise<string>
     PromoteSuite(name: string): Promise<string>
     SuiteFileExists(name: string): Promise<boolean>
+    OpenSuiteInEditor(name: string): Promise<void>
     ReportIssue(title: string, note: string, tab: string, runState: string): Promise<string>
     RunDoctor(): Promise<DoctorCheck[]>
     ReadScreenshot(bundleDir: string, rel: string): Promise<string>
@@ -232,6 +233,12 @@ export async function promoteSuite(name: string): Promise<string> {
 // Whether claude has actually written src/suites/<name>.ts yet (gates "Open PR").
 export async function suiteFileExists(name: string): Promise<boolean> {
     return app().SuiteFileExists(name)
+}
+
+// Open the suite's TS source in the user's editor ($EDITOR/$VISUAL, else a known
+// GUI editor, else the OS file association). Backs the "Edit Suite" button.
+export async function openSuiteInEditor(name: string): Promise<void> {
+    await app().OpenSuiteInEditor(name)
 }
 
 // Open a GitHub issue with debug context (Suites run state, or the full authoring
