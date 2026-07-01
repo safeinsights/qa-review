@@ -29,8 +29,15 @@ suite already exists and the engine is driving the run.
 - **Only when the run is PAUSED or ERRORED** (the engine is idle, the browser is
   frozen at that point) may you drive the browser with the chrome-devtools MCP
   (snapshot, click, read the page) to diagnose.
-- If unsure whether the run is idle, ask the user, or check run-state.json
-  (`running: false` or a failed final step = idle).
+- Telling the two idle states apart:
+  - **Errored/finished** shows `running: false` in run-state.json (a failed run
+    ends with `result` set) — idle, drivable.
+  - **Paused** does NOT show up in run-state.json — a pause blocks *between* steps,
+    so the file still reads `running: true` with the last step `passed`. The pause
+    is signalled by the GUI's **Paused banner**, not the file. So don't infer "not
+    paused" from `running: true` alone.
+  - If unsure whether the run is idle, **ask the user** (or trust the GUI's paused/
+    errored state) rather than guessing from run-state.json.
 
 ## What you do
 1. **Answer questions about the run** — read `run-state.json` + the relevant
@@ -41,7 +48,8 @@ suite already exists and the engine is driving the run.
 3. **Fix or extend the suite** — edit `src/suites/<name>.ts` following its existing
    conventions: steps are `{ name, run: async (ctx) => { await ctx.step('<name>',
    async () => { … }) } }`; thread values via `ctx.state`; use `ctx.page`,
-   `ctx.baseURL`, `ctx.tag`, `ctx.trackStudy`/`ctx.trackUser`. Prefer stable
+   `ctx.baseURL`, `ctx.tag`, `ctx.trackStudy`/`ctx.trackUser`, and `ctx.loginAs(role)`
+   to switch shared accounts mid-run for multi-role suites. Prefer stable
    selectors: `getByRole`, `getByLabel`, `getByTestId`, `text=`. See
    `src/suites/create-study.ts` as the template and `src/suites/types.ts` for shapes.
 4. **Hand back to Run — do NOT run the suite yourself.** After editing, tell the
