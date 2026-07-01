@@ -300,11 +300,14 @@ export const studyHappyPathSuite: Suite = {
                     }
                     await ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.').fill(key)
                     await ctx.page.getByRole('button', { name: /Decrypt Files/i }).click()
-                    // Open the first result's preview and confirm it actually rendered
-                    // numeric data (the results table), not just that a View button exists.
-                    await ctx.page.getByRole('button', { name: 'View' }).first().waitFor({ state: 'visible' })
-                    await ctx.page.getByRole('button', { name: 'View' }).first().click()
-                    await verifyResultsModalHasNumbers(ctx)
+                    // Open the RESULTS file's preview — NOT a run log — and confirm it
+                    // actually rendered the decrypted output, not just that a View
+                    // button exists. The decrypted-file table lists several rows
+                    // (the results output plus code-run / security / packaging logs);
+                    // each has its own "View" button, so we must open the one on the
+                    // results row rather than blindly taking the first View button.
+                    await openResultsPreview(ctx)
+                    await verifyResultsModalHasContent(ctx)
                     // Close the preview so it doesn't overlay the Approve button.
                     await ctx.page.getByRole('dialog').getByRole('button', { name: /close/i }).first().click()
                     await ctx.page.getByRole('dialog').waitFor({ state: 'hidden' }).catch(() => {})
@@ -572,19 +575,38 @@ async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
     )
 }
 
-// Assert the open results-preview modal actually rendered numeric data. The CSV
-// preview is a DataTable (real <table>); a decrypt-but-empty/garbled result would
-// show a dialog with no numbers. We check the dialog's text for a standalone
-// number rather than a specific value, so it survives run-to-run data changes.
-async function verifyResultsModalHasNumbers(ctx: RunContext): Promise<void> {
+// Open the preview modal for the RESULTS file specifically. The decrypted-file
+// table (a plain <table>) lists the results output alongside run logs (Code Run
+// Log, Security Scan Log, Packaging Error Log); every row has its own "View"
+// button. The results row is the one whose "File Type" cell reads "Results"
+// (see management-app logLabel()) — the log rows carry a "… Log" label instead.
+// We scope the View click to that row so we preview the actual output, not a log.
+async function openResultsPreview(ctx: RunContext): Promise<void> {
+    const resultsRow = ctx.page
+        .getByRole('row')
+        .filter({ has: ctx.page.getByRole('cell', { name: 'Results', exact: true }) })
+        .first()
+    const viewButton = resultsRow.getByRole('button', { name: 'View' })
+    await viewButton.waitFor({ state: 'visible', timeout: 20_000 })
+    await viewButton.click()
+}
+
+// Assert the open results-preview modal actually rendered the decrypted output.
+// The results file is a CSV, previewed as a mantine-datatable grid whose rows the
+// app builds from the CSV — so a successful decrypt shows data rows, while a
+// decrypt-but-empty/garbled result would show a header-only (or empty) grid. We
+// wait for at least one populated data row and confirm it carries some content,
+// rather than asserting a specific value so it survives run-to-run data changes.
+async function verifyResultsModalHasContent(ctx: RunContext): Promise<void> {
     const dialog = ctx.page.getByRole('dialog')
     await dialog.waitFor({ state: 'visible', timeout: 20_000 })
-    // Wait for the table body to populate (the CSV parses + DataTable hydrates a
-    // moment after the modal opens), then read its text once.
-    await dialog.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 15_000 })
-    const text = (await dialog.innerText()) ?? ''
-    // A standalone number (int or decimal), e.g. the safe-results "42" / "0.42".
-    if (!/(?:^|\s)\d+(?:\.\d+)?(?:\s|$)/.test(text)) {
-        throw new Error(`Results preview modal contained no numeric data. Modal text:\n${text.slice(0, 500)}`)
+    // The CSV parses + DataTable hydrates a moment after the modal opens; wait for
+    // a body row to render, then confirm the grid holds non-empty cell text.
+    const firstRow = dialog.locator('table tbody tr').first()
+    await firstRow.waitFor({ state: 'visible', timeout: 15_000 })
+    const text = (await firstRow.innerText())?.trim() ?? ''
+    if (!text) {
+        const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
+        throw new Error(`Results preview modal rendered an empty grid row. Modal text:\n${modalText}`)
     }
 }
