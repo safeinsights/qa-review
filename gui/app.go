@@ -321,6 +321,56 @@ func composeAuthoringPrompt(env, pr, role, instruction string) string {
 	return fmt.Sprintf("/qa-explore The browser is already open and logged in as %s against %s. Instruction: %s", role, target, instruction)
 }
 
+// composeCompanionPrompt is the companion Claude's first message: invoke the
+// qa-run-companion skill for the suite whose run is on screen. The browser is the
+// live run browser (driven by the engine; Claude drives it only when idle).
+func composeCompanionPrompt(suite string) string {
+	return fmt.Sprintf(
+		"/qa-run-companion You are attached to a live run of the '%s' suite. "+
+			"Read <bundleDir>/run-state.json for the run's steps and result. "+
+			"Only drive the browser when the run is paused or errored.",
+		suite,
+	)
+}
+
+// companionClaudeArgs builds the claude flags for the run companion. Same scoped
+// allowlist as authoring (browser MCP + qar + file edit under the repo); the MCP
+// config points chrome-devtools-mcp at the RUN's CDP port.
+func companionClaudeArgs(mcpPath, repo string) []string {
+	return []string{
+		"--permission-mode", "default",
+		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		"--add-dir", repo,
+		"--mcp-config", mcpPath,
+	}
+}
+
+// StartRunCompanion (bound) lazily spawns the run companion against an
+// already-running run's browser. cdpPort is the run browser's CDP port (from the
+// screencast envelope, forwarded by the React run screen). One companion at a time.
+func (a *App) StartRunCompanion(cdpPort int, suite string) error {
+	// Reuse the session teardown so a prior companion/authoring PTY is cleared.
+	a.teardownSession()
+
+	mcpPath, err := writeSessionMcpConfig(cdpPort)
+	if err != nil {
+		return err
+	}
+	a.sessionMu.Lock()
+	a.sessionMcpPath = mcpPath
+	a.sessionMu.Unlock()
+
+	if err := a.pty.start(a, repoDir(), withGuiPath(), companionClaudeArgs(mcpPath, repoDir())); err != nil {
+		a.StopSession()
+		return err
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = a.submitToPty(composeCompanionPrompt(suite))
+	}()
+	return nil
+}
+
 // WriteToPty forwards base64-encoded keystrokes from the xterm terminal to claude.
 func (a *App) WriteToPty(b64 string) error {
 	data, err := base64.StdEncoding.DecodeString(b64)
