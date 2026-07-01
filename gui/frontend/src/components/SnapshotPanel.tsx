@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
 import { readScreenshot, saveScreenshotAs } from '../lib/ipc'
+import type { ConsoleLine } from '../lib/screencast'
 import { UrlBar } from './UrlBar'
+import { ConsoleLog } from './ConsoleLog'
 
 // Shows a single per-step screenshot in place of the live browser. Loads the PNG
 // bytes through the Go backend (file:// is blocked in the webview) and offers a
@@ -11,6 +13,7 @@ export function SnapshotPanel({
     rel,
     stepName,
     stepUrl,
+    stepConsole,
     suite,
     index,
     total,
@@ -22,6 +25,8 @@ export function SnapshotPanel({
     stepName: string
     // The page's URL when this step resolved (undefined for older bundles).
     stepUrl?: string
+    // Console output captured DURING this step (undefined for older bundles).
+    stepConsole?: ConsoleLine[]
     // Suite name — prefixed onto the saved screenshot's filename.
     suite: string
     index: number
@@ -114,6 +119,9 @@ export function SnapshotPanel({
                     <div style={{ padding: 24, color: 'var(--ink-faint)', fontStyle: 'italic' }}>Loading snapshot…</div>
                 )}
             </div>
+
+            {/* The console output captured while this step ran. */}
+            <ConsoleLog lines={stepConsole ?? []} emptyText="No console output during this step." />
 
             <div style={{ padding: '8px 16px', borderTop: '1px solid var(--line)', fontSize: 13 }}>
                 <div>

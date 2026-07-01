@@ -5,7 +5,8 @@ import { Recorder } from '@/engine/recorder'
 import { CleanupClient } from '@/engine/cleanup'
 import { getSuite } from '@/engine/suite-registry'
 import { loginAs, AuthError } from '@/engine/auth'
-import type { RunRequest, RunResult, StepEvent, FailureCategory } from '@/engine/types'
+import type { RunRequest, RunResult, StepEvent, FailureCategory, ConsoleLine } from '@/engine/types'
+import { mapConsoleLevel } from '@/engine/screencast-codec'
 import type { Suite, RunContext } from '@/suites/types'
 
 export interface BrowserHandle {
@@ -82,6 +83,12 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     try {
         handle = await deps.openBrowser({ name: env.name, baseURL: env.baseURL })
 
+        const page = handle.page
+        // Attach the live view + console capture BEFORE login, so the screencast
+        // and console see every page load from the very first — including the
+        // login flow (e.g. the on-load Clerk "development keys" warning).
+        await deps.onPage?.(page)
+
         let authToken: string
         try {
             authToken = await deps.login(handle, env, req.role, recorder.bundleDir)
@@ -93,10 +100,8 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         // The cleanup client authorizes with the logged-in user's Clerk session
         // JWT (Bearer). deps.login returns it (loginAs -> getClerkToken).
         ;(cleanup as unknown as { authToken: string }).authToken = authToken
-        await deps.onPage?.(handle.page)
 
         let stepIndex = 0
-        const page = handle.page
         const captureScreenshot = async (label: string): Promise<string | undefined> => {
             // Best-effort per-step still saved into the bundle. The recorder stays
             // Playwright-free; we hand it only the bundle-relative path. A capture
@@ -132,6 +137,21 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 return undefined
             }
         }
+        // Per-step console capture: buffer every console.* line + uncaught page
+        // error for the whole run; ctx.step drains the slice accumulated since the
+        // previous step. A single attachment survives navigations and loginAs().
+        const consoleBuf: ConsoleLine[] = []
+        const onConsole = (msg: import('@playwright/test').ConsoleMessage) =>
+            consoleBuf.push({ level: mapConsoleLevel(msg.type()), text: msg.text(), at: Date.now(), url: msg.location()?.url })
+        const onPageError = (err: Error) => consoleBuf.push({ level: 'error', text: String(err?.stack || err), at: Date.now() })
+        page.on('console', onConsole)
+        page.on('pageerror', onPageError)
+        // Drain the console captured since the previous step (best-effort metadata;
+        // undefined when a step logged nothing, matching currentUrl's optionality).
+        const drainConsole = (): ConsoleLine[] | undefined => {
+            const lines = consoleBuf.splice(0)
+            return lines.length ? lines : undefined
+        }
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
@@ -141,11 +161,11 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 try {
                     const out = await action()
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'passed', { screenshot, url: currentUrl() })
+                    recorder.step(name, 'passed', { screenshot, url: currentUrl(), console: drainConsole() })
                     return out
                 } catch (cause) {
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot, url: currentUrl() })
+                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot, url: currentUrl(), console: drainConsole() })
                     throw cause
                 }
             },

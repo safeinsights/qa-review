@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, type InputEvent } from '@/engine/screencast-codec'
+import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, consoleMessage, mapConsoleLevel, type InputEvent } from '@/engine/screencast-codec'
 
 describe('screencast-codec', () => {
     it('decodes a CDP base64 frame into the raw JPEG bytes to send as a binary message', () => {
@@ -100,5 +100,23 @@ describe('screencast-codec', () => {
         // clipboard-write without a string value is rejected as malformed.
         expect(parseInput('{"kind":"clipboard-write"}')).toBeNull()
         expect(parseInput('{"kind":"clipboard-write","value":42}')).toBeNull()
+    })
+
+    it('serializes a console line message', () => {
+        expect(JSON.parse(consoleMessage({ level: 'error', text: 'boom', at: 5, url: 'x.js' }))).toEqual({
+            type: 'console',
+            line: { level: 'error', text: 'boom', at: 5, url: 'x.js' },
+        })
+    })
+
+    it('maps Playwright console types to our five levels', () => {
+        expect(mapConsoleLevel('warning')).toBe('warn')
+        expect(mapConsoleLevel('trace')).toBe('debug')
+        expect(mapConsoleLevel('error')).toBe('error')
+        expect(mapConsoleLevel('info')).toBe('info')
+        expect(mapConsoleLevel('log')).toBe('log')
+        // Unknown/unhandled types fall back to 'log'.
+        expect(mapConsoleLevel('table')).toBe('log')
+        expect(mapConsoleLevel('dir')).toBe('log')
     })
 })

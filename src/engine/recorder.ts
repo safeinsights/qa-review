@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { RunMode, Role, StepEvent, StepStatus, FailureCategory, RunResult } from '@/engine/types'
+import type { RunMode, Role, StepEvent, StepStatus, FailureCategory, RunResult, ConsoleLine } from '@/engine/types'
 
 export interface RecorderInit {
     root: string // base results dir, e.g. <repo>/results
@@ -35,7 +35,7 @@ export class Recorder {
         fs.mkdirSync(path.join(this.bundleDir, 'screenshots'), { recursive: true })
     }
 
-    step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string; url?: string }) {
+    step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }) {
         const event: StepEvent = { name, status, at: Date.now(), ...extra }
         // Replace the prior 'running' entry for the same step name when it resolves.
         const idx = this.steps.findIndex((s) => s.name === name && s.status === 'running')

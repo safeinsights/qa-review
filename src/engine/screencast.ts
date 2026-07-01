@@ -1,6 +1,6 @@
 import { WebSocketServer, type WebSocket } from 'ws'
-import type { Page, Frame } from '@playwright/test'
-import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, type CdpFrameMeta } from '@/engine/screencast-codec'
+import type { Page, Frame, ConsoleMessage as PwConsoleMessage } from '@playwright/test'
+import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, consoleMessage, mapConsoleLevel, type CdpFrameMeta, type ConsoleLine } from '@/engine/screencast-codec'
 
 // Hosts a localhost WebSocket that streams live JPEG frames from `page` (via CDP
 // Page.startScreencast) to a connected webview, and replays input events the
@@ -10,6 +10,12 @@ export class ScreencastServer {
     private wss: WebSocketServer
     readonly port: number
     private clients = new Set<WebSocket>()
+    // Full console history since the server started — buffered so a webview that
+    // connects AFTER the page loaded (the common case: connect happens post-login)
+    // still gets the early lines (e.g. the on-load Clerk warning), replayed on
+    // connect. Capped so a chatty page can't grow it unbounded.
+    private consoleHistory: ConsoleLine[] = []
+    private static CONSOLE_HISTORY_CAP = 1000
 
     private constructor(wss: WebSocketServer, port: number) {
         this.wss = wss
@@ -23,8 +29,24 @@ export class ScreencastServer {
         const addr = wss.address()
         const port = typeof addr === 'object' && addr ? addr.port : 0
         const server = new ScreencastServer(wss, port)
+        server.wireConsole(page)
         server.wire(page)
         return server
+    }
+
+    // Attach the page console listeners ONCE, at start() time (i.e. as soon as the
+    // page exists), rather than per-connection — so lines emitted before any
+    // webview connects are captured into history and replayed on connect. Live
+    // lines broadcast to every currently-connected client.
+    private wireConsole(page: Page) {
+        const record = (line: ConsoleLine) => {
+            this.consoleHistory.push(line)
+            if (this.consoleHistory.length > ScreencastServer.CONSOLE_HISTORY_CAP) this.consoleHistory.shift()
+            const msg = consoleMessage(line)
+            for (const c of this.clients) if (c.readyState === c.OPEN) c.send(msg)
+        }
+        page.on('console', (msg: PwConsoleMessage) => record({ level: mapConsoleLevel(msg.type()), text: msg.text(), at: Date.now(), url: msg.location()?.url }))
+        page.on('pageerror', (err: Error) => record({ level: 'error', text: String(err?.stack || err), at: Date.now() }))
     }
 
     private wire(page: Page) {
@@ -43,6 +65,13 @@ export class ScreencastServer {
             }
             page.on('framenavigated', onNav)
             socket.on('close', () => page.off('framenavigated', onNav))
+
+            // Replay the console history captured since the page loaded, so a
+            // webview that connects after load still sees the early lines. Live
+            // lines arrive via wireConsole()'s broadcast (attached at start()).
+            for (const line of this.consoleHistory) {
+                if (socket.readyState === socket.OPEN) socket.send(consoleMessage(line))
+            }
 
             const cdp = await page.context().newCDPSession(page)
 

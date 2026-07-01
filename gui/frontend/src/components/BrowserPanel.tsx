@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { connectScreencast, type InputEvent, type MouseButton } from '../lib/screencast'
+import { connectScreencast, type InputEvent, type MouseButton, type ConsoleLine } from '../lib/screencast'
 
 const BUTTON: Record<number, MouseButton> = { 0: 'left', 1: 'middle', 2: 'right' }
 
@@ -7,13 +7,25 @@ const BUTTON: Record<number, MouseButton> = { 0: 'left', 1: 'middle', 2: 'right'
 // (when interactive) forwards mouse/keyboard back to the real Chromium.
 // Coordinates are mapped from the canvas's displayed size to the frame's device
 // pixels. ONE WebSocket per mount, shared by frames + input.
-export function BrowserPanel({ port, interactive = true, onUrl }: { port: number; interactive?: boolean; onUrl?: (url: string) => void }) {
+export function BrowserPanel({
+    port,
+    interactive = true,
+    onUrl,
+    onConsole,
+}: {
+    port: number
+    interactive?: boolean
+    onUrl?: (url: string) => void
+    onConsole?: (line: ConsoleLine) => void
+}) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const frameSize = useRef({ w: 1280, h: 720 })
     const clientRef = useRef<ReturnType<typeof connectScreencast> | null>(null)
-    // Held in a ref so a changing onUrl callback doesn't tear down the socket.
+    // Held in refs so a changing callback doesn't tear down the socket.
     const onUrlRef = useRef(onUrl)
     onUrlRef.current = onUrl
+    const onConsoleRef = useRef(onConsole)
+    onConsoleRef.current = onConsole
 
     useEffect(() => {
         const client = connectScreencast(port)
@@ -31,6 +43,9 @@ export function BrowserPanel({ port, interactive = true, onUrl }: { port: number
 
         // Surface the live page's URL (on connect + each navigation) to the parent.
         client.onUrl((url) => onUrlRef.current?.(url))
+
+        // Surface each live console line to the parent (accumulated in RunScreen).
+        client.onConsole((line) => onConsoleRef.current?.(line))
 
         // Mirror the real page's cursor onto the canvas (engine samples it on
         // move). Non-interactive views never send moves, so this stays quiet.

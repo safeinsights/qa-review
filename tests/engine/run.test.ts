@@ -30,10 +30,13 @@ function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {
         openBrowser: vi.fn(async () => ({
             // Minimal fake page: ctx.loginAs() clears the context + web storage
             // before re-authenticating, so expose context().clearCookies + evaluate.
+            // on/off are no-op stubs so the console-capture listeners attach.
             page: {
                 context: () => ({ clearCookies: vi.fn(async () => {}) }),
                 evaluate: vi.fn(async () => {}),
                 url: () => 'https://app.qa.safeinsights.org/',
+                on: vi.fn(),
+                off: vi.fn(),
             } as never,
             cookieHeader: 'sid=abc',
             close: vi.fn(async () => {}),
@@ -56,6 +59,44 @@ describe('runEngine', () => {
         expect(result.ok).toBe(true)
         expect(d.runCleanup).toHaveBeenCalledOnce()
         expect(fs.existsSync(path.join(result.bundleDir, 'summary.json'))).toBe(true)
+    })
+
+    it('attaches the console captured DURING a step to that step event', async () => {
+        // Capture the page.on('console') handler the engine registers, then fire a
+        // synthetic console message from inside the step so it lands in the buffer
+        // that ctx.step drains onto the resolving event.
+        let consoleHandler: ((msg: unknown) => void) | undefined
+        const d = deps({
+            openBrowser: vi.fn(async () => ({
+                page: {
+                    context: () => ({ clearCookies: vi.fn(async () => {}) }),
+                    evaluate: vi.fn(async () => {}),
+                    url: () => 'https://app.qa.safeinsights.org/',
+                    on: vi.fn((event: string, handler: (msg: unknown) => void) => {
+                        if (event === 'console') consoleHandler = handler
+                    }),
+                    off: vi.fn(),
+                } as never,
+                cookieHeader: 'sid=abc',
+                close: vi.fn(async () => {}),
+            })),
+        })
+        const suite: Suite = {
+            name: 'demo', description: '', roles: ['admin'],
+            steps: [{
+                name: 'logs',
+                run: async (ctx) => {
+                    await ctx.step('logs', async () => {
+                        // Simulate a Playwright ConsoleMessage during the step.
+                        consoleHandler?.({ type: () => 'error', text: () => 'kaboom', location: () => ({ url: 'x.js' }) })
+                    })
+                },
+            }],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        const step = result.steps.find((s) => s.name === 'logs' && s.status === 'passed')
+        expect(step?.console).toBeDefined()
+        expect(step?.console?.[0]).toMatchObject({ level: 'error', text: 'kaboom', url: 'x.js' })
     })
 
     it('categorizes a thrown assertion as app-assertion and STILL runs cleanup', async () => {

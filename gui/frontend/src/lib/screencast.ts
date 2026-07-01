@@ -1,6 +1,16 @@
 // ws client for the live browser view. Frames arrive as BINARY messages (raw
 // JPEG bytes); input goes out as JSON text. Input-event shapes mirror the
 // engine's screencast-codec (kept in sync by hand — small + stable).
+// One captured browser-console line (mirrors the engine's ConsoleLine in
+// src/engine/screencast-codec.ts — kept in sync by hand).
+export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug'
+export interface ConsoleLine {
+    level: ConsoleLevel
+    text: string
+    at: number
+    url?: string
+}
+
 export type MouseButton = 'left' | 'right' | 'middle' | 'none'
 export type InputEvent =
     | { kind: 'mouse'; action: 'down' | 'up' | 'move' | 'wheel'; x: number; y: number; button: MouseButton; deltaX?: number; deltaY?: number }
@@ -23,6 +33,8 @@ export interface ScreencastClient {
     // Called with text the remote page copied (reply to a 'clipboard-read'
     // send), so the caller can mirror it into the OS clipboard.
     onClipboard(cb: (value: string) => void): void
+    // Called with each live console line the page emits (console.* + page errors).
+    onConsole(cb: (line: ConsoleLine) => void): void
     send(ev: InputEvent): void
     close(): void
 }
@@ -34,15 +46,17 @@ export function connectScreencast(port: number): ScreencastClient {
     let cursorCb: ((value: string) => void) | null = null
     let urlCb: ((value: string) => void) | null = null
     let clipboardCb: ((value: string) => void) | null = null
+    let consoleCb: ((line: ConsoleLine) => void) | null = null
     ws.onmessage = async (e) => {
-        // Text messages are control JSON (cursor / url / clipboard updates);
-        // binary messages are JPEG frames.
+        // Text messages are control JSON (cursor / url / clipboard / console
+        // updates); binary messages are JPEG frames.
         if (typeof e.data === 'string') {
             try {
                 const msg = JSON.parse(e.data)
                 if (msg?.type === 'cursor' && typeof msg.value === 'string') cursorCb?.(msg.value)
                 else if (msg?.type === 'url' && typeof msg.value === 'string') urlCb?.(msg.value)
                 else if (msg?.type === 'clipboard' && typeof msg.value === 'string') clipboardCb?.(msg.value)
+                else if (msg?.type === 'console' && msg.line && typeof msg.line.text === 'string') consoleCb?.(msg.line as ConsoleLine)
             } catch {
                 /* ignore malformed control message */
             }
@@ -70,6 +84,9 @@ export function connectScreencast(port: number): ScreencastClient {
         },
         onClipboard(cb) {
             clipboardCb = cb
+        },
+        onConsole(cb) {
+            consoleCb = cb
         },
         send(ev) {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(ev))

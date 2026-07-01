@@ -60,6 +60,50 @@ export function clipboardMessage(value: string): string {
     return JSON.stringify({ type: 'clipboard', value } satisfies ClipboardMessage)
 }
 
+// One captured browser-console entry — a console.* call or an uncaught page
+// error. Shared shape used both for the live stream (ConsoleMessage below) and
+// for per-step capture in the run bundle (StepEvent.console). Kept in sync with
+// the frontend copy in gui/frontend/src/lib/screencast.ts by hand.
+export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug'
+export interface ConsoleLine {
+    level: ConsoleLevel
+    text: string
+    at: number // epoch ms
+    url?: string // source location, best-effort
+}
+
+// Collapse Playwright's console message types (log|info|warning|error|debug|
+// trace|dir|table|…) into our five levels. Unknown types fall back to 'log'.
+export function mapConsoleLevel(type: string): ConsoleLevel {
+    switch (type) {
+        case 'error':
+        case 'warn':
+        case 'info':
+        case 'debug':
+        case 'log':
+            return type
+        case 'warning':
+            return 'warn'
+        case 'trace':
+            return 'debug'
+        default:
+            return 'log'
+    }
+}
+
+// Outbound engine→webview message carrying one live console line, so the webview
+// can show the page's console beneath the live browser. Same JSON text channel
+// as cursor/url/clipboard.
+export interface ConsoleMessage {
+    type: 'console'
+    line: ConsoleLine
+}
+
+// Serialize a console line for the ws text channel.
+export function consoleMessage(line: ConsoleLine): string {
+    return JSON.stringify({ type: 'console', line } satisfies ConsoleMessage)
+}
+
 export type MouseButton = 'left' | 'right' | 'middle' | 'none'
 
 export type InputEvent =

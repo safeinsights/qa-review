@@ -1,3 +1,9 @@
+import type { ConsoleLine } from '@/engine/screencast-codec'
+
+// One captured browser-console line (re-exported so run/recorder/GUI import it
+// from types; defined in screencast-codec as the single source of truth).
+export type { ConsoleLine } from '@/engine/screencast-codec'
+
 // The role accounts each environment provides. Must match config + .env keys.
 export type Role = 'admin' | 'researcher' | 'reviewer'
 
@@ -19,6 +25,7 @@ export interface StepEvent {
     at: number // epoch ms
     screenshot?: string // path relative to the run bundle, set when captured
     url?: string // the page's top-frame URL when the step resolved
+    console?: ConsoleLine[] // console output emitted DURING this step
     error?: string
 }
 
