@@ -336,6 +336,10 @@ func composeCompanionPrompt(suite string) string {
 // companionClaudeArgs builds the claude flags for the run companion. Same scoped
 // allowlist as authoring (browser MCP + qar + file edit under the repo); the MCP
 // config points chrome-devtools-mcp at the RUN's CDP port.
+// NOTE: intentionally reuses authoringAllowedTools (same capability surface —
+// edits suites + drives the browser). It includes `qar run`, but the
+// qa-run-companion skill tells the companion not to self-run; that guardrail is
+// prose in the skill, not the allowlist.
 func companionClaudeArgs(mcpPath, repo string) []string {
 	return []string{
 		"--permission-mode", "default",
@@ -360,7 +364,8 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) error {
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 
-	if err := a.pty.start(a, repoDir(), withGuiPath(), companionClaudeArgs(mcpPath, repoDir())); err != nil {
+	repo := repoDir()
+	if err := a.pty.start(a, repo, withGuiPath(), companionClaudeArgs(mcpPath, repo)); err != nil {
 		a.StopSession()
 		return err
 	}
