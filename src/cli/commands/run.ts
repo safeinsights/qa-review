@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, renameSync } from 'node:fs'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { runEngine, defaultDeps } from '@/engine/run'
 import { runStatePath } from '@/engine/paths'
@@ -119,15 +119,28 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // Persist the live run-state to <bundleDir>/run-state.json so the run companion
     // (Claude) can read the run's progress at a pause/error and after it finishes.
     let bundleDirForState: string | undefined
+    let runStateWriteWarned = false
     const onBundleDir = (dir: string) => {
         bundleDirForState = dir
     }
     const onRunState = (state: RunState) => {
         if (!bundleDirForState) return
+        const target = runStatePath(bundleDirForState)
         try {
-            writeFileSync(runStatePath(bundleDirForState), JSON.stringify(state, null, 2))
-        } catch {
-            /* best-effort: persisting run-state must never fail the run */
+            // Write to a temp file in the SAME directory, then rename over the
+            // target — an atomic swap on the same filesystem — so the run companion
+            // never observes a half-written (truncated) run-state.json.
+            const tmp = target + '.tmp'
+            writeFileSync(tmp, JSON.stringify(state, null, 2))
+            renameSync(tmp, target)
+        } catch (e) {
+            // best-effort: persisting run-state must never fail the run. Warn ONCE
+            // (to stderr, which the GUI folds into stdout and ignores as non-JSON) so
+            // a persistent failure is debuggable without spamming per step.
+            if (!runStateWriteWarned) {
+                runStateWriteWarned = true
+                process.stderr.write(`[qar] could not write run-state.json: ${String(e)}\n`)
+            }
         }
     }
 
