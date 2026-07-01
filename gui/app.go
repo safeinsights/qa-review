@@ -484,6 +484,15 @@ func (a *App) StopSession() {
 func (a *App) StopSessionIfOwner(token string) {
 	a.sessionMu.Lock()
 	owns := token != "" && token == a.sessionToken
+	if owns {
+		// Claim the slot under the SAME lock that decided ownership, closing the
+		// check-then-act gap: a concurrent StopSessionIfOwner with our token now
+		// sees "" and won't double-fire, and a concurrent Start (which calls
+		// teardownSession + mints a fresh token) is unaffected. teardownSession
+		// itself re-acquires sessionMu, so we must NOT hold the lock across
+		// StopSession() below — release it first.
+		a.sessionToken = ""
+	}
 	a.sessionMu.Unlock()
 	if !owns {
 		return // stale caller — a newer session owns the slot (or nothing does)
