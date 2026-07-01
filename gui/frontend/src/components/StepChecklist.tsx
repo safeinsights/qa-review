@@ -1,4 +1,4 @@
-import type { StepEnvelope } from '../lib/stepStream'
+import { stepsByIndex, type StepEnvelope } from '../lib/stepStream'
 
 // Render the ordered step list. Rows come from the suite's STATIC step names, so
 // the list appears before a run — click a not-yet-run row to toggle a "pause
@@ -27,16 +27,17 @@ export function StepChecklist({
     selectedIndex: number | null
     onSelect: (index: number, step: StepEnvelope) => void
 }) {
-    // Last runtime event per name (a 'running' entry is superseded when it resolves).
-    const byName = new Map<string, StepEnvelope>()
-    for (const s of steps) byName.set(s.name, s)
+    // One event per executed position, in order (see stepsByIndex). Positional —
+    // NOT keyed by name — so a suite with repeated step names (study-happy-path's
+    // account switches) doesn't light up every same-named row when one passes.
+    const byIndex = stepsByIndex(steps)
 
-    // Prefer the static list; before a suite is picked (exploratory mode) fall back
-    // to whatever runtime steps have streamed so the log still shows something.
+    // Prefer the static list, matching runtime events to rows BY POSITION; before a
+    // suite is picked (exploratory mode) fall back to the streamed events directly.
     const rows: { name: string; ev?: StepEnvelope }[] =
         stepNames.length > 0
-            ? stepNames.map((name) => ({ name, ev: byName.get(name) }))
-            : [...byName.values()].map((ev) => ({ name: ev.name, ev }))
+            ? stepNames.map((name, i) => ({ name, ev: byIndex[i] }))
+            : byIndex.map((ev) => ({ name: ev.name, ev }))
 
     if (rows.length === 0) return null
 
