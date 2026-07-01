@@ -1073,6 +1073,9 @@ func doctorMarkdown(checks []DoctorCheck) string {
 		if !c.OK && strings.TrimSpace(c.Hint) != "" {
 			b.WriteString("  - hint: " + strings.TrimSpace(c.Hint) + "\n")
 		}
+		if !c.OK && strings.TrimSpace(c.DocURL) != "" {
+			b.WriteString("  - download: " + strings.TrimSpace(c.DocURL) + "\n")
+		}
 	}
 	return b.String()
 }
@@ -1083,6 +1086,7 @@ type DoctorCheck struct {
 	OK     bool   `json:"ok"`     // passed?
 	Detail string `json:"detail"` // version / "authenticated" on success; the error on failure
 	Hint   string `json:"hint"`   // remediation shown when !OK
+	DocURL string `json:"docURL"` // download/install page for the tool, shown as a link when !OK
 }
 
 // runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
@@ -1103,19 +1107,19 @@ func (a *App) RunDoctor() []DoctorCheck {
 	checks := []DoctorCheck{}
 
 	// Required CLIs (presence + version).
-	for _, t := range []struct{ label, bin, flag, hint string }{
-		{"git", "git", "--version", "Install git (e.g. xcode-select --install or Homebrew)."},
-		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh"},
-		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH."},
-		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node"},
+	for _, t := range []struct{ label, bin, flag, hint, docURL string }{
+		{"git", "git", "--version", "Install git (e.g. xcode-select --install or Homebrew).", "https://git-scm.com/downloads"},
+		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh", "https://cli.github.com/"},
+		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH.", "https://docs.anthropic.com/en/docs/claude-code/setup"},
+		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node", "https://nodejs.org/en/download"},
 	} {
 		if !toolOnPath(t.bin) {
-			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint})
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint, DocURL: t.docURL})
 			continue
 		}
 		ver, err := runTool(t.bin, t.flag)
 		if err != nil {
-			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint})
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint, DocURL: t.docURL})
 			continue
 		}
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
@@ -1135,7 +1139,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 	if chromeInstalled() {
 		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: true, Detail: "installed"})
 	} else {
-		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: false, Detail: "not found in /Applications", Hint: "Install Google Chrome — the runner drives it for tests."})
+		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: false, Detail: "not found in /Applications", Hint: "Install Google Chrome — the runner drives it for tests.", DocURL: "https://www.google.com/chrome/"})
 	}
 
 	// The cloned qa-review repo (suites + config live here).
