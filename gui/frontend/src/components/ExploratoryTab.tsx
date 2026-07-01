@@ -4,7 +4,7 @@ import { useViewportSize } from '@mantine/hooks'
 import { Terminal } from './Terminal'
 import { BrowserPanel } from './BrowserPanel'
 import { SaveSuitePanel } from './SaveSuitePanel'
-import { startAuthoringSession, stopSession, onSessionReady, onSessionEnded, onSessionLog } from '../lib/ipc'
+import { startAuthoringSession, stopSession, stopSessionIfOwner, onSessionReady, onSessionEnded, onSessionLog } from '../lib/ipc'
 
 const ENVS = ['qa', 'staging']
 const ROLES = ['admin', 'researcher', 'reviewer']
@@ -24,6 +24,10 @@ export function ExploratoryTab() {
     const [error, setError] = useState('')
     const { width } = useViewportSize() // re-renders on resize → responsive split
     const logBuf = useRef('')
+    // The token for THIS tab's active session, captured from startAuthoringSession.
+    // On unmount we only tear down if we still own the active session (the run
+    // companion may have since taken over the shared PTY slot).
+    const sessionToken = useRef<string | null>(null)
 
     // Session events. Mounted once; listeners persist across the tab's life.
     useEffect(() => {
@@ -48,8 +52,10 @@ export function ExploratoryTab() {
             unReady?.()
             unEnded?.()
             unLog?.()
-            // Tearing down the tab stops any live session (no orphan browser/claude).
-            void stopSession()
+            // Tearing down the tab stops any live session (no orphan browser/claude)
+            // — but ONLY if we still own it, so a stale unmount can't kill the run
+            // companion's session running in the other tab.
+            if (sessionToken.current) void stopSessionIfOwner(sessionToken.current)
         }
     }, [])
 
@@ -58,7 +64,7 @@ export function ExploratoryTab() {
         setStarting(true)
         setActive(true)
         try {
-            await startAuthoringSession(env, pr, role, instruction)
+            sessionToken.current = await startAuthoringSession(env, pr, role, instruction)
         } catch (e) {
             setError(String(e) + (logBuf.current ? `\n${logBuf.current}` : ''))
             setActive(false)
@@ -67,7 +73,9 @@ export function ExploratoryTab() {
     }
 
     const stop = async () => {
+        // Explicit user action on the active session — unconditional stop.
         await stopSession()
+        sessionToken.current = null
         setActive(false)
         setScreencastPort(null)
     }

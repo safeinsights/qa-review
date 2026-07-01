@@ -64,6 +64,13 @@ type App struct {
 	sessionCmd     *exec.Cmd
 	sessionMcpPath string
 	pty            ptySession
+	// sessionToken identifies the CURRENTLY-active session (authoring or companion).
+	// Both React tabs stay mounted and share the single PTY slot, so a STALE tab's
+	// unmount teardown must not kill a LIVE session started by the other tab. Each
+	// start mints a new token (via sessionSeq) and returns it; the frontend-triggered
+	// teardown (StopSessionIfOwner) only proceeds if the caller still owns this token.
+	sessionToken string
+	sessionSeq   int
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -74,6 +81,19 @@ type App struct {
 
 func NewApp() *App {
 	return &App{}
+}
+
+// newSessionToken mints a fresh, unique active-session token and installs it as
+// the active one, under sessionMu. The monotonic counter makes it deterministic
+// (no time/random). `prefix` is "authoring" or "companion" for legibility. Called
+// when a session starts — the new token becomes active, so any prior owner's later
+// StopSessionIfOwner(oldToken) is a correct no-op.
+func (a *App) newSessionToken(prefix string) string {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	a.sessionSeq++
+	a.sessionToken = fmt.Sprintf("%s-%d", prefix, a.sessionSeq)
+	return a.sessionToken
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -205,8 +225,11 @@ var authoringAllowedTools = []string{
 //     instruction as claude's first input.
 //
 // One session at a time: starting a new one stops the old.
-func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
+func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, error) {
 	a.teardownSession() // clean slate, silently (don't flip the UI we're about to show)
+	// Mint the active token AFTER the eviction above, so any prior session's owner
+	// no longer holds the active token (their later StopSessionIfOwner is a no-op).
+	token := a.newSessionToken("authoring")
 
 	// 1. Start the engine session.
 	args := []string{"session", "--role", role}
@@ -218,12 +241,12 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
 	cmd := engineCmd(args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return "", err
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		a.emitSpawnFailure("qar session", err)
-		return err
+		return "", err
 	}
 	a.sessionMu.Lock()
 	a.sessionCmd = cmd
@@ -272,17 +295,17 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
 		if out == "" {
 			out = fmt.Sprintf("the engine exited (%v) before the browser was ready", err)
 		}
-		return fmt.Errorf("could not start the session:\n%s", out)
+		return "", fmt.Errorf("could not start the session:\n%s", out)
 	case <-time.After(90 * time.Second):
 		a.teardownSession()
-		return fmt.Errorf("timed out waiting for the browser session to start")
+		return "", fmt.Errorf("timed out waiting for the browser session to start")
 	}
 
 	// 3. Per-session MCP config + announce the live browser to the GUI.
 	mcpPath, err := writeSessionMcpConfig(info.CdpPort)
 	if err != nil {
 		a.StopSession()
-		return err
+		return "", err
 	}
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
@@ -298,7 +321,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
 	}
 	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
 		a.StopSession()
-		return err
+		return "", err
 	}
 
 	// Send the opening instruction once claude's TUI is up (small delay so the
@@ -308,7 +331,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) error {
 		time.Sleep(2 * time.Second)
 		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
 	}()
-	return nil
+	return token, nil
 }
 
 // composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
@@ -352,13 +375,16 @@ func companionClaudeArgs(mcpPath, repo string) []string {
 // StartRunCompanion (bound) lazily spawns the run companion against an
 // already-running run's browser. cdpPort is the run browser's CDP port (from the
 // screencast envelope, forwarded by the React run screen). One companion at a time.
-func (a *App) StartRunCompanion(cdpPort int, suite string) error {
+func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
 	// Reuse the session teardown so a prior companion/authoring PTY is cleared.
 	a.teardownSession()
+	// Mint the active token AFTER the eviction, so any prior session's owner no
+	// longer holds the active token (their later StopSessionIfOwner is a no-op).
+	token := a.newSessionToken("companion")
 
 	mcpPath, err := writeSessionMcpConfig(cdpPort)
 	if err != nil {
-		return err
+		return "", err
 	}
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
@@ -367,13 +393,13 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) error {
 	repo := repoDir()
 	if err := a.pty.start(a, repo, withGuiPath(), companionClaudeArgs(mcpPath, repo)); err != nil {
 		a.StopSession()
-		return err
+		return "", err
 	}
 	go func() {
 		time.Sleep(2 * time.Second)
 		_ = a.submitToPty(composeCompanionPrompt(suite))
 	}()
-	return nil
+	return token, nil
 }
 
 // WriteToPty forwards base64-encoded keystrokes from the xterm terminal to claude.
@@ -421,6 +447,10 @@ func (a *App) teardownSession() bool {
 	mcpPath := a.sessionMcpPath
 	a.sessionCmd = nil
 	a.sessionMcpPath = ""
+	// Clear the active token: the session occupying the slot is gone. A new Start
+	// mints a fresh token immediately after calling teardownSession, so the eviction
+	// leaves no active owner in between.
+	a.sessionToken = ""
 	a.sessionMu.Unlock()
 
 	if cmd != nil {
@@ -444,6 +474,21 @@ func (a *App) StopSession() {
 	if a.teardownSession() {
 		runtime.EventsEmit(a.ctx, "session-ended")
 	}
+}
+
+// StopSessionIfOwner (bound) is the FRONTEND-triggered teardown path. Both the
+// authoring and companion React tabs stay mounted and share the single PTY slot,
+// so a STALE tab's unmount must not kill a LIVE session the other tab started.
+// The caller passes the token it received from Start*; we tear down ONLY if that
+// token still owns the active session. A mismatch (a superseded owner) is a no-op.
+func (a *App) StopSessionIfOwner(token string) {
+	a.sessionMu.Lock()
+	owns := token != "" && token == a.sessionToken
+	a.sessionMu.Unlock()
+	if !owns {
+		return // stale caller — a newer session owns the slot (or nothing does)
+	}
+	a.StopSession()
 }
 
 // ErrRunInProgress is returned by RunEngine/RunProcess when a tracked run is
