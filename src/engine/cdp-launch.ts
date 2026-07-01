@@ -34,8 +34,9 @@ export async function launchChromeWithCdp(
     let lastErr: unknown
     for (let attempt = 0; attempt < 2; attempt++) {
         const cdpPort = await freePort()
+        let browser: Browser | undefined
         try {
-            const browser = await chromium.launch({
+            browser = await chromium.launch({
                 channel: 'chrome',
                 args: [`--remote-debugging-port=${cdpPort}`],
             })
@@ -43,8 +44,11 @@ export async function launchChromeWithCdp(
             const page = await context.newPage()
             return { browser, context, page, cdpPort }
         } catch (e) {
+            // A partial launch (context/page failed after the browser started)
+            // would orphan a Chrome process — close it before retrying/throwing.
+            await browser?.close().catch(() => {})
             lastErr = e
         }
     }
-    throw lastErr
+    throw lastErr ?? new Error('launchChromeWithCdp: exhausted retries')
 }
