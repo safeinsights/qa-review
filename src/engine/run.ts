@@ -5,7 +5,8 @@ import { Recorder } from '@/engine/recorder'
 import { CleanupClient } from '@/engine/cleanup'
 import { getSuite } from '@/engine/suite-registry'
 import { loginAs, AuthError } from '@/engine/auth'
-import type { RunRequest, RunResult, StepEvent, FailureCategory, ConsoleLine } from '@/engine/types'
+import type { RunRequest, RunResult, RunState, StepEvent, FailureCategory, ConsoleLine } from '@/engine/types'
+import { buildRunState } from '@/engine/run-state'
 import { mapConsoleLevel } from '@/engine/screencast-codec'
 import type { Suite, RunContext } from '@/suites/types'
 
@@ -40,6 +41,12 @@ export interface RunDeps {
     // Called once with the live Playwright page just after it's created, so a
     // caller (the CLI --screencast mode) can attach a screencast to it.
     onPage?: (page: import('@playwright/test').Page) => void | Promise<void>
+    // Called ONCE with the run's bundle dir, right after the recorder is created
+    // (before any step) — so a live consumer knows where to write run-state.json.
+    onBundleDir?: (dir: string) => void
+    // Called with the accumulated snapshot after each step event AND once with the
+    // final result. The CLI persists it to <bundleDir>/run-state.json.
+    onRunState?: (state: RunState) => void
     // Pause-before-step control (the CLI wires these to a stdin control channel).
     // Consulted before each step: if shouldPause returns true, onPaused fires and
     // the run blocks on waitForResume until the user resumes. All optional so a
@@ -72,8 +79,12 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         (e) => {
             events.push(e)
             deps.onStep?.(e)
+            deps.onRunState?.(buildRunState(events))
         },
     )
+    // Emit the bundle dir before any step so a live consumer knows where to
+    // write run-state.json (recorder.bundleDir is ready right after construction).
+    deps.onBundleDir?.(recorder.bundleDir)
 
     const cleanup = new CleanupClient(env.baseURL, '')
     const tag = `qa-${suite.name}-${startedAt}`
@@ -237,7 +248,11 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     // (leftover test data may remain) without marking the test itself as failed.
     if (ok && !cleanupResult.ok) failureCategory = 'cleanup'
 
-    return recorder.finish({ ok, failureCategory, cleanup: cleanupResult })
+    const result = recorder.finish({ ok, failureCategory, cleanup: cleanupResult })
+    // Final snapshot carrying the result (running=false) — the last write the
+    // CLI persists to run-state.json.
+    deps.onRunState?.(buildRunState(events, result))
+    return result
 }
 
 // --- Production default deps ---

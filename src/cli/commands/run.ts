@@ -1,10 +1,12 @@
+import { writeFileSync } from 'node:fs'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { runEngine, defaultDeps } from '@/engine/run'
+import { runStatePath } from '@/engine/paths'
 import { headedDeps } from '@/engine/run-headed'
 import { stepLine, resultLine, screencastLine, pausedLine, parseControlLine } from '@/cli/step-stream'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
-import type { Role, StepEvent } from '@/engine/types'
+import type { Role, StepEvent, RunState } from '@/engine/types'
 import type { Page } from '@playwright/test'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
@@ -114,7 +116,22 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         runCdpPort = handle.cdpPort ?? 0
         return handle
     }
-    const deps = { ...base, openBrowser: wrappedOpenBrowser, onPage, ...controlDeps }
+    // Persist the live run-state to <bundleDir>/run-state.json so the run companion
+    // (Claude) can read the run's progress at a pause/error and after it finishes.
+    let bundleDirForState: string | undefined
+    const onBundleDir = (dir: string) => {
+        bundleDirForState = dir
+    }
+    const onRunState = (state: RunState) => {
+        if (!bundleDirForState) return
+        try {
+            writeFileSync(runStatePath(bundleDirForState), JSON.stringify(state, null, 2))
+        } catch {
+            /* best-effort: persisting run-state must never fail the run */
+        }
+    }
+
+    const deps = { ...base, openBrowser: wrappedOpenBrowser, onBundleDir, onRunState, onPage, ...controlDeps }
 
     try {
         const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)

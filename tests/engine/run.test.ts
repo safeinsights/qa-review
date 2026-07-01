@@ -244,6 +244,22 @@ describe('runEngine', () => {
         expect(seenPort).toBe(54321)
     })
 
+    it('emits onBundleDir before steps and onRunState with a final result', async () => {
+        const seen: string[] = []
+        let finalRunning: boolean | undefined
+        const d = deps({
+            onBundleDir: () => seen.push('bundle'),
+            onStep: () => seen.push('step'),
+            onRunState: (s) => {
+                finalRunning = s.running
+            },
+        })
+        await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(seen[0]).toBe('bundle') // bundle dir known before any step
+        expect(seen).toContain('step')
+        expect(finalRunning).toBe(false) // last onRunState has the result
+    })
+
     it('runs straight through when shouldPause returns false', async () => {
         const onPaused = vi.fn()
         const d = deps({ shouldPause: () => false, onPaused, waitForResume: async () => {} })

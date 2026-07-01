@@ -80,6 +80,17 @@ export interface RunResult {
     finishedAt: number
 }
 
+// A JSON snapshot of a run in progress OR finished, persisted to
+// <bundleDir>/run-state.json so the run companion (Claude) can read it.
+export interface RunState {
+    // One entry per executed position, latest status (running collapsed into passed/failed).
+    steps: StepEvent[]
+    // Present once the run has finished.
+    result?: RunResult
+    // True while the run is still going (no result yet).
+    running: boolean
+}
+
 // Resolved, secret-filled environment config handed to a run.
 export interface EnvConfig {
     name: string
