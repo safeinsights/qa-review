@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { discoverSuites } from '@/suites/discover'
 import type { Suite } from '@/suites/types'
 
-const fakeSuiteA: Suite = { name: 'a', description: 'A', roles: ['admin'], run: async () => {} }
-const fakeSuiteB: Suite = { name: 'b', description: 'B', roles: ['admin'], run: async () => {} }
+const fakeSuiteA: Suite = { name: 'a', description: 'A', roles: ['admin'], steps: [{ name: 's', run: async () => {} }] }
+const fakeSuiteB: Suite = { name: 'b', description: 'B', roles: ['admin'], steps: [{ name: 's', run: async () => {} }] }
 
 describe('discoverSuites', () => {
     it('collects exported objects that match the Suite shape', async () => {

@@ -40,12 +40,22 @@ func defaultRepoDir() string {
 
 func repoDir() string {
 	// QAR_REPO_DIR is the same override the engine reads (see src/engine/paths.ts),
-	// so Go and the bundled engine agree on the repo location. Also lets tests point
-	// at a temp dir.
+	// so Go and the bundled engine agree on the repo location. An explicit value
+	// always wins (lets an operator or tests point at any dir).
 	if override := os.Getenv("QAR_REPO_DIR"); override != "" {
 		return override
 	}
-	// A location the user picked at setup, if any.
+	// Dev mode (`wails dev`, no packaged Resources bundle): use the live dev
+	// checkout — the tree containing bin/qar.ts — as the repo. This makes the GUI
+	// read config/suites (including UNCOMMITTED suites you're editing) straight
+	// from your working tree, so `wails dev` never needs a commit+push+Sync round
+	// trip. The packaged .app has Resources, so it skips this and uses the clone.
+	if resourcesDir() == "" {
+		if src := devSourceRepo(); src != "" {
+			return src
+		}
+	}
+	// Packaged app: a location the user picked at setup, if any.
 	if data, err := os.ReadFile(repoLocationFile()); err == nil {
 		if p := strings.TrimSpace(string(data)); p != "" {
 			return p

@@ -32,8 +32,16 @@ async function allSuites(): Promise<Suite[]> {
     return cache
 }
 
-export async function listSuites(): Promise<{ name: string; description: string; roles: string[] }[]> {
-    return (await allSuites()).map((s) => ({ name: s.name, description: s.description, roles: s.roles }))
+export async function listSuites(): Promise<
+    { name: string; description: string; roles: string[]; steps: string[] }[]
+> {
+    return (await allSuites()).map((s) => ({
+        name: s.name,
+        description: s.description,
+        roles: s.roles,
+        // Static step names — the GUI shows these before a run (no execution needed).
+        steps: s.steps.map((st) => st.name),
+    }))
 }
 
 export async function getSuite(name: string): Promise<Suite> {

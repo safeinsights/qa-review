@@ -74,8 +74,28 @@ export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?
         throw new AuthError(`Could not log in as ${role} on ${env.name}: ${(cause as Error).message}`)
     }
 
-    const cookies = await page.context().cookies()
-    return cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+    // Return a Clerk SESSION JWT for the QA cleanup client (it calls the
+    // /api/qa endpoints with `Authorization: Bearer <jwt>`). Best-effort: if
+    // Clerk isn't ready or has no session token, return '' so cleanup simply
+    // fails gracefully rather than blocking the run.
+    return await getClerkToken(page)
+}
+
+// Read a fresh Clerk session token from the authenticated page. Polls briefly
+// because window.Clerk / its active session hydrate a beat after the redirect.
+async function getClerkToken(page: Page): Promise<string> {
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const token = await page
+            .evaluate(async () => {
+                const clerk = (window as unknown as { Clerk?: { session?: { getToken(opts?: unknown): Promise<string | null> } } }).Clerk
+                if (!clerk?.session) return null
+                return await clerk.session.getToken({ skipCache: true }).catch(() => null)
+            })
+            .catch(() => null)
+        if (token) return token
+        await page.waitForTimeout(500)
+    }
+    return ''
 }
 
 async function fillPin(page: Page, code: string): Promise<void> {

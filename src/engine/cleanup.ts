@@ -10,16 +10,18 @@ export interface CleanupResult {
 }
 
 // Tracks the ids a run creates and deletes them via the management-app QA
-// endpoints (PR #839). Authorization is the admin session cookie string passed
-// in; the endpoints verify isSiAdmin. Studies are deleted before users because a
-// study's owner FK references the user.
+// endpoints. Authorization is a Clerk SESSION JWT (obtained in the page via
+// Clerk.session.getToken()) sent as `Authorization: Bearer <jwt>` — the endpoints
+// verify it with verifyToken() and require isSiAdmin. (A cookie does NOT work:
+// requireQaAdmin only reads the Bearer header.) Studies are deleted before users
+// because a study's owner FK references the user.
 export class CleanupClient {
     private studies: string[] = []
     private users: string[] = []
 
     constructor(
         private baseURL: string,
-        private cookieHeader: string,
+        private authToken: string,
         private fetchImpl: FetchImpl = fetch,
     ) {}
 
@@ -37,7 +39,7 @@ export class CleanupClient {
         try {
             const res = await this.fetchImpl(`${this.baseURL}${path}`, {
                 method: 'DELETE',
-                headers: { Cookie: this.cookieHeader },
+                headers: { Authorization: `Bearer ${this.authToken}` },
             })
             return res.status
         } catch {

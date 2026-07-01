@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+func TestControlLines(t *testing.T) {
+	if got := resumeControlLine(); got != `{"type":"resume"}` {
+		t.Errorf("resumeControlLine = %q", got)
+	}
+	if got := pauseSetControlLine([]string{"A", "B"}); got != `{"type":"pause-set","steps":["A","B"]}` {
+		t.Errorf("pauseSetControlLine = %q", got)
+	}
+	if got := pauseSetControlLine(nil); got != `{"type":"pause-set","steps":null}` {
+		t.Errorf("pauseSetControlLine(nil) = %q", got)
+	}
+}
+
+func TestSendToRunNoActiveRun(t *testing.T) {
+	a := NewApp()
+	// No run in flight → runStdin is nil → SendToRun must be a safe no-op.
+	if err := a.SendToRun(resumeControlLine()); err != nil {
+		t.Errorf("SendToRun with no active run returned %v, want nil", err)
+	}
+}
+
 func TestPromoteArgsSequence(t *testing.T) {
 	got := promoteSteps("admin-invites")
 	want := [][]string{
@@ -31,6 +51,22 @@ func TestStripANSI(t *testing.T) {
 	for in, want := range cases {
 		if got := stripANSI(in); got != want {
 			t.Errorf("stripANSI(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPrefixSuite(t *testing.T) {
+	cases := []struct{ suite, name, want string }{
+		{"signin", "trace.zip", "signin-trace.zip"},
+		{"create-study", "01-dashboard.png", "create-study-01-dashboard.png"},
+		{"log in as researcher", "trace.zip", "log-in-as-researcher-trace.zip"}, // spaces collapse to dashes
+		{"weird!!name", "trace.zip", "weird-name-trace.zip"},                    // unsafe chars collapse
+		{"", "trace.zip", "trace.zip"},                                          // blank suite → name as-is
+		{"---", "trace.zip", "trace.zip"},                                       // all-unsafe → name as-is
+	}
+	for _, c := range cases {
+		if got := prefixSuite(c.suite, c.name); got != c.want {
+			t.Errorf("prefixSuite(%q, %q) = %q, want %q", c.suite, c.name, got, c.want)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
 import { readScreenshot, saveScreenshotAs } from '../lib/ipc'
+import { UrlBar } from './UrlBar'
 
 // Shows a single per-step screenshot in place of the live browser. Loads the PNG
 // bytes through the Go backend (file:// is blocked in the webview) and offers a
@@ -9,16 +10,25 @@ export function SnapshotPanel({
     bundleDir,
     rel,
     stepName,
+    stepUrl,
+    suite,
     index,
     total,
-    onBackToLive,
+    onBack,
+    backLabel,
 }: {
     bundleDir: string
     rel: string
     stepName: string
+    // The page's URL when this step resolved (undefined for older bundles).
+    stepUrl?: string
+    // Suite name — prefixed onto the saved screenshot's filename.
+    suite: string
     index: number
     total: number
-    onBackToLive: () => void
+    onBack: () => void
+    // "← Back to live" during a run, "← Back to recording" once it has finished.
+    backLabel: string
 }) {
     const [src, setSrc] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -39,7 +49,7 @@ export function SnapshotPanel({
 
     const download = async () => {
         try {
-            const path = await saveScreenshotAs(bundleDir, rel)
+            const path = await saveScreenshotAs(bundleDir, rel, suite)
             if (path) setSaved(path)
         } catch (e) {
             setSaved('Save failed: ' + String(e))
@@ -68,11 +78,19 @@ export function SnapshotPanel({
                     <Button size="compact-sm" variant="default" onClick={download} disabled={!src}>
                         ↓ Download
                     </Button>
-                    <Button size="compact-sm" color="teal" onClick={onBackToLive}>
-                        ← Back to live
+                    <Button size="compact-sm" color="teal" onClick={onBack}>
+                        {backLabel}
                     </Button>
                 </div>
             </div>
+
+            {/* The page's URL when this step resolved — sits between the header
+                controls and the screenshot. */}
+            {stepUrl ? (
+                <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--line)' }}>
+                    <UrlBar url={stepUrl} />
+                </div>
+            ) : null}
 
             {/* Fixed-height viewport matching the live browser canvas (1280×720,
                 16:9) so toggling live ↔ snapshot never resizes the pane. A
@@ -98,10 +116,12 @@ export function SnapshotPanel({
             </div>
 
             <div style={{ padding: '8px 16px', borderTop: '1px solid var(--line)', fontSize: 13 }}>
-                <span className="mono st-dim" style={{ marginRight: 8 }}>
-                    {String(index + 1).padStart(2, '0')}
-                </span>
-                {stepName}
+                <div>
+                    <span className="mono st-dim" style={{ marginRight: 8 }}>
+                        {String(index + 1).padStart(2, '0')}
+                    </span>
+                    {stepName}
+                </div>
                 {saved ? (
                     <span className="mono st-dim" style={{ display: 'block', fontSize: 11, marginTop: 4 }}>
                         {saved.startsWith('Save failed') ? saved : `saved → ${saved}`}

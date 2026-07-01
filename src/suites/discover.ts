@@ -9,7 +9,10 @@ function isSuite(value: unknown): value is Suite {
         typeof (value as Suite).name === 'string' &&
         typeof (value as Suite).description === 'string' &&
         Array.isArray((value as Suite).roles) &&
-        typeof (value as Suite).run === 'function'
+        Array.isArray((value as Suite).steps) &&
+        (value as Suite).steps.every(
+            (s) => !!s && typeof s.name === 'string' && typeof s.run === 'function',
+        )
     )
 }
 

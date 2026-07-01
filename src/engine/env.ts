@@ -1,4 +1,4 @@
-import { ENVIRONMENTS, SHARED_ACCOUNTS, prBaseUrl } from '../../config/environments'
+import { ENVIRONMENTS, SHARED_ACCOUNTS, prBaseUrl, privateKeyVar, privateKeyEnvFor } from '../../config/environments'
 import type { EnvConfig, Role } from '@/engine/types'
 
 type Vars = Record<string, string | undefined>
@@ -11,8 +11,13 @@ function read(vars: Vars, key: string): string {
 
 // Resolve the shared test accounts (email + password + per-account MFA code) used
 // by every environment (stable or PR preview). Throws clear, actionable errors so
-// a run never starts half-configured.
-function resolveSharedCredentials(vars: Vars): Pick<EnvConfig, 'accounts'> {
+// a run never starts half-configured. Email/password/MFA are shared across all
+// envs; the results-decryption private key is PER-ENV, so it's looked up for
+// `envName` (PR previews reuse the QA key). The key lookup is NON-throwing: it's
+// optional (only study-happy-path needs it), so a run that doesn't use it must
+// not fail when it's unset.
+function resolveSharedCredentials(vars: Vars, envName: string): Pick<EnvConfig, 'accounts'> {
+    const keyEnv = privateKeyEnvFor(envName)
     const accounts = {} as EnvConfig['accounts']
     for (const role of Object.keys(SHARED_ACCOUNTS) as Role[]) {
         const a = SHARED_ACCOUNTS[role]
@@ -20,6 +25,7 @@ function resolveSharedCredentials(vars: Vars): Pick<EnvConfig, 'accounts'> {
             email: read(vars, a.emailVar),
             password: read(vars, a.passwordVar),
             mfaCode: read(vars, a.mfaVar),
+            privateKey: vars[privateKeyVar(a, keyEnv)] || undefined,
         }
     }
     return { accounts }
@@ -36,7 +42,7 @@ export function resolveEnv(name: string, vars: Vars = process.env): EnvConfig {
     return {
         name: decl.name,
         baseURL: read(vars, decl.baseUrlVar),
-        ...resolveSharedCredentials(vars),
+        ...resolveSharedCredentials(vars, decl.name),
     }
 }
 
@@ -50,6 +56,7 @@ export function resolvePrEnv(prNumber: number, vars: Vars = process.env): EnvCon
     return {
         name: `pr${prNumber}`,
         baseURL: prBaseUrl(prNumber),
-        ...resolveSharedCredentials(vars),
+        // PR previews reuse the QA private key (privateKeyEnvFor maps pr* -> qa).
+        ...resolveSharedCredentials(vars, `pr${prNumber}`),
     }
 }

@@ -173,7 +173,7 @@ export function ExploratoryTab() {
                     }}
                 >
                     {screencastPort ? (
-                        <BrowserPanel port={screencastPort} interactive={false} />
+                        <BrowserPanel port={screencastPort} />
                     ) : (
                         <div style={{ aspectRatio: '16 / 10', display: 'grid', placeItems: 'center', color: 'var(--ink-faint)', fontStyle: 'italic' }}>
                             Waiting for the browser…

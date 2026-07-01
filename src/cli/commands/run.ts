@@ -1,7 +1,7 @@
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { runEngine, defaultDeps } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
-import { stepLine, resultLine, screencastLine } from '@/cli/step-stream'
+import { stepLine, resultLine, screencastLine, pausedLine, parseControlLine } from '@/cli/step-stream'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
 import type { Role, StepEvent } from '@/engine/types'
@@ -26,10 +26,81 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
           }
         : undefined
 
+    // --- Pause/resume control channel ---
+    // Pre-run pauses arrive as a launch arg (deterministic, no startup stdin race);
+    // live toggles arrive as {type:'pause-set'} on stdin. The set carries the full
+    // current selection each time, so replacing it wholesale keeps us in sync.
+    const pausedSet = new Set<string>(
+        (opts['pause-before'] ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+    )
+    // A re-armable "resume" deferred: waitForResume awaits the current promise;
+    // a {type:'resume'} control message resolves it, and we immediately re-arm for
+    // the next pause.
+    let resumeResolve: (() => void) | undefined
+    let resumePromise: Promise<void> | undefined
+    const armResume = () => {
+        resumePromise = new Promise<void>((r) => (resumeResolve = r))
+    }
+    const controlDeps = {
+        shouldPause: (name: string) => pausedSet.has(name),
+        onPaused: (name: string) => process.stdout.write(pausedLine({ name })),
+        waitForResume: async () => {
+            armResume()
+            await resumePromise
+        },
+    }
+
+    // Read NDJSON control messages from stdin. Only the `run` command opts into
+    // reading stdin, so `list`/`build-suites` (which share the Go spawn path) are
+    // unaffected — an unread stdin pipe is inert.
+    let stdinBuf = ''
+    const onStdin = (chunk: Buffer) => {
+        stdinBuf += chunk.toString('utf8')
+        let nl: number
+        while ((nl = stdinBuf.indexOf('\n')) >= 0) {
+            const line = stdinBuf.slice(0, nl)
+            stdinBuf = stdinBuf.slice(nl + 1)
+            const msg = parseControlLine(line)
+            if (!msg) continue
+            if (msg.type === 'pause-set') {
+                pausedSet.clear()
+                for (const s of msg.steps) pausedSet.add(s)
+            } else if (msg.type === 'resume') {
+                // Tolerate a resume with nothing pending (no-op).
+                resumeResolve?.()
+            }
+        }
+    }
+    process.stdin.on('data', onStdin)
+    process.stdin.resume()
+
+    // Graceful stop: the GUI's Stop button makes Go SIGTERM this process group.
+    // Handle it explicitly so a user-initiated stop exits IMMEDIATELY and cleanly
+    // — rather than letting Chromium (also in the group) die first and make the
+    // in-flight Playwright call throw "Target page... has been closed", which the
+    // run loop would otherwise report as a spurious step failure. Exit 0 (not a
+    // failure); the reader goroutine in Go sees proc-exit and returns the UI to idle.
+    let stopping = false
+    const onStop = () => {
+        if (stopping) return
+        stopping = true
+        // No result line, no failed step — this was intentional. Flush stdout and go.
+        try {
+            server?.close().catch(() => {})
+        } finally {
+            process.exit(0)
+        }
+    }
+    process.on('SIGTERM', onStop)
+    process.on('SIGINT', onStop)
+
     // Screencast IS the view, so it doesn't need a headed window. Use headed only
     // if explicitly asked AND not screencasting.
     const base = headed && !screencast ? headedDeps(onStep, vars) : { ...defaultDeps(vars), onStep }
-    const deps = { ...base, onPage }
+    const deps = { ...base, onPage, ...controlDeps }
 
     try {
         const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)
@@ -58,5 +129,11 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         if (server) await server.waitForClientThenClose(15000)
     } finally {
         await server?.close()
+        // Detach the stdin listener and unref it so an idle control channel never
+        // keeps the process alive past the run.
+        process.stdin.off('data', onStdin)
+        process.stdin.pause()
+        process.off('SIGTERM', onStop)
+        process.off('SIGINT', onStop)
     }
 }

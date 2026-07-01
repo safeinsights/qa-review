@@ -16,14 +16,25 @@ export interface RunControlsProps {
     // Suite selector is optional (Exploratory has no suite picker).
     suite?: string
     setSuite?: (v: string) => void
-    suites?: { name: string; description: string; roles: string[] }[]
+    suites?: { name: string; description: string; roles: string[]; steps: string[] }[]
     onRun: () => void
     runDisabled?: boolean
     runLabel?: string
     // When running, the action button becomes a red Stop that calls onStop.
     running?: boolean
     onStop?: () => void
+    // True after Stop is clicked, while the run tears down — disables the button
+    // and shows "Stopping…" so it doesn't look dead or invite repeat clicks.
+    stopping?: boolean
+    // When the run is halted at a paused step, the button becomes a Resume that
+    // calls onResume (takes precedence over the Stop state).
+    paused?: boolean
+    onResume?: () => void
 }
+
+// Env/PR/Suite/Role describe WHAT to run — editing them mid-run would desync the
+// controls from the run in progress, so they're locked while a run is active
+// (running or paused).
 
 // The shared editorial control bar: labeled mono fields + a teal Run button.
 // The Role is governed by the selected Suite (a suite declares which role it runs
@@ -37,6 +48,7 @@ export function RunControls(p: RunControlsProps) {
     const allowed = p.allowedRoles ?? []
     const roleOptions = allowed.length > 0 ? allowed : ALL_ROLES
     const roleFixed = allowed.length === 1
+    const fieldsLocked = !!p.running || !!p.paused
 
     return (
         <div
@@ -57,14 +69,20 @@ export function RunControls(p: RunControlsProps) {
                     data={ENVS}
                     value={p.env}
                     onChange={(v) => v && p.setEnv(v)}
-                    disabled={!!p.pr}
+                    disabled={!!p.pr || fieldsLocked}
                     allowDeselect={false}
                     w={110}
                     comboboxProps={{ withinPortal: true }}
                 />
             </Field>
             <Field label="PR #">
-                <TextInput value={p.pr} onChange={(e) => p.setPr(e.currentTarget.value)} placeholder="optional" w={90} />
+                <TextInput
+                    value={p.pr}
+                    onChange={(e) => p.setPr(e.currentTarget.value)}
+                    placeholder="optional"
+                    disabled={fieldsLocked}
+                    w={90}
+                />
             </Field>
             {showSuite ? (
                 <Field label="Suite">
@@ -72,6 +90,7 @@ export function RunControls(p: RunControlsProps) {
                         data={suiteData}
                         value={p.suite}
                         onChange={(v) => v && p.setSuite!(v)}
+                        disabled={fieldsLocked}
                         allowDeselect={false}
                         w={200}
                         comboboxProps={{ withinPortal: true }}
@@ -101,22 +120,36 @@ export function RunControls(p: RunControlsProps) {
                         data={roleOptions}
                         value={p.role}
                         onChange={(v) => v && p.setRole(v)}
+                        disabled={fieldsLocked}
                         allowDeselect={false}
                         w={150}
                         comboboxProps={{ withinPortal: true }}
                     />
                 )}
             </Field>
-            {p.running ? (
+            {p.paused ? (
+                <Button
+                    onClick={p.onResume}
+                    color="teal"
+                    radius="md"
+                    size="md"
+                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
+                    leftSection={<span aria-hidden>▶</span>}
+                >
+                    Resume
+                </Button>
+            ) : p.running ? (
                 <Button
                     onClick={p.onStop}
+                    disabled={p.stopping}
+                    loading={p.stopping}
                     color="red"
                     radius="md"
                     size="md"
                     style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(176,74,58,0.22)' }}
-                    leftSection={<span aria-hidden>■</span>}
+                    leftSection={p.stopping ? undefined : <span aria-hidden>■</span>}
                 >
-                    Stop
+                    {p.stopping ? 'Stopping…' : 'Stop'}
                 </Button>
             ) : (
                 <Button

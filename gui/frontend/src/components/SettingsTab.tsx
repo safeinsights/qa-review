@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, PasswordInput, SegmentedControl, TextInput, Alert } from '@mantine/core'
+import { Button, PasswordInput, SegmentedControl, Tabs, Textarea, TextInput, Alert } from '@mantine/core'
 import { readSettings, writeSetting, type SettingField } from '../lib/ipc'
 import { RequestAccessButton } from './RequestAccessButton'
 import { SetupDoctorButton } from './SetupDoctorButton'
@@ -94,15 +94,28 @@ export function SettingsTab() {
                 </Section>
             ) : null}
 
-            {groups.map((group) => (
-                <Section key={group} title={group} subtitle="account">
-                    {fields
-                        .filter((f) => f.group === group)
-                        .map((f) => (
+            {groups.map((group) => {
+                const groupFields = fields.filter((f) => f.group === group)
+                const plain = groupFields.filter((f) => !f.env)
+                // Env-tagged fields (results private keys) share a label but differ
+                // by env; group them by label so each renders as one tabbed block.
+                const envLabels = [...new Set(groupFields.filter((f) => f.env).map((f) => f.label))]
+                return (
+                    <Section key={group} title={group} subtitle="account">
+                        {plain.map((f) => (
                             <FieldRow key={f.key} field={f} {...rowProps} />
                         ))}
-                </Section>
-            ))}
+                        {envLabels.map((label) => (
+                            <EnvTabbedField
+                                key={`${group}:${label}`}
+                                label={label}
+                                fields={groupFields.filter((f) => f.env && f.label === label)}
+                                {...rowProps}
+                            />
+                        ))}
+                    </Section>
+                )
+            })}
         </div>
     )
 }
@@ -114,54 +127,113 @@ interface RowProps {
     save: (f: SettingField) => void
     savedKey: string
     hasIdentity: boolean
+    // When rendered inside an env sub-tab the label is shown by the wrapper, so
+    // the row hides its own and drops the top divider.
+    hideLabel?: boolean
 }
 
-function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity }: RowProps) {
-    const draft = drafts[f.key] ?? { value: '', tier: 'project' as const }
-    const blocked = f.secret && draft.tier === 'project' && !hasIdentity
+// One account's per-env private key: a single label with a tab per env, each tab
+// holding a normal (label-less) FieldRow so qa and staging are entered separately.
+function EnvTabbedField({ label, fields, ...rowProps }: { label: string; fields: SettingField[] } & Omit<RowProps, 'field'>) {
+    const [tab, setTab] = useState(fields[0]?.env ?? 'qa')
     return (
         <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <label style={{ fontWeight: 600 }}>{f.label}</label>
+            <label style={{ fontWeight: 600 }}>{label}</label>
+            <Tabs value={tab} onChange={(v) => setTab(v ?? fields[0]?.env ?? 'qa')} mt={6}>
+                <Tabs.List>
+                    {fields.map((f) => (
+                        <Tabs.Tab key={f.key} value={f.env}>
+                            {f.env}
+                            {f.set ? ' ✓' : ''}
+                        </Tabs.Tab>
+                    ))}
+                </Tabs.List>
+                {fields.map((f) => (
+                    <Tabs.Panel key={f.key} value={f.env} pt={10}>
+                        <FieldRow field={f} {...rowProps} hideLabel />
+                    </Tabs.Panel>
+                ))}
+            </Tabs>
+        </div>
+    )
+}
+
+function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hideLabel }: RowProps) {
+    const draft = drafts[f.key] ?? { value: '', tier: 'project' as const }
+    const blocked = f.secret && draft.tier === 'project' && !hasIdentity
+    // The per-env results private keys are the only env-tagged secrets, and they
+    // hold a multi-line PEM — render those in a textarea instead of a one-liner.
+    const isPem = f.secret && !!f.env
+    const tierControl = (
+        <SegmentedControl
+            value={draft.tier}
+            onChange={(v) => setDraft(f.key, { tier: v as Draft['tier'] })}
+            data={[
+                { label: f.secret ? 'Project (encrypted)' : 'Project', value: 'project' },
+                { label: 'Local', value: 'local' },
+            ]}
+            size="xs"
+        />
+    )
+    const saveButton = (
+        <Button
+            onClick={() => save(f)}
+            disabled={blocked || draft.value === ''}
+            color="teal"
+            variant={savedKey === f.key ? 'filled' : 'light'}
+        >
+            {savedKey === f.key ? 'Saved' : 'Save'}
+        </Button>
+    )
+    return (
+        <div style={hideLabel ? undefined : { borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: hideLabel ? 'flex-end' : 'space-between', alignItems: 'baseline' }}>
+                {hideLabel ? null : <label style={{ fontWeight: 600 }}>{f.label}</label>}
                 <span className="kicker">
                     {f.set ? `current: ${tierLabel(f.tier)}` : 'not set'}
                     {f.secret ? ' · secret' : ''}
                 </span>
             </div>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginTop: 8 }}>
-                {f.secret ? (
-                    <PasswordInput
-                        style={{ flex: 1 }}
+            {/* PEM keys (the per-env secrets) are multi-line — render a textarea and
+                stack the tier + save controls below it. Other fields keep the compact
+                single-row layout. */}
+            {isPem ? (
+                <div style={{ marginTop: 8 }}>
+                    <Textarea
                         value={draft.value}
                         onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
-                        placeholder={f.set ? '•••••• (set — type to replace)' : 'enter a value'}
+                        placeholder={f.set ? 'set — paste a new PEM to replace' : '-----BEGIN PRIVATE KEY-----\n…'}
+                        autosize
+                        minRows={4}
+                        maxRows={12}
+                        styles={{ input: { fontFamily: 'var(--mono, monospace)', fontSize: 12 } }}
                     />
-                ) : (
-                    <TextInput
-                        style={{ flex: 1 }}
-                        value={draft.value}
-                        onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
-                        placeholder="enter a value"
-                    />
-                )}
-                <SegmentedControl
-                    value={draft.tier}
-                    onChange={(v) => setDraft(f.key, { tier: v as Draft['tier'] })}
-                    data={[
-                        { label: f.secret ? 'Project (encrypted)' : 'Project', value: 'project' },
-                        { label: 'Local', value: 'local' },
-                    ]}
-                    size="xs"
-                />
-                <Button
-                    onClick={() => save(f)}
-                    disabled={blocked || draft.value === ''}
-                    color="teal"
-                    variant={savedKey === f.key ? 'filled' : 'light'}
-                >
-                    {savedKey === f.key ? 'Saved' : 'Save'}
-                </Button>
-            </div>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
+                        {tierControl}
+                        {saveButton}
+                    </div>
+                </div>
+            ) : (
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginTop: 8 }}>
+                    {f.secret ? (
+                        <PasswordInput
+                            style={{ flex: 1 }}
+                            value={draft.value}
+                            onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
+                            placeholder={f.set ? '•••••• (set — type to replace)' : 'enter a value'}
+                        />
+                    ) : (
+                        <TextInput
+                            style={{ flex: 1 }}
+                            value={draft.value}
+                            onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
+                            placeholder="enter a value"
+                        />
+                    )}
+                    {tierControl}
+                    {saveButton}
+                </div>
+            )}
             {blocked ? (
                 <div className="kicker" style={{ marginTop: 6, color: '#b04a3a' }}>
                     request access (Settings ▸ Request access) to get an identity before committing project secrets

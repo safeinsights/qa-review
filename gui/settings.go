@@ -25,31 +25,45 @@ const (
 
 // secretVars are the var names whose values must be encrypted when committed to
 // the project tier. Kept in sync with secretVarNames() in src/engine/settings.ts
-// (each account's password + MFA code).
+// (each account's password + MFA code + results private key).
 var secretVars = map[string]bool{
-	"ADMIN_PASSWORD":      true,
-	"ADMIN_MFA_CODE":      true,
-	"RESEARCHER_PASSWORD": true,
-	"RESEARCHER_MFA_CODE": true,
-	"REVIEWER_PASSWORD":   true,
-	"REVIEWER_MFA_CODE":   true,
+	"ADMIN_PASSWORD":                         true,
+	"ADMIN_MFA_CODE":                         true,
+	"ADMIN_RESULTS_PRIVATE_KEY_QA":           true,
+	"ADMIN_RESULTS_PRIVATE_KEY_STAGING":      true,
+	"RESEARCHER_PASSWORD":                    true,
+	"RESEARCHER_MFA_CODE":                    true,
+	"RESEARCHER_RESULTS_PRIVATE_KEY_QA":      true,
+	"RESEARCHER_RESULTS_PRIVATE_KEY_STAGING": true,
+	"REVIEWER_PASSWORD":                      true,
+	"REVIEWER_MFA_CODE":                      true,
+	"REVIEWER_RESULTS_PRIVATE_KEY_QA":        true,
+	"REVIEWER_RESULTS_PRIVATE_KEY_STAGING":   true,
 }
 
 // knownVars is the ordered list of fields the Settings panel shows: per-env base
-// URLs, then each account's email + password + MFA code. `Group` lets the panel
-// render account sections (empty for the un-grouped base URLs).
+// URLs, then each account's email + password + MFA code + per-env results private
+// keys. `Group` renders account sections; `Env` marks the qa/staging key variants
+// the panel groups into sub-tabs. Kept in sync with knownVarNames()/secretVarNames()
+// in src/engine/settings.ts (derived there from SHARED_ACCOUNTS x PRIVATE_KEY_ENVS).
 var knownVars = []SettingField{
 	{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
 	{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
 	{Key: "ADMIN_EMAIL", Label: "Email", Secret: false, Group: "Admin"},
 	{Key: "ADMIN_PASSWORD", Label: "Password", Secret: true, Group: "Admin"},
 	{Key: "ADMIN_MFA_CODE", Label: "MFA code", Secret: true, Group: "Admin"},
+	{Key: "ADMIN_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Admin", Env: "qa"},
+	{Key: "ADMIN_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Admin", Env: "staging"},
 	{Key: "RESEARCHER_EMAIL", Label: "Email", Secret: false, Group: "Researcher"},
 	{Key: "RESEARCHER_PASSWORD", Label: "Password", Secret: true, Group: "Researcher"},
 	{Key: "RESEARCHER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Researcher"},
+	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Researcher", Env: "qa"},
+	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Researcher", Env: "staging"},
 	{Key: "REVIEWER_EMAIL", Label: "Email", Secret: false, Group: "Reviewer"},
 	{Key: "REVIEWER_PASSWORD", Label: "Password", Secret: true, Group: "Reviewer"},
 	{Key: "REVIEWER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Reviewer"},
+	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "qa"},
+	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "staging"},
 }
 
 // SettingField is one row in the Settings panel.
@@ -60,6 +74,10 @@ type SettingField struct {
 	// Account section this field belongs to ("Admin"/"Researcher"/"Reviewer"),
 	// or "" for ungrouped fields (the base URLs).
 	Group string `json:"group"`
+	// For per-environment fields (the results private keys), the env this value
+	// is for ("qa"/"staging") — the panel renders these as sub-tabs within the
+	// account. "" for env-agnostic fields (email/password/MFA, base URLs).
+	Env string `json:"env"`
 	// Where the current value comes from: "project", "secrets", "local", or ""
 	// (unset). For secrets, the value itself is NOT returned to the UI.
 	Tier string `json:"tier"`

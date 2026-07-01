@@ -15,4 +15,10 @@ describe('StreamParser', () => {
         const out = p.push('Building...\n{"type":"result","ok":true}\n')
         expect(out).toEqual([{ type: 'result', ok: true }])
     })
+
+    it('emits a paused envelope', () => {
+        const p = new StreamParser()
+        const out = p.push('{"type":"paused","name":"Step 2: fill the proposal"}\n')
+        expect(out).toEqual([{ type: 'paused', name: 'Step 2: fill the proposal' }])
+    })
 })

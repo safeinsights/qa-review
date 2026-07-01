@@ -15,6 +15,29 @@ export interface AccountVars {
     emailVar: string
     passwordVar: string
     mfaVar: string
+    // Prefix for this account's per-ENV results-decryption private key (PEM).
+    // Unlike email/password/MFA (shared across all envs), the key differs per
+    // environment, so the actual var is `<privateKeyPrefix>_<ENV>` — see
+    // privateKeyVar(). Secret; used by study-happy-path to decrypt results (as
+    // the reviewer). Each QA user sets their own, for each env.
+    privateKeyPrefix: string
+}
+
+// The env names that have their own per-account results private key. PR previews
+// are NOT listed — they reuse the QA key (previews behave like qa).
+export const PRIVATE_KEY_ENVS = ['qa', 'staging'] as const
+export type PrivateKeyEnv = (typeof PRIVATE_KEY_ENVS)[number]
+
+// The per-account, per-env private-key var name, e.g.
+// privateKeyVar(SHARED_ACCOUNTS.reviewer, 'qa') -> 'REVIEWER_RESULTS_PRIVATE_KEY_QA'.
+export function privateKeyVar(account: AccountVars, env: PrivateKeyEnv): string {
+    return `${account.privateKeyPrefix}_${env.toUpperCase()}`
+}
+
+// Which private-key env an environment name maps to. Stable envs map to
+// themselves; anything else (PR previews like "pr839") reuses the QA key.
+export function privateKeyEnvFor(envName: string): PrivateKeyEnv {
+    return envName === 'staging' ? 'staging' : 'qa'
 }
 
 export interface EnvDeclaration {
@@ -23,11 +46,27 @@ export interface EnvDeclaration {
 }
 
 // Shared, un-prefixed credential var names — the same test accounts are used on
-// every environment, stable or PR preview. Each account has its own MFA code var.
+// every environment, stable or PR preview. Each account has its own MFA code var
+// and its own results-decryption private key.
 export const SHARED_ACCOUNTS: Record<'admin' | 'researcher' | 'reviewer', AccountVars> = {
-    admin: { emailVar: 'ADMIN_EMAIL', passwordVar: 'ADMIN_PASSWORD', mfaVar: 'ADMIN_MFA_CODE' },
-    researcher: { emailVar: 'RESEARCHER_EMAIL', passwordVar: 'RESEARCHER_PASSWORD', mfaVar: 'RESEARCHER_MFA_CODE' },
-    reviewer: { emailVar: 'REVIEWER_EMAIL', passwordVar: 'REVIEWER_PASSWORD', mfaVar: 'REVIEWER_MFA_CODE' },
+    admin: {
+        emailVar: 'ADMIN_EMAIL',
+        passwordVar: 'ADMIN_PASSWORD',
+        mfaVar: 'ADMIN_MFA_CODE',
+        privateKeyPrefix: 'ADMIN_RESULTS_PRIVATE_KEY',
+    },
+    researcher: {
+        emailVar: 'RESEARCHER_EMAIL',
+        passwordVar: 'RESEARCHER_PASSWORD',
+        mfaVar: 'RESEARCHER_MFA_CODE',
+        privateKeyPrefix: 'RESEARCHER_RESULTS_PRIVATE_KEY',
+    },
+    reviewer: {
+        emailVar: 'REVIEWER_EMAIL',
+        passwordVar: 'REVIEWER_PASSWORD',
+        mfaVar: 'REVIEWER_MFA_CODE',
+        privateKeyPrefix: 'REVIEWER_RESULTS_PRIVATE_KEY',
+    },
 }
 
 export const ENVIRONMENTS: EnvDeclaration[] = [

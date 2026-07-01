@@ -65,6 +65,9 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
         await sendToPty(
             `Now write this as a suite (a TypeScript Suite object driving Playwright) to ` +
                 `src/suites/${name}.ts following src/suites/types.ts and the create-study.ts template. ` +
+                `Use the declarative shape: a \`steps: Step[]\` array where each entry is ` +
+                `\`{ name, run: async (ctx) => { await ctx.step(name, async () => { … }) } }\`, and thread ` +
+                `any shared values between steps via \`ctx.state\` (there is no \`suite.run()\`). ` +
                 `Then run it with \`qar run --suite ${name} --role ${role} ${target}\` and debug until it passes. ` +
                 `Tell me when it's green.`,
         )

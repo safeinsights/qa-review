@@ -12,6 +12,7 @@ export interface SettingField {
     label: string
     secret: boolean
     group: string // account section: "Admin" | "Researcher" | "Reviewer" | "" (ungrouped)
+    env: string // for per-env fields (results private keys): "qa" | "staging"; "" otherwise
     tier: string // "project" | "secrets" | "local" | "" (unset)
     value: string
     set: boolean
@@ -34,6 +35,7 @@ interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
     StopRun(): Promise<void>
+    SendToRun(line: string): Promise<void>
     StartAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
@@ -51,9 +53,9 @@ interface WailsApp {
     RunDoctor(): Promise<DoctorCheck[]>
     ReadScreenshot(bundleDir: string, rel: string): Promise<string>
     ReadVideo(bundleDir: string): Promise<string>
-    SaveScreenshotAs(bundleDir: string, rel: string): Promise<string>
-    SaveTrace(bundleDir: string): Promise<string>
-    ZipBundle(bundleDir: string): Promise<string>
+    SaveScreenshotAs(bundleDir: string, rel: string, suite: string): Promise<string>
+    SaveTrace(bundleDir: string, suite: string): Promise<string>
+    ZipBundle(bundleDir: string, suite: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
     Sync(cwd: string): Promise<string>
@@ -100,6 +102,24 @@ export async function runEngine(args: string[]): Promise<void> {
 // Stop the in-flight Suites/engine run (kills the engine + its Chromium).
 export async function stopRun(): Promise<void> {
     await app().StopRun()
+}
+
+// --- Pause/resume control channel (GUI → running engine, over its stdin) ---
+
+// Write one raw NDJSON control line to the in-flight run.
+export async function sendToRun(line: string): Promise<void> {
+    await app().SendToRun(line)
+}
+
+// Replace the engine's "pause before" set with the full current selection. Sent
+// on every live toggle so the engine and UI never drift.
+export async function setPauses(steps: string[]): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'pause-set', steps }))
+}
+
+// Resume a run that's halted at a paused step.
+export async function resumeRun(): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'resume' }))
 }
 
 // --- Interactive authoring session (terminal + shared browser) ---
@@ -225,20 +245,22 @@ export async function readVideoObjectUrl(bundleDir: string): Promise<string> {
     return URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }))
 }
 
-// Prompt to save one screenshot; returns the saved path ('' if cancelled).
-export async function saveScreenshotAs(bundleDir: string, rel: string): Promise<string> {
-    return app().SaveScreenshotAs(bundleDir, rel)
+// Prompt to save one screenshot, named "<suite>-<file>.png"; returns the saved
+// path ('' if cancelled).
+export async function saveScreenshotAs(bundleDir: string, rel: string, suite: string): Promise<string> {
+    return app().SaveScreenshotAs(bundleDir, rel, suite)
 }
 
-// Prompt to save just the bundle's trace.zip (replays at trace.playwright.dev);
+// Prompt to save just the bundle's trace.zip (replays at trace.playwright.dev),
+// named "<suite>-trace.zip"; returns the saved path ('' if cancelled).
+export async function saveTrace(bundleDir: string, suite: string): Promise<string> {
+    return app().SaveTrace(bundleDir, suite)
+}
+
+// Prompt to save a zip of the whole run bundle, named "<suite>-<bundle>.zip";
 // returns the saved path ('' if cancelled).
-export async function saveTrace(bundleDir: string): Promise<string> {
-    return app().SaveTrace(bundleDir)
-}
-
-// Prompt to save a zip of the whole run bundle; returns the saved path ('' if cancelled).
-export async function zipBundle(bundleDir: string): Promise<string> {
-    return app().ZipBundle(bundleDir)
+export async function zipBundle(bundleDir: string, suite: string): Promise<string> {
+    return app().ZipBundle(bundleDir, suite)
 }
 
 // Read the merged settings view (secret values masked) for the Settings panel.

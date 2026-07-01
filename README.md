@@ -16,7 +16,9 @@ while the embedded live browser shows the real app being driven in real time.*
 
 - **Suites are plain TypeScript objects** (`src/suites/`), not Playwright test
   files — easy to read, generate, and share. Each suite declares the role it runs
-  as and a sequence of named steps.
+  as and an ordered `steps` array of named steps (`{ name, run(ctx) }`), so its
+  steps are listed in the GUI before you run it, and you can mark a step to pause
+  before it and interact with the live browser mid-run.
 - **One run, many artifacts** — per-step screenshots, a video recording, a
   Playwright trace (`trace.zip`, replayable at
   [trace.playwright.dev](https://trace.playwright.dev)), and an HTML report.

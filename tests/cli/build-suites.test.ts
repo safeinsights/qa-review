@@ -19,7 +19,8 @@ function makeTempRepo(): string {
         [
             "import type { Suite } from '@/suites/types'",
             'export const demoSuite: Suite = {',
-            "    name: 'demo', description: 'd', roles: ['admin'], async run() {},",
+            "    name: 'demo', description: 'd', roles: ['admin'],",
+            "    steps: [{ name: 'noop', run: async () => {} }],",
             '}',
             '',
         ].join('\n'),

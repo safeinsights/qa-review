@@ -28,7 +28,13 @@ function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {
         vars: ENV_VARS,
         resultsRoot: tmpRoot(),
         openBrowser: vi.fn(async () => ({
-            page: {} as never,
+            // Minimal fake page: ctx.loginAs() clears the context + web storage
+            // before re-authenticating, so expose context().clearCookies + evaluate.
+            page: {
+                context: () => ({ clearCookies: vi.fn(async () => {}) }),
+                evaluate: vi.fn(async () => {}),
+                url: () => 'https://app.qa.safeinsights.org/',
+            } as never,
             cookieHeader: 'sid=abc',
             close: vi.fn(async () => {}),
         })),
@@ -40,7 +46,7 @@ function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {
 
 const passingSuite: Suite = {
     name: 'demo', description: '', roles: ['admin'],
-    async run(ctx) { await ctx.step('do thing', async () => {}) },
+    steps: [{ name: 'do thing', run: async (ctx) => { await ctx.step('do thing', async () => {}) } }],
 }
 
 describe('runEngine', () => {
@@ -56,7 +62,7 @@ describe('runEngine', () => {
         const d = deps()
         const failingSuite: Suite = {
             name: 'demo', description: '', roles: ['admin'],
-            async run(ctx) { await ctx.step('boom', async () => { throw new Error('expected X to be visible') }) },
+            steps: [{ name: 'boom', run: async (ctx) => { await ctx.step('boom', async () => { throw new Error('expected X to be visible') }) } }],
         }
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
         expect(result.ok).toBe(false)
@@ -111,11 +117,70 @@ describe('runEngine', () => {
         expect(result.failureCategory).toBe('cleanup')
     })
 
+    it('lets a suite switch roles mid-run via ctx.loginAs (re-drives login)', async () => {
+        const d = deps()
+        const twoRoleSuite: Suite = {
+            name: 'demo', description: '', roles: ['researcher'],
+            steps: [
+                { name: 'as researcher', run: async (ctx) => { await ctx.step('as researcher', async () => {}) } },
+                { name: 'as reviewer', run: async (ctx) => { await ctx.loginAs('reviewer'); await ctx.step('as reviewer', async () => {}) } },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'researcher' }, d, twoRoleSuite)
+        expect(result.ok).toBe(true)
+        // Once for the initial engine login, once for the mid-run switch.
+        const login = d.login as ReturnType<typeof vi.fn>
+        expect(login).toHaveBeenCalledTimes(2)
+        expect(login.mock.calls[1][2]).toBe('reviewer')
+    })
+
     it('invokes deps.onStep for each step event as it happens', async () => {
         const seen: string[] = []
         const d = deps({ onStep: (e) => seen.push(`${e.name}:${e.status}`) })
         await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
         expect(seen).toContain('do thing:running')
         expect(seen).toContain('do thing:passed')
+    })
+
+    it('halts BEFORE a paused step: onPaused fires and waitForResume is awaited before running', async () => {
+        const seen: string[] = []
+        let resolveResume!: () => void
+        const resumeGate = new Promise<void>((r) => (resolveResume = r))
+        const twoStep: Suite = {
+            name: 'demo', description: '', roles: ['admin'],
+            steps: [
+                { name: 'first', run: async (ctx) => { await ctx.step('first', async () => {}) } },
+                { name: 'second', run: async (ctx) => { await ctx.step('second', async () => {}) } },
+            ],
+        }
+        const d = deps({
+            onStep: (e) => seen.push(`${e.name}:${e.status}`),
+            shouldPause: (name) => name === 'second',
+            onPaused: (name) => seen.push(`paused:${name}`),
+            // Resolve on the next tick so the ordering assertion is meaningful:
+            // the run must be blocked here until we let it go.
+            waitForResume: () => resumeGate,
+        })
+        const runPromise = runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, twoStep)
+        // Let the first step finish and the gate register before resuming.
+        await new Promise((r) => setTimeout(r, 10))
+        expect(seen).toContain('first:passed')
+        expect(seen).toContain('paused:second')
+        // Crucially, 'second' has NOT started running while paused.
+        expect(seen).not.toContain('second:running')
+        resolveResume()
+        const result = await runPromise
+        expect(result.ok).toBe(true)
+        // After resume, the second step runs to completion.
+        expect(seen.indexOf('paused:second')).toBeLessThan(seen.indexOf('second:running'))
+        expect(seen).toContain('second:passed')
+    })
+
+    it('runs straight through when shouldPause returns false', async () => {
+        const onPaused = vi.fn()
+        const d = deps({ shouldPause: () => false, onPaused, waitForResume: async () => {} })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(result.ok).toBe(true)
+        expect(onPaused).not.toHaveBeenCalled()
     })
 })

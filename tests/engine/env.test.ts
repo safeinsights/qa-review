@@ -47,6 +47,23 @@ describe('resolveEnv', () => {
         delete withoutMfa.ADMIN_MFA_CODE
         expect(() => resolveEnv('qa', withoutMfa)).toThrow(/ADMIN_MFA_CODE/)
     })
+
+    it('surfaces the per-account, per-env results private key for the running env', () => {
+        const qaPem = '-----BEGIN PRIVATE KEY-----\nqa\n'
+        const stagingPem = '-----BEGIN PRIVATE KEY-----\nstaging\n'
+        const withKeys = {
+            ...ENV_VARS,
+            STAGING_BASE_URL: 'https://staging.example.com',
+            REVIEWER_RESULTS_PRIVATE_KEY_QA: qaPem,
+            REVIEWER_RESULTS_PRIVATE_KEY_STAGING: stagingPem,
+        }
+        expect(resolveEnv('qa', withKeys).accounts.reviewer.privateKey).toBe(qaPem)
+        expect(resolveEnv('staging', withKeys).accounts.reviewer.privateKey).toBe(stagingPem)
+    })
+
+    it('leaves the results private key undefined (no throw) when unset', () => {
+        expect(resolveEnv('qa', ENV_VARS).accounts.reviewer.privateKey).toBeUndefined()
+    })
 })
 
 describe('resolvePrEnv', () => {
@@ -66,5 +83,11 @@ describe('resolvePrEnv', () => {
     it('still requires the shared credentials', () => {
         const incomplete = { ...ENV_VARS, ADMIN_EMAIL: '' }
         expect(() => resolvePrEnv(839, incomplete)).toThrow(/ADMIN_EMAIL/)
+    })
+
+    it('reuses the QA results private key for PR previews', () => {
+        const qaPem = '-----BEGIN PRIVATE KEY-----\nqa\n'
+        const withKey = { ...ENV_VARS, REVIEWER_RESULTS_PRIVATE_KEY_QA: qaPem }
+        expect(resolvePrEnv(839, withKey).accounts.reviewer.privateKey).toBe(qaPem)
     })
 })

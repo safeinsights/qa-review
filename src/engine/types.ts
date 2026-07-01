@@ -18,6 +18,7 @@ export interface StepEvent {
     status: StepStatus
     at: number // epoch ms
     screenshot?: string // path relative to the run bundle, set when captured
+    url?: string // the page's top-frame URL when the step resolved
     error?: string
 }
 
@@ -25,6 +26,13 @@ export interface StepEvent {
 // localhost WebSocket port to connect to for the live browser view.
 export interface ScreencastInfo {
     port: number
+}
+
+// Emitted when the run halts before a step the user marked "pause before". The
+// GUI reacts by showing the Paused banner + flipping Stop→Resume. The run stays
+// blocked until a {type:'resume'} control message arrives on stdin.
+export interface PausedInfo {
+    name: string // the step the run is paused before
 }
 
 // Emitted once by `qar session` when the long-lived authoring browser is ready:
@@ -66,6 +74,8 @@ export interface RunResult {
 export interface EnvConfig {
     name: string
     baseURL: string
-    // Each account carries its own second-factor (MFA) code.
-    accounts: Record<Role, { email: string; password: string; mfaCode: string }>
+    // Each account carries its own second-factor (MFA) code and its own optional
+    // results-decryption private key (only the study-happy-path suite needs the
+    // key, so an unset value must NOT fail other runs).
+    accounts: Record<Role, { email: string; password: string; mfaCode: string; privateKey?: string }>
 }

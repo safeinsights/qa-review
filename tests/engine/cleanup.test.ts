@@ -26,6 +26,11 @@ describe('CleanupClient', () => {
         expect(result.failed).toEqual([])
         // Studies deleted before users (a study FK references its owner user).
         expect((fetchImpl.mock.calls[0][0] as string)).toContain('/api/qa/studies/study-1')
+        // Authorizes with a Bearer token (Clerk session JWT), NOT a cookie —
+        // the /api/qa endpoints only read the Authorization header.
+        const init = fetchImpl.mock.calls[0][1] as RequestInit
+        expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sid=abc')
+        expect((init.headers as Record<string, string>).Cookie).toBeUndefined()
     })
 
     it('deletes all studies before any users when multiple ids are tracked', async () => {

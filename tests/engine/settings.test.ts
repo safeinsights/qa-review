@@ -65,6 +65,14 @@ describe('secret classification', () => {
         expect(secretVarNames()).toContain('REVIEWER_PASSWORD')
         expect(secretVarNames()).toContain('REVIEWER_MFA_CODE')
     })
+
+    it('treats each account per-env results private key as a secret', () => {
+        expect(isSecretVar('REVIEWER_RESULTS_PRIVATE_KEY_QA')).toBe(true)
+        expect(isSecretVar('REVIEWER_RESULTS_PRIVATE_KEY_STAGING')).toBe(true)
+        expect(isSecretVar('ADMIN_RESULTS_PRIVATE_KEY_QA')).toBe(true)
+        expect(secretVarNames()).toContain('REVIEWER_RESULTS_PRIVATE_KEY_QA')
+        expect(secretVarNames()).toContain('RESEARCHER_RESULTS_PRIVATE_KEY_STAGING')
+    })
 })
 
 describe('loadSettings layering', () => {

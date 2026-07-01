@@ -41,10 +41,18 @@ export function generateSuite(trace: ActionTrace): string {
     const groups = groupByStep(trace.actions)
     const stepBlocks = groups
         .map((g) => {
-            const body = g.actions.map(actionLine).join('\n')
-            return `        await ctx.step('${sq(g.label)}', async () => {\n${body}\n        })`
+            // actionLine emits 12-space indent; the step body here nests 8 deeper.
+            const body = g.actions.map((a) => '        ' + actionLine(a)).join('\n')
+            return (
+                `        {\n` +
+                `            name: '${sq(g.label)}',\n` +
+                `            run: async (ctx) => {\n` +
+                `                await ctx.step('${sq(g.label)}', async () => {\n${body}\n                })\n` +
+                `            },\n` +
+                `        },`
+            )
         })
-        .join('\n\n')
+        .join('\n')
 
     return `import type { Suite } from '@/suites/types'
 
@@ -54,9 +62,9 @@ export const ${camelConst(trace.name)}: Suite = {
     name: '${sq(trace.name)}',
     description: '${sq(trace.description)}',
     roles: ['${sq(trace.role)}'],
-    async run(ctx) {
+    steps: [
 ${stepBlocks}
-    },
+    ],
 }
 `
 }

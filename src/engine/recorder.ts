@@ -35,7 +35,7 @@ export class Recorder {
         fs.mkdirSync(path.join(this.bundleDir, 'screenshots'), { recursive: true })
     }
 
-    step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string }) {
+    step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string; url?: string }) {
         const event: StepEvent = { name, status, at: Date.now(), ...extra }
         // Replace the prior 'running' entry for the same step name when it resolves.
         const idx = this.steps.findIndex((s) => s.name === name && s.status === 'running')

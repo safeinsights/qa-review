@@ -42,10 +42,18 @@ needless permission prompts and noise:
    `/.../study/<id>/...`) so it can be cleaned up.
 3. **When the user asks to save it as a suite** (they'll give it a short name),
    **write `src/suites/<name>.ts`** following `src/suites/types.ts`
-   (`Suite` + `RunContext`). Use an existing suite (`src/suites/create-study.ts`) as
+   (`Suite` + `Step` + `RunContext`). Use an existing suite (`src/suites/create-study.ts`) as
    the template:
-   - export a `const <name>Suite: Suite` with `name`, `description`, `roles`, `run(ctx)`.
-   - wrap each action in `await ctx.step('<human name>', async () => { … })`.
+   - export a `const <name>Suite: Suite` with `name`, `description`, `roles`, and a
+     **`steps: Step[]` array** (ordered). Each entry is `{ name: '<human name>',
+     run: async (ctx) => { … } }`. There is NO `run(ctx)` on the suite anymore — the
+     engine loops over `steps` and shows their names in the GUI before the run.
+   - inside each step's `run`, wrap the action in
+     `await ctx.step('<human name>', async () => { … })` (same human name as the
+     step). This keeps the per-step screenshot/status/error machinery working.
+   - **thread shared values between steps via `ctx.state`** — e.g. a step that
+     captures a created study's id does `ctx.state.studyId = id`, and later steps
+     read `ctx.state.studyId as string`. Don't rely on closures across steps.
    - use `ctx.page` (Playwright Page), `ctx.baseURL`, `ctx.tag` for unique titles, and
      `ctx.trackStudy(id)` / `ctx.trackUser(id)` for anything you create (cleanup).
    - prefer **stable selectors**: `getByRole`, `getByLabel`, `getByTestId`, `text=`.

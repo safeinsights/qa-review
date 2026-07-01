@@ -12,6 +12,10 @@ Wails (Go + React/Vite) desktop GUI wraps it for "pick suite, press Run" use.
 - `src/engine/` — the run engine. `runEngine()` is the entry; `env.ts` resolves
   envs; `suite-registry.ts` lists/loads suites.
 - `src/suites/` — the actual suites (`signin`, `create-study`, plus discovered ones).
+  A `Suite` is a plain object with an ordered **`steps: Step[]`** array (each
+  `{ name, run(ctx) }`), so step names are statically enumerable — the GUI shows a
+  suite's steps before running it. Shared state between steps threads through
+  `ctx.state`. (There is no `suite.run()`; the engine loops over `steps`.)
 - `config/environments.ts` — declares STABLE envs (`qa`, `staging`) and derives PR
   preview URLs. **A PR run is identical to a QA run except for the base URL** —
   same accounts, same MFA. There is NO code that gates a suite to PR-only or

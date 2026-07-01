@@ -1,7 +1,9 @@
-export type StepEnvelope = { type: 'step'; name: string; status: string; error?: string; screenshot?: string }
+export type StepEnvelope = { type: 'step'; name: string; status: string; error?: string; screenshot?: string; url?: string }
 export type ResultEnvelope = { type: 'result'; ok: boolean; [k: string]: unknown }
 export type ScreencastEnvelope = { type: 'screencast'; port: number }
-export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope
+// Emitted when the run halts before a step the user marked "pause before".
+export type PausedEnvelope = { type: 'paused'; name: string }
+export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope | PausedEnvelope
 
 function parse(line: string): Envelope | null {
     let obj: unknown
@@ -12,7 +14,7 @@ function parse(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result' || t === 'screencast') return obj as Envelope
+        if (t === 'step' || t === 'result' || t === 'screencast' || t === 'paused') return obj as Envelope
     }
     return null
 }

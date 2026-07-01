@@ -36,6 +36,13 @@ export interface RunDeps {
     // Called once with the live Playwright page just after it's created, so a
     // caller (the CLI --screencast mode) can attach a screencast to it.
     onPage?: (page: import('@playwright/test').Page) => void | Promise<void>
+    // Pause-before-step control (the CLI wires these to a stdin control channel).
+    // Consulted before each step: if shouldPause returns true, onPaused fires and
+    // the run blocks on waitForResume until the user resumes. All optional so a
+    // run without a controller proceeds straight through.
+    shouldPause?: (stepName: string) => boolean
+    waitForResume?: () => Promise<void>
+    onPaused?: (stepName: string) => void
 }
 
 function categorize(error: Error): FailureCategory {
@@ -75,16 +82,17 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     try {
         handle = await deps.openBrowser({ name: env.name, baseURL: env.baseURL })
 
-        let cookieHeader: string
+        let authToken: string
         try {
-            cookieHeader = await deps.login(handle, env, req.role, recorder.bundleDir)
+            authToken = await deps.login(handle, env, req.role, recorder.bundleDir)
         } catch (cause) {
             // A failure in the login phase is always an auth failure, regardless
             // of the thrown error's class (tests inject a plain Error).
             throw new AuthError((cause as Error).message)
         }
-        // The cleanup client authorizes via the admin session cookie.
-        ;(cleanup as unknown as { cookieHeader: string }).cookieHeader = cookieHeader
+        // The cleanup client authorizes with the logged-in user's Clerk session
+        // JWT (Bearer). deps.login returns it (loginAs -> getClerkToken).
+        ;(cleanup as unknown as { authToken: string }).authToken = authToken
         await deps.onPage?.(handle.page)
 
         let stepIndex = 0
@@ -115,6 +123,15 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 return undefined
             }
         }
+        // Best-effort top-frame URL for the step's metadata — like the screenshot,
+        // a failure here must never fail the step.
+        const currentUrl = (): string | undefined => {
+            try {
+                return page.url()
+            } catch {
+                return undefined
+            }
+        }
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
@@ -124,19 +141,56 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 try {
                     const out = await action()
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'passed', { screenshot })
+                    recorder.step(name, 'passed', { screenshot, url: currentUrl() })
                     return out
                 } catch (cause) {
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot })
+                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot, url: currentUrl() })
                     throw cause
                 }
             },
             trackStudy: (id) => cleanup.trackStudy(id),
             trackUser: (id) => cleanup.trackUser(id),
+            // Results are decrypted as the reviewer, so surface the reviewer
+            // account's private key. Undefined when unset (the suite errors clearly).
+            resultsKey: env.accounts.reviewer.privateKey,
+            async loginAs(role) {
+                // Guaranteed clean slate before re-authenticating. Visiting
+                // /account/signin while still signed in trips the app's
+                // auto-signout (the sign-in form renders null while it clears the
+                // session), which races the form hydration. Clearing cookies +
+                // web storage first lands loginAs() on a hydrated, logged-out form.
+                await handle!.page.context().clearCookies()
+                await handle!.page
+                    .evaluate(() => {
+                        try {
+                            localStorage.clear()
+                            sessionStorage.clear()
+                        } catch {
+                            // storage may be inaccessible on some pages; best-effort.
+                        }
+                    })
+                    .catch(() => {})
+                // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
+                const newToken = await deps.login(handle!, env, role, recorder.bundleDir)
+                // Keep id-based cleanup authorized as the now-current user.
+                ;(cleanup as unknown as { authToken: string }).authToken = newToken
+            },
+            // Per-run scratch bag threaded between steps (replaces the shared
+            // locals a single run() body used to close over).
+            state: {},
         }
 
-        await suite.run(ctx)
+        // Run the suite's steps in order. The pause gate sits BEFORE each step so
+        // the browser idles at the boundary — the user can interact with the live
+        // Chrome, then resume — before any of the step's actions fire.
+        for (const step of suite.steps) {
+            if (deps.shouldPause?.(step.name)) {
+                deps.onPaused?.(step.name)
+                await deps.waitForResume?.()
+            }
+            await step.run(ctx)
+        }
     } catch (cause) {
         ok = false
         failureCategory = categorize(cause as Error)

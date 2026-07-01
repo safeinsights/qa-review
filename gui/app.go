@@ -66,6 +66,9 @@ type App struct {
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
+	// stdin write-end of the in-flight run, so SendToRun can push pause/resume
+	// control messages to the engine. Closed and nilled when the run exits.
+	runStdin io.WriteCloser
 }
 
 func NewApp() *App {
@@ -389,6 +392,14 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 		return err
 	}
 	cmd.Stderr = cmd.Stdout // fold stderr into the same stream (stray lines ignored by the parser)
+	// A stdin pipe so SendToRun can push pause/resume control messages into a
+	// `run`. Harmless for commands that don't read stdin (list/build-suites): an
+	// unwritten, unread pipe is inert, and it's closed when the process exits.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		a.emitSpawnFailure(label, err)
+		return err
+	}
 	// Own process group so StopRun can signal the engine AND its children (the
 	// Chromium it launches), not just the parent.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -396,11 +407,13 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 		// Surface spawn failures (e.g. program not found) as a visible line + a
 		// non-zero exit, so the UI shows WHY nothing happened instead of silently
 		// doing nothing.
+		_ = stdin.Close()
 		a.emitSpawnFailure(label, err)
 		return err
 	}
 	a.runMu.Lock()
 	a.runCmd = cmd
+	a.runStdin = stdin
 	a.runMu.Unlock()
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -424,6 +437,10 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 		a.runMu.Lock()
 		if a.runCmd == cmd {
 			a.runCmd = nil
+			if a.runStdin != nil {
+				_ = a.runStdin.Close()
+				a.runStdin = nil
+			}
 		}
 		a.runMu.Unlock()
 		runtime.EventsEmit(a.ctx, "proc-exit", code)
@@ -444,12 +461,46 @@ func (a *App) StopRun() error {
 	}
 	pid := cmd.Process.Pid
 	// Setpgid made the child a group leader (PGID == PID); -pid hits the whole group.
+	// The engine handles SIGTERM and exits promptly (see run.ts onStop), so this is
+	// normally instant; the SIGKILL is only a fallback for a wedged process.
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	go func() {
-		time.Sleep(3 * time.Second)
+		time.Sleep(1500 * time.Millisecond)
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}()
 	return nil
+}
+
+// SendToRun writes one NDJSON control line to the in-flight run's stdin. The
+// frontend uses it for pause-set / resume messages (see resumeControlLine /
+// pauseSetControlLine). No-op if no run is active; a broken-pipe error (e.g. the
+// run just died / was stopped) is swallowed since it's inherently racy.
+func (a *App) SendToRun(line string) error {
+	a.runMu.Lock()
+	w := a.runStdin
+	a.runMu.Unlock()
+	if w == nil {
+		return nil
+	}
+	if _, err := io.WriteString(w, line+"\n"); err != nil {
+		return nil // racing StopRun / process exit — not actionable
+	}
+	return nil
+}
+
+// resumeControlLine / pauseSetControlLine build the NDJSON control messages the
+// engine's stdin reader understands (mirrors src/cli/step-stream.ts). Factored out
+// so they're unit-testable without a live run.
+func resumeControlLine() string {
+	return `{"type":"resume"}`
+}
+
+func pauseSetControlLine(steps []string) string {
+	b, _ := json.Marshal(struct {
+		Type  string   `json:"type"`
+		Steps []string `json:"steps"`
+	}{Type: "pause-set", Steps: steps})
+	return string(b)
 }
 
 // emitSpawnFailure surfaces a failed process launch to the UI as an error line
@@ -495,15 +546,17 @@ func (a *App) ReadVideo(bundleDir string) (string, error) {
 }
 
 // SaveScreenshotAs prompts the tester for a location and copies one screenshot
-// (bundle-relative `rel` under `bundleDir`) there. Returns the saved path, or ""
+// (bundle-relative `rel` under `bundleDir`) there. The default filename is
+// prefixed with the suite name (e.g. "signin-01-confirm-dashboard.png") so
+// downloads from different suites don't collide. Returns the saved path, or ""
 // if the dialog was cancelled.
-func (a *App) SaveScreenshotAs(bundleDir string, rel string) (string, error) {
+func (a *App) SaveScreenshotAs(bundleDir string, rel string, suite string) (string, error) {
 	src := filepath.Join(bundleDir, rel)
 	if !strings.HasPrefix(filepath.Clean(src), filepath.Clean(bundleDir)) {
 		return "", fmt.Errorf("screenshot path outside bundle")
 	}
 	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		DefaultFilename: filepath.Base(rel),
+		DefaultFilename: prefixSuite(suite, filepath.Base(rel)),
 		Title:           "Save screenshot",
 	})
 	if err != nil || dest == "" {
@@ -518,15 +571,17 @@ func (a *App) SaveScreenshotAs(bundleDir string, rel string) (string, error) {
 // SaveTrace prompts for a location and copies out just the bundle's trace.zip —
 // the standalone Playwright trace that replays at trace.playwright.dev. (The
 // "Download all" zip nests trace.zip inside an outer archive, which the trace
-// viewer rejects; this hands the tester the inner file directly.) Returns the
-// saved path, or "" if cancelled / no trace was captured.
-func (a *App) SaveTrace(bundleDir string) (string, error) {
+// viewer rejects; this hands the tester the inner file directly.) The default
+// filename is suffixed with the suite name (e.g. "agreements-back-trace.zip") so
+// downloads from different runs don't collide. Returns the saved path, or "" if
+// cancelled / no trace was captured.
+func (a *App) SaveTrace(bundleDir string, suite string) (string, error) {
 	src := filepath.Join(bundleDir, "trace.zip")
 	if _, err := os.Stat(src); err != nil {
 		return "", fmt.Errorf("no trace.zip in this run bundle")
 	}
 	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		DefaultFilename: "trace.zip",
+		DefaultFilename: prefixSuite(suite, "trace.zip"),
 		Title:           "Save Playwright trace",
 	})
 	if err != nil || dest == "" {
@@ -539,11 +594,12 @@ func (a *App) SaveTrace(bundleDir string) (string, error) {
 }
 
 // ZipBundle prompts for a location and writes a .zip of the entire run bundle
-// (screenshots + video + trace.zip + report + summary). Returns the saved path,
-// or "" if cancelled.
-func (a *App) ZipBundle(bundleDir string) (string, error) {
+// (screenshots + video + trace.zip + report + summary). The default filename is
+// prefixed with the suite name (e.g. "signin-2026-07-01_125855_signin_qa.zip").
+// Returns the saved path, or "" if cancelled.
+func (a *App) ZipBundle(bundleDir string, suite string) (string, error) {
 	dest, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		DefaultFilename: filepath.Base(bundleDir) + ".zip",
+		DefaultFilename: prefixSuite(suite, filepath.Base(bundleDir)+".zip"),
 		Title:           "Download all run artifacts",
 	})
 	if err != nil || dest == "" {
@@ -685,6 +741,22 @@ func (a *App) git(dir string, args ...string) (string, error) {
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// traceNameRE collapses any run of characters unsafe in a download filename into
+// a single dash, so a suite name (or, in exploratory mode, a free-text
+// instruction) yields a safe "<suite>-<file>" prefix.
+var traceNameRE = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
+
+// prefixSuite prepends a filesystem-safe suite name to a download filename
+// (e.g. prefixSuite("sign in", "trace.zip") → "sign-in-trace.zip") so downloads
+// from different suites don't collide. A blank/unsafe suite yields `name` as-is.
+func prefixSuite(suite, name string) string {
+	s := strings.Trim(traceNameRE.ReplaceAllString(suite, "-"), "-")
+	if s == "" {
+		return name
+	}
+	return s + "-" + name
 }
 
 // validSuiteName guards the suite name used in a branch + filename. We only need

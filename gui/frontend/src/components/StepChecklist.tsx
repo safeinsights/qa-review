@@ -1,40 +1,65 @@
 import type { StepEnvelope } from '../lib/stepStream'
 
-// Render the ordered execution log. Each step is a clickable row: clicking one
-// that has a screenshot shows that snapshot in the panel (the parent handles the
-// swap). The selected row is highlighted; a 📷 marks steps with a snapshot.
-// Steps coalesce by name (a 'running' entry is replaced when it resolves).
+// Render the ordered step list. Rows come from the suite's STATIC step names, so
+// the list appears before a run — click a not-yet-run row to toggle a "pause
+// before this step" marker (⏸, shown on the right). Once a run starts, each row
+// overlays its runtime status (✓/✗/▸) and, if it captured one, a 📷 to view the
+// snapshot. Rows are positional (by index), so a suite with repeated step names
+// (e.g. study-happy-path's account switches) still renders every step.
 export function StepChecklist({
+    stepNames,
     steps,
+    pausedSteps,
+    pausedAt,
+    onTogglePause,
     selectedIndex,
     onSelect,
 }: {
+    // Static, ordered step names (from the selected suite). Source of truth for rows.
+    stepNames: string[]
+    // Runtime step events streamed during a run, for status/screenshot/error.
     steps: StepEnvelope[]
+    // Step names the user marked "pause before".
+    pausedSteps: Set<string>
+    // The step name the run is currently halted before, if any.
+    pausedAt: string | null
+    onTogglePause: (name: string) => void
     selectedIndex: number | null
     onSelect: (index: number, step: StepEnvelope) => void
 }) {
+    // Last runtime event per name (a 'running' entry is superseded when it resolves).
     const byName = new Map<string, StepEnvelope>()
     for (const s of steps) byName.set(s.name, s)
-    const rows = [...byName.values()]
 
-    if (rows.length === 0) {
-        // The log only appears once a run has started; the parent already shows a
-        // "Running…" line while steps are pending, so render nothing here. (No more
-        // "press Run" — that was misleading once a run was underway.)
-        return null
-    }
+    // Prefer the static list; before a suite is picked (exploratory mode) fall back
+    // to whatever runtime steps have streamed so the log still shows something.
+    const rows: { name: string; ev?: StepEnvelope }[] =
+        stepNames.length > 0
+            ? stepNames.map((name) => ({ name, ev: byName.get(name) }))
+            : [...byName.values()].map((ev) => ({ name: ev.name, ev }))
+
+    if (rows.length === 0) return null
 
     return (
         <div>
-            {rows.map((s, i) => {
-                const hasShot = !!s.screenshot
+            {rows.map((row, i) => {
+                const s = row.ev
+                const status = s?.status ?? 'pending'
+                const hasShot = !!s?.screenshot
                 const selected = selectedIndex === i
+                const isPaused = pausedSteps.has(row.name)
+                const isHaltedHere = pausedAt === row.name
+                // A step can be paused-before only while it hasn't run yet.
+                const alreadyRan = status === 'passed' || status === 'failed'
+                const canToggle = !alreadyRan
                 return (
                     <div
-                        key={s.name}
+                        key={`${i}:${row.name}`}
                         className="fade-up"
-                        onClick={() => hasShot && onSelect(i, s)}
-                        title={hasShot ? 'View snapshot at this step' : undefined}
+                        onClick={() => {
+                            if (canToggle) onTogglePause(row.name)
+                        }}
+                        title={canToggle ? 'Click to pause before this step' : undefined}
                         style={{
                             display: 'flex',
                             alignItems: 'baseline',
@@ -43,27 +68,64 @@ export function StepChecklist({
                             marginLeft: -10,
                             marginRight: -10,
                             borderBottom: i < rows.length - 1 ? '1px dotted var(--line)' : 'none',
-                            borderLeft: selected ? '3px solid var(--teal)' : '3px solid transparent',
-                            background: selected ? 'var(--teal-soft)' : 'transparent',
-                            cursor: hasShot ? 'pointer' : 'default',
+                            borderLeft: isHaltedHere
+                                ? '3px solid var(--amber, #d08a1a)'
+                                : selected
+                                  ? '3px solid var(--teal)'
+                                  : '3px solid transparent',
+                            background: isHaltedHere
+                                ? 'var(--amber-soft, #fdf3e0)'
+                                : selected
+                                  ? 'var(--teal-soft)'
+                                  : 'transparent',
+                            cursor: canToggle ? 'pointer' : 'default',
+                            opacity: !s && status === 'pending' ? 0.75 : 1,
                             transition: 'background 0.12s',
                         }}
                     >
                         <span className="mono" style={{ color: 'var(--ink-faint)', fontSize: 11 }}>
                             {String(i + 1).padStart(2, '0')}
                         </span>
-                        <Mark status={s.status} />
-                        <span style={{ flex: 1, color: s.status === 'failed' ? 'var(--red)' : 'var(--ink)' }}>
-                            {s.name}
-                            {s.error ? (
-                                <span className="mono st-fail" style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
+                        <Mark status={status} />
+                        <span style={{ flex: 1, minWidth: 0, color: status === 'failed' ? 'var(--red)' : 'var(--ink)' }}>
+                            {row.name}
+                            {s?.error ? (
+                                <span
+                                    className="mono st-fail"
+                                    style={{
+                                        display: 'block',
+                                        fontSize: 12,
+                                        marginTop: 2,
+                                        // Playwright errors contain long unbroken runs (=== separators,
+                                        // URLs) that otherwise overflow the fixed-width steps panel.
+                                        whiteSpace: 'pre-wrap',
+                                        overflowWrap: 'anywhere',
+                                        wordBreak: 'break-word',
+                                    }}
+                                >
                                     ↳ {s.error}
                                 </span>
                             ) : null}
                         </span>
+                        {/* Right slot: a captured snapshot (click to view) takes
+                            precedence once a step has run; otherwise a ⏸ marker. */}
                         {hasShot ? (
-                            <span title="snapshot available" style={{ fontSize: 13, opacity: selected ? 1 : 0.5 }}>
+                            <span
+                                title="View snapshot at this step"
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    onSelect(i, s!)
+                                }}
+                                style={{ fontSize: 13, cursor: 'pointer', opacity: selected ? 1 : 0.6 }}
+                            >
                                 📷
+                            </span>
+                        ) : isPaused ? (
+                            <span
+                                title={isHaltedHere ? 'Paused here' : 'Will pause before this step'}
+                                style={{ fontSize: 13, color: 'var(--amber, #d08a1a)' }}
+                            >
+                                ⏸
                             </span>
                         ) : null}
                     </div>
@@ -76,5 +138,7 @@ export function StepChecklist({
 function Mark({ status }: { status: string }) {
     if (status === 'passed') return <span className="st-pass mono" style={{ fontWeight: 600 }}>✓</span>
     if (status === 'failed') return <span className="st-fail mono" style={{ fontWeight: 600 }}>✗</span>
-    return <span className="st-warn mono" style={{ fontWeight: 600 }}>▸</span>
+    if (status === 'running') return <span className="st-warn mono" style={{ fontWeight: 600 }}>▸</span>
+    // Not yet reached.
+    return <span className="mono" style={{ fontWeight: 600, color: 'var(--ink-faint)' }}>○</span>
 }

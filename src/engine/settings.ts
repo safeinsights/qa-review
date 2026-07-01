@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Encrypter, Decrypter, armor, generateIdentity as ageGenerateIdentity, identityToRecipient } from 'age-encryption'
-import { SHARED_ACCOUNTS, ENVIRONMENTS } from '../../config/environments'
+import { SHARED_ACCOUNTS, ENVIRONMENTS, PRIVATE_KEY_ENVS, privateKeyVar } from '../../config/environments'
 import { readIdentity } from '@/engine/identity'
 import { configDir } from '@/engine/paths'
 
@@ -35,7 +35,11 @@ export function isEncryptedValue(value: string): boolean {
 // encrypted when committed to the project tier. Derived from config/environments.ts
 // so the list can't drift from the declared accounts.
 export function secretVarNames(): string[] {
-    return Object.values(SHARED_ACCOUNTS).flatMap((a) => [a.passwordVar, a.mfaVar])
+    return Object.values(SHARED_ACCOUNTS).flatMap((a) => [
+        a.passwordVar,
+        a.mfaVar,
+        ...PRIVATE_KEY_ENVS.map((env) => privateKeyVar(a, env)),
+    ])
 }
 
 export function isSecretVar(key: string): boolean {
@@ -46,7 +50,12 @@ export function isSecretVar(key: string): boolean {
 // per-env base URLs, then each account's email + password + MFA code.
 export function knownVarNames(): string[] {
     const baseUrls = ENVIRONMENTS.map((e) => e.baseUrlVar)
-    const accounts = Object.values(SHARED_ACCOUNTS).flatMap((a) => [a.emailVar, a.passwordVar, a.mfaVar])
+    const accounts = Object.values(SHARED_ACCOUNTS).flatMap((a) => [
+        a.emailVar,
+        a.passwordVar,
+        a.mfaVar,
+        ...PRIVATE_KEY_ENVS.map((env) => privateKeyVar(a, env)),
+    ])
     return [...baseUrls, ...accounts]
 }
 
