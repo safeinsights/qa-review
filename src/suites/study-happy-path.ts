@@ -584,7 +584,7 @@ async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
 async function openResultsPreview(ctx: RunContext): Promise<void> {
     const resultsRow = ctx.page
         .getByRole('row')
-        .filter({ has: ctx.page.getByRole('cell', { name: 'Results', exact: true }) })
+        .filter({ has: ctx.page.getByRole('cell', { name: 'results' }) })
         .first()
     const viewButton = resultsRow.getByRole('button', { name: 'View' })
     await viewButton.waitFor({ state: 'visible', timeout: 20_000 })
