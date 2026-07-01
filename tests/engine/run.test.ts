@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { runEngine } from '@/engine/run'
+import type { BrowserHandle } from '@/engine/run'
 import type { Suite } from '@/suites/types'
 
 const made: string[] = []
@@ -215,6 +216,32 @@ describe('runEngine', () => {
         // After resume, the second step runs to completion.
         expect(seen.indexOf('paused:second')).toBeLessThan(seen.indexOf('second:running'))
         expect(seen).toContain('second:passed')
+    })
+
+    it('exposes the browser handle cdpPort to an onPage/screencast consumer', async () => {
+        // The handle openBrowser returns carries the Chrome remote-debugging port;
+        // a consumer (the run companion / screencast) reads it right after openBrowser.
+        const handle: BrowserHandle = {
+            page: {
+                context: () => ({ clearCookies: vi.fn(async () => {}) }),
+                evaluate: vi.fn(async () => {}),
+                url: () => 'https://app.qa.safeinsights.org/',
+                on: vi.fn(),
+                off: vi.fn(),
+            } as never,
+            cookieHeader: 'sid=abc',
+            cdpPort: 54321,
+            close: vi.fn(async () => {}),
+        }
+        let seenPort: number | undefined
+        const d = deps({
+            openBrowser: vi.fn(async () => handle),
+            onPage: async () => {
+                seenPort = handle.cdpPort
+            },
+        })
+        await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(seenPort).toBe(54321)
     })
 
     it('runs straight through when shouldPause returns false', async () => {

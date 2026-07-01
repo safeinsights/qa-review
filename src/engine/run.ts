@@ -12,6 +12,9 @@ import type { Suite, RunContext } from '@/suites/types'
 export interface BrowserHandle {
     page: import('@playwright/test').Page
     cookieHeader: string
+    // The Chrome remote-debugging port this browser exposes, if launched with one
+    // (production runs do; test fakes may omit). Lets the run companion attach.
+    cdpPort?: number
     close: () => Promise<void>
     // Stop tracing into <bundleDir>/trace.zip. Called BEFORE close() (tracing must
     // stop while the context is still open). Optional so test fakes can omit it.
@@ -245,11 +248,12 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
         vars,
         resultsRoot,
         openBrowser: async (env) => {
-            const { chromium } = await import('@playwright/test')
-            // channel:'chrome' drives the user's installed Google Chrome instead of
-            // Playwright's bundled Chromium, so the packaged app needs no browser download.
-            const browser = await chromium.launch({ channel: 'chrome' })
-            const context = await browser.newContext({
+            const { launchChromeWithCdp } = await import('@/engine/cdp-launch')
+            // channel:'chrome' + a remote-debugging port: drives the user's installed
+            // Google Chrome (so the packaged app needs no browser download) AND lets
+            // the run companion attach chrome-devtools-mcp to this same browser when
+            // the run is idle.
+            const { browser, context, page, cdpPort } = await launchChromeWithCdp({
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot }, // moved into bundle after finish
             })
@@ -257,7 +261,6 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             // console) so a tester can replay the whole run at trace.playwright.dev.
             // Best-effort: tracing must never fail the run.
             await context.tracing.start({ screenshots: true, snapshots: true, sources: true }).catch(() => {})
-            const page = await context.newPage()
             const video = page.video()
             let browserClosed = false
             const closeBrowser = async () => {
@@ -268,6 +271,7 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             return {
                 page,
                 cookieHeader: '',
+                cdpPort,
                 // Stop tracing (writing trace.zip into the bundle) BEFORE the
                 // context closes, then close the context — which finalizes the
                 // video while keeping `video.saveAs()` usable. Browser closes in
