@@ -18,11 +18,16 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
 
     const onStep = json ? (e: StepEvent) => process.stdout.write(stepLine(e)) : undefined
 
+    // Captured from the run browser's handle so the screencast line can carry the
+    // CDP port. Set by wrappedOpenBrowser (below) before onPage runs — runEngine
+    // awaits openBrowser before calling onPage, so this is populated in time.
+    let runCdpPort = 0
+
     let server: ScreencastServer | undefined
     const onPage = screencast
         ? async (page: Page) => {
               server = await ScreencastServer.start(page)
-              process.stdout.write(screencastLine({ port: server.port }))
+              process.stdout.write(screencastLine({ port: server.port, cdpPort: runCdpPort }))
           }
         : undefined
 
@@ -100,7 +105,14 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // Screencast IS the view, so it doesn't need a headed window. Use headed only
     // if explicitly asked AND not screencasting.
     const base = headed && !screencast ? headedDeps(onStep, vars) : { ...defaultDeps(vars), onStep }
-    const deps = { ...base, onPage, ...controlDeps }
+    // Wrap openBrowser to capture the run browser's CDP port for the screencast line.
+    const baseOpenBrowser = base.openBrowser
+    const wrappedOpenBrowser = async (env: Parameters<typeof baseOpenBrowser>[0]) => {
+        const handle = await baseOpenBrowser(env)
+        runCdpPort = handle.cdpPort ?? 0
+        return handle
+    }
+    const deps = { ...base, openBrowser: wrappedOpenBrowser, onPage, ...controlDeps }
 
     try {
         const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)

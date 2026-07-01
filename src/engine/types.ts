@@ -33,6 +33,9 @@ export interface StepEvent {
 // localhost WebSocket port to connect to for the live browser view.
 export interface ScreencastInfo {
     port: number
+    // The run browser's CDP remote-debugging port, so the run companion's
+    // chrome-devtools-mcp can attach to the SAME browser (--browserUrl).
+    cdpPort: number
 }
 
 // Emitted when the run halts before a step the user marked "pause before". The
