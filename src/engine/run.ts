@@ -54,6 +54,14 @@ export interface RunDeps {
     shouldPause?: (stepName: string) => boolean
     waitForResume?: () => Promise<void>
     onPaused?: (stepName: string) => void
+    // Hold-open-on-failure control. When a run FAILS (a step throws / login fails
+    // / the browser won't open) AND this hook is wired, the engine fires
+    // onErrorHold and then blocks on waitForResume — keeping the browser alive so
+    // the run companion (Claude) can attach to the CDP port and drive the frozen
+    // failure state. Teardown (close browser, save trace/video) is deferred until
+    // resume/stop arrives. Optional: without the hook, a failed run tears down
+    // immediately (the existing behavior for CLI-only runs and tests).
+    onErrorHold?: (info: { failureCategory?: FailureCategory; error?: string }) => void
 }
 
 function categorize(error: Error): FailureCategory {
@@ -228,6 +236,16 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     } catch (cause) {
         ok = false
         failureCategory = categorize(cause as Error)
+        // Hold the browser open on failure (opt-in via onErrorHold; only the GUI
+        // wires it). We're still inside the try/catch — the browser handle is open
+        // and the finally's teardown has NOT run yet — so blocking here freezes the
+        // failed state with a live, CDP-attachable browser for the run companion.
+        // Release comes via the SAME resume/stop channel as a pause. Without the
+        // hook this is a no-op and the finally tears down immediately, as before.
+        if (deps.onErrorHold) {
+            deps.onErrorHold({ failureCategory, error: (cause as Error).message })
+            await deps.waitForResume?.()
+        }
     } finally {
         // Guaranteed teardown: cleanup runs no matter how we got here.
         cleanupResult = await deps.runCleanup(cleanup).catch((e): RunResult['cleanup'] => ({

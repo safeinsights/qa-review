@@ -3,7 +3,7 @@ import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { runEngine, defaultDeps } from '@/engine/run'
 import { runStatePath } from '@/engine/paths'
 import { headedDeps } from '@/engine/run-headed'
-import { stepLine, resultLine, screencastLine, pausedLine, parseControlLine } from '@/cli/step-stream'
+import { stepLine, resultLine, screencastLine, pausedLine, errorHoldLine, parseControlLine } from '@/cli/step-stream'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
 import type { Role, StepEvent, RunState } from '@/engine/types'
@@ -58,6 +58,13 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             armResume()
             await resumePromise
         },
+        // On a failed run the engine emits this then awaits waitForResume — holding
+        // the browser open so the companion can attach to its CDP port. The GUI's
+        // existing resume/stop path releases the hold (a {type:'resume'} control
+        // message resolves waitForResume; Stop SIGTERMs the process group). Harmless
+        // to always wire — the engine ONLY calls it when a run actually fails.
+        onErrorHold: (info: { failureCategory?: import('@/engine/types').FailureCategory; error?: string }) =>
+            process.stdout.write(errorHoldLine(info)),
     }
 
     // Read NDJSON control messages from stdin. Only the `run` command opts into

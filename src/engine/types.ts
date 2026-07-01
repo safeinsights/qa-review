@@ -45,6 +45,16 @@ export interface PausedInfo {
     name: string // the step the run is paused before
 }
 
+// Emitted when a run FAILS and the engine is holding the browser open so the run
+// companion can inspect/drive the frozen failure state (via the run's CDP port).
+// The GUI reacts by showing a "run failed — Claude can inspect the browser" banner
+// and flipping Stop→Resume. The run stays blocked (browser alive) until a
+// {type:'resume'} control message arrives on stdin, then teardown proceeds.
+export interface ErrorHoldInfo {
+    failureCategory?: FailureCategory
+    error?: string
+}
+
 // Emitted once by `qar session` when the long-lived authoring browser is ready:
 // the CDP remote-debugging port (so chrome-devtools-mcp can attach via
 // --browserUrl) and the screencast ws port (so the GUI shows the live view).

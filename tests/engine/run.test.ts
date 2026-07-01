@@ -260,6 +260,67 @@ describe('runEngine', () => {
         expect(finalRunning).toBe(false) // last onRunState has the result
     })
 
+    it('holds the browser open on a FAILED run: onErrorHold fires, close deferred until resume', async () => {
+        const seen: string[] = []
+        let resolveRelease!: () => void
+        const releaseGate = new Promise<void>((r) => (resolveRelease = r))
+        // Track handle.close so we can assert teardown is deferred while held.
+        const close = vi.fn(async () => {})
+        const failingSuite: Suite = {
+            name: 'demo', description: '', roles: ['admin'],
+            steps: [{ name: 'boom', run: async (ctx) => { await ctx.step('boom', async () => { throw new Error('expected X to be visible') }) } }],
+        }
+        const d = deps({
+            openBrowser: vi.fn(async () => ({
+                page: {
+                    context: () => ({ clearCookies: vi.fn(async () => {}) }),
+                    evaluate: vi.fn(async () => {}),
+                    url: () => 'https://app.qa.safeinsights.org/',
+                    on: vi.fn(),
+                    off: vi.fn(),
+                } as never,
+                cookieHeader: 'sid=abc',
+                close,
+            })),
+            onErrorHold: (info) => seen.push(`hold:${info.failureCategory}:${info.error}`),
+            waitForResume: () => releaseGate,
+        })
+        const runPromise = runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
+        // Let the run reach the hold and block there.
+        await new Promise((r) => setTimeout(r, 10))
+        expect(seen).toContain('hold:app-assertion:expected X to be visible')
+        // Crucially, teardown has NOT happened yet — the browser is still open.
+        expect(close).not.toHaveBeenCalled()
+        // Now release: teardown proceeds and the result is returned.
+        resolveRelease()
+        const result = await runPromise
+        expect(result.ok).toBe(false)
+        expect(result.failureCategory).toBe('app-assertion')
+        // Teardown ran exactly once, after release.
+        expect(close).toHaveBeenCalledOnce()
+    })
+
+    it('a failed run WITHOUT onErrorHold tears down immediately (no hold)', async () => {
+        const waitForResume = vi.fn(async () => {})
+        const failingSuite: Suite = {
+            name: 'demo', description: '', roles: ['admin'],
+            steps: [{ name: 'boom', run: async (ctx) => { await ctx.step('boom', async () => { throw new Error('expected X to be visible') }) } }],
+        }
+        // onErrorHold NOT provided; waitForResume provided but must not be consulted.
+        const d = deps({ waitForResume })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
+        expect(result.ok).toBe(false)
+        expect(waitForResume).not.toHaveBeenCalled()
+    })
+
+    it('a SUCCESSFUL run never calls onErrorHold', async () => {
+        const onErrorHold = vi.fn()
+        const d = deps({ onErrorHold })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
+        expect(result.ok).toBe(true)
+        expect(onErrorHold).not.toHaveBeenCalled()
+    })
+
     it('runs straight through when shouldPause returns false', async () => {
         const onPaused = vi.fn()
         const d = deps({ shouldPause: () => false, onPaused, waitForResume: async () => {} })
