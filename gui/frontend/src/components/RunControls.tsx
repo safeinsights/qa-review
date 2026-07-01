@@ -20,6 +20,9 @@ export interface RunControlsProps {
     onRun: () => void
     runDisabled?: boolean
     runLabel?: string
+    // Opens the selected suite's source in the user's editor. When provided (and a
+    // suite is selected), a secondary "Edit Suite" button sits left of Run.
+    onEditSuite?: () => void
     // When running, the action button becomes a red Stop that calls onStop.
     running?: boolean
     onStop?: () => void
@@ -49,6 +52,10 @@ export function RunControls(p: RunControlsProps) {
     const roleOptions = allowed.length > 0 ? allowed : ALL_ROLES
     const roleFixed = allowed.length === 1
     const fieldsLocked = !!p.running || !!p.paused
+    // The Edit Suite button (when visible) owns marginLeft:auto to right-align the
+    // group; otherwise the action button carries it so it still pins to the right.
+    const editVisible = showSuite && !!p.onEditSuite && !fieldsLocked
+    const actionMargin = editVisible ? {} : { marginLeft: 'auto' as const }
 
     return (
         <div
@@ -127,13 +134,28 @@ export function RunControls(p: RunControlsProps) {
                     />
                 )}
             </Field>
+            {/* Secondary, deliberately quiet: edit the selected suite's source in
+                the user's editor. Sits left of the action button and carries the
+                marginLeft:auto so the whole button group stays right-aligned.
+                Hidden while a run is active — the source shouldn't change mid-run. */}
+            {showSuite && p.onEditSuite && !fieldsLocked ? (
+                <Button
+                    onClick={p.onEditSuite}
+                    variant="default"
+                    radius="md"
+                    size="md"
+                    style={{ marginLeft: 'auto' }}
+                >
+                    Edit Suite
+                </Button>
+            ) : null}
             {p.paused ? (
                 <Button
                     onClick={p.onResume}
                     color="teal"
                     radius="md"
                     size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
+                    style={{ ...actionMargin, boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
                     leftSection={<span aria-hidden>▶</span>}
                 >
                     Resume
@@ -146,7 +168,7 @@ export function RunControls(p: RunControlsProps) {
                     color="red"
                     radius="md"
                     size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(176,74,58,0.22)' }}
+                    style={{ ...actionMargin, boxShadow: '0 6px 18px rgba(176,74,58,0.22)' }}
                     leftSection={p.stopping ? undefined : <span aria-hidden>■</span>}
                 >
                     {p.stopping ? 'Stopping…' : 'Stop'}
@@ -158,7 +180,7 @@ export function RunControls(p: RunControlsProps) {
                     color="teal"
                     radius="md"
                     size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
+                    style={{ ...actionMargin, boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
                     leftSection={<span aria-hidden>▶</span>}
                 >
                     {p.runLabel ?? 'Run'}

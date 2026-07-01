@@ -140,3 +140,45 @@ func TestValidSuiteName(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveEditor(t *testing.T) {
+	const p = "/repo/src/suites/signin.ts"
+	never := func(string) bool { return false }
+	always := func(string) bool { return true }
+
+	t.Run("EDITOR wins and keeps flags", func(t *testing.T) {
+		t.Setenv("VISUAL", "")
+		t.Setenv("EDITOR", "code --wait")
+		prog, args := resolveEditor(p, never)
+		if prog != "code" || len(args) != 2 || args[0] != "--wait" || args[1] != p {
+			t.Fatalf("got prog=%q args=%v", prog, args)
+		}
+	})
+
+	t.Run("VISUAL takes precedence over EDITOR", func(t *testing.T) {
+		t.Setenv("VISUAL", "vim")
+		t.Setenv("EDITOR", "code")
+		prog, args := resolveEditor(p, always)
+		if prog != "vim" || len(args) != 1 || args[0] != p {
+			t.Fatalf("got prog=%q args=%v", prog, args)
+		}
+	})
+
+	t.Run("known GUI editor on PATH when no env set", func(t *testing.T) {
+		t.Setenv("VISUAL", "")
+		t.Setenv("EDITOR", "")
+		prog, args := resolveEditor(p, always) // first candidate (code) resolves
+		if prog != "code" || len(args) != 1 || args[0] != p {
+			t.Fatalf("got prog=%q args=%v", prog, args)
+		}
+	})
+
+	t.Run("falls back to open when nothing resolves", func(t *testing.T) {
+		t.Setenv("VISUAL", "")
+		t.Setenv("EDITOR", "")
+		prog, args := resolveEditor(p, never)
+		if prog != "open" || len(args) != 1 || args[0] != p {
+			t.Fatalf("got prog=%q args=%v", prog, args)
+		}
+	})
+}

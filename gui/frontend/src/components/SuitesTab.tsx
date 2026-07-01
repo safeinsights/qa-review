@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RunScreen, type RunSpec } from './RunScreen'
 import { RunControls } from './RunControls'
-import { runEngine, onStdoutLine, onExit, stopRun, setPauses, resumeRun, isRunning as queryIsRunning } from '../lib/ipc'
+import {
+    runEngine,
+    onStdoutLine,
+    onExit,
+    stopRun,
+    setPauses,
+    resumeRun,
+    isRunning as queryIsRunning,
+    openSuiteInEditor,
+} from '../lib/ipc'
 
 interface SuiteInfo {
     name: string
@@ -91,6 +100,12 @@ export function SuitesTab() {
         await stopRun()
     }
 
+    // Open the selected suite's source in the user's editor. Fire-and-forget: the
+    // editor launches detached, so there's nothing to await in the UI.
+    const editSuite = () => {
+        void openSuiteInEditor(suite).catch((e) => console.error('open suite in editor failed', e))
+    }
+
     // Once the run has genuinely started, `running` becoming false means it exited
     // (or the stop landed) — clear the transient stopping flag either way.
     useEffect(() => {
@@ -147,6 +162,7 @@ export function SuitesTab() {
                 setSuite={setSuite}
                 suites={suites}
                 onRun={run}
+                onEditSuite={editSuite}
                 running={running}
                 onStop={stop}
                 stopping={stopping}
