@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"os/exec"
 	"reflect"
 	"testing"
 )
@@ -22,6 +24,57 @@ func TestSendToRunNoActiveRun(t *testing.T) {
 	// No run in flight → runStdin is nil → SendToRun must be a safe no-op.
 	if err := a.SendToRun(resumeControlLine()); err != nil {
 		t.Errorf("SendToRun with no active run returned %v, want nil", err)
+	}
+}
+
+func TestTerminateRunNoActiveRun(t *testing.T) {
+	a := NewApp()
+	// No run in flight → terminateRun (and StopRun) must be safe no-ops that
+	// return promptly rather than blocking on a nonexistent process.
+	a.terminateRun()
+	if err := a.StopRun(); err != nil {
+		t.Errorf("StopRun with no active run returned %v, want nil", err)
+	}
+}
+
+func TestRejectSecondRunWhileActive(t *testing.T) {
+	a := NewApp()
+	if a.IsRunning() {
+		t.Fatal("fresh App reports a run in progress")
+	}
+	// Simulate an active tracked run by reserving the slot (as streamCmd does).
+	a.runMu.Lock()
+	a.runCmd = &exec.Cmd{}
+	a.runMu.Unlock()
+
+	if !a.IsRunning() {
+		t.Error("IsRunning() = false while a run is reserved, want true")
+	}
+	// A second tracked run must be rejected, not superseded.
+	if err := a.streamCmd(&exec.Cmd{}, "qar run", true); !errors.Is(err, ErrRunInProgress) {
+		t.Errorf("second tracked streamCmd err = %v, want ErrRunInProgress", err)
+	}
+	// The active run must be untouched by the rejection.
+	if !a.IsRunning() {
+		t.Error("active run was cleared by a rejected second run")
+	}
+}
+
+func TestIsTrackedRun(t *testing.T) {
+	// Only `run` is the tracked, one-at-a-time, stoppable run.
+	tracked := [][]string{
+		{"run", "--json", "--suite", "signin"},
+		{"session", "--role", "admin"},
+		{}, // no args → treat as tracked (fail safe: don't leave it un-stoppable)
+	}
+	for _, args := range tracked {
+		if !isTrackedRun(args) {
+			t.Errorf("isTrackedRun(%v) = false, want true", args)
+		}
+	}
+	// `list` is a throwaway query — must NOT be tracked.
+	if isTrackedRun([]string{"list"}) {
+		t.Error("isTrackedRun([list]) = true, want false")
 	}
 }
 

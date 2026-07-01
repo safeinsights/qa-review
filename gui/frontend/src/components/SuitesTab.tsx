@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RunScreen, type RunSpec } from './RunScreen'
 import { RunControls } from './RunControls'
-import { runEngine, onStdoutLine, onExit, stopRun, setPauses, resumeRun } from '../lib/ipc'
+import { runEngine, onStdoutLine, onExit, stopRun, setPauses, resumeRun, isRunning as queryIsRunning } from '../lib/ipc'
 
 interface SuiteInfo {
     name: string
@@ -75,6 +75,9 @@ export function SuitesTab() {
     }, [suite])
 
     const run = () => {
+        // Client-side guard: never start a second run while one is active (Go also
+        // rejects it, but this avoids the round-trip and keeps the button honest).
+        if (running) return
         const args = ['run', '--json', '--screencast', '--role', role, '--suite', suite]
         if (pr) args.push('--pr', pr)
         else args.push('--env', env)
@@ -93,6 +96,19 @@ export function SuitesTab() {
     useEffect(() => {
         if (!running) setStopping(false)
     }, [running])
+
+    // Sync the button to the AUTHORITATIVE engine state on mount: if a tracked run
+    // is already active (e.g. the app/tab reloaded while one was live), reflect it
+    // so the control shows Stop — not a Run that would just be rejected.
+    useEffect(() => {
+        let alive = true
+        void queryIsRunning().then((active) => {
+            if (alive && active) setRunning(true)
+        })
+        return () => {
+            alive = false
+        }
+    }, [])
 
     const resume = async () => {
         // Optimistically flip the button back; the engine's next step:running
