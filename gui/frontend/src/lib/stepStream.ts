@@ -2,7 +2,7 @@ import type { ConsoleLine } from './screencast'
 
 export type StepEnvelope = { type: 'step'; name: string; status: string; error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }
 export type ResultEnvelope = { type: 'result'; ok: boolean; [k: string]: unknown }
-export type ScreencastEnvelope = { type: 'screencast'; port: number }
+export type ScreencastEnvelope = { type: 'screencast'; port: number; cdpPort: number }
 // Emitted when the run halts before a step the user marked "pause before".
 export type PausedEnvelope = { type: 'paused'; name: string }
 export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope | PausedEnvelope

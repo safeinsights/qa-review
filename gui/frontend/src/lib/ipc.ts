@@ -38,6 +38,7 @@ interface WailsApp {
     IsRunning(): Promise<boolean>
     SendToRun(line: string): Promise<void>
     StartAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void>
+    StartRunCompanion(cdpPort: number, suite: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -142,6 +143,13 @@ export async function resumeRun(): Promise<void> {
 // The GUI then receives `session-ready` (screencast port) + `pty-output` events.
 export async function startAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void> {
     await app().StartAuthoringSession(env, pr, role, instruction)
+}
+
+// Start the "Ask Claude" run companion: Go attaches claude in a PTY to the
+// running engine's browser via its CDP port (no new browser is launched). The
+// GUI then receives `pty-output` events, same as the authoring session.
+export async function startRunCompanion(cdpPort: number, suite: string): Promise<void> {
+    await app().StartRunCompanion(cdpPort, suite)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.
