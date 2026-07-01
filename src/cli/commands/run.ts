@@ -109,6 +109,8 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     const baseOpenBrowser = base.openBrowser
     const wrappedOpenBrowser = async (env: Parameters<typeof baseOpenBrowser>[0]) => {
         const handle = await baseOpenBrowser(env)
+        // cdpPort 0 = "no CDP port" (test fakes / headed deps omit it; production
+        // always sets a real one). Consumers must treat 0 as "companion unavailable".
         runCdpPort = handle.cdpPort ?? 0
         return handle
     }
