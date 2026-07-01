@@ -39,6 +39,10 @@ const CODE_CRITERIA_KEYS = ['proposalAlignment', 'agreementCompliance', 'securit
 // approved jobs and POSTs encrypted results back), so this can take minutes.
 const RESULTS_TIMEOUT_MS = 15 * 60_000
 const RESULTS_POLL_INTERVAL_MS = 15_000
+// Per-poll active-wait window: after each reload, wait this long for the results
+// key box (or error) to actually render before deciding the results aren't ready
+// yet. Covers the reload + SPA hydration so a not-yet-rendered box isn't missed.
+const RESULTS_RENDER_WAIT_MS = 8_000
 
 // Shared per-run state threaded between steps via ctx.state. `study` is the
 // generated content; `studyId` is captured at Step 2 and reused by every later
@@ -284,9 +288,9 @@ export const studyHappyPathSuite: Suite = {
             },
         },
         {
-            name: 'Reviewer decrypts and approves the results',
+            name: 'Reviewer decrypts and views the results',
             run: async (ctx) => {
-                await ctx.step('Reviewer decrypts and approves the results', async () => {
+                await ctx.step('Reviewer decrypts and views the results', async () => {
                     const key = ctx.resultsKey
                     if (!key) {
                         throw new Error(
@@ -296,7 +300,21 @@ export const studyHappyPathSuite: Suite = {
                     }
                     await ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.').fill(key)
                     await ctx.page.getByRole('button', { name: /Decrypt Files/i }).click()
+                    // Open the first result's preview and confirm it actually rendered
+                    // numeric data (the results table), not just that a View button exists.
                     await ctx.page.getByRole('button', { name: 'View' }).first().waitFor({ state: 'visible' })
+                    await ctx.page.getByRole('button', { name: 'View' }).first().click()
+                    await verifyResultsModalHasNumbers(ctx)
+                    // Close the preview so it doesn't overlay the Approve button.
+                    await ctx.page.getByRole('dialog').getByRole('button', { name: /close/i }).first().click()
+                    await ctx.page.getByRole('dialog').waitFor({ state: 'hidden' }).catch(() => {})
+                })
+            },
+        },
+        {
+            name: 'Reviewer approves the results',
+            run: async (ctx) => {
+                await ctx.step('Reviewer approves the results', async () => {
                     await ctx.page.getByRole('button', { name: /^Approve$/i }).last().click()
                     await ctx.page.waitForURL('**/dashboard')
                 })
@@ -523,12 +541,25 @@ async function launchIdeBestEffort(ctx: RunContext): Promise<void> {
 // Poll the reviewer review page until the run produces decryptable results (the
 // results-key box appears) or the job errors / we time out. Re-navigates each
 // poll because the review page caches its server data.
+//
+// Each poll ACTIVELY WAITS through the reload's render window rather than taking
+// one instant isVisible() snapshot: a bare snapshot right after domcontentloaded
+// routinely misses the SPA render (the box is there a moment later), so the loop
+// would sleep a full interval and the results screen sits unnoticed for many
+// seconds. We race the key box vs. the error text with a bounded waitFor so we
+// react the instant either renders; a short sleep only spaces genuine retries.
 async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
     const deadline = Date.now() + RESULTS_TIMEOUT_MS
     const keyBox = () => ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.')
     const errored = () => ctx.page.getByText(/The code errored/i)
     while (Date.now() < deadline) {
         await gotoReview(ctx, studyId)
+        // Wait out the render window (reload + SPA hydration + a margin) for
+        // whichever terminal state appears first, instead of a single snapshot.
+        await Promise.race([
+            keyBox().waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS }).catch(() => {}),
+            errored().waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS }).catch(() => {}),
+        ])
         if (await keyBox().isVisible().catch(() => false)) return
         if (await errored().isVisible().catch(() => false)) {
             throw new Error(`Study ${studyId} run ERRORED before producing results`)
@@ -539,4 +570,21 @@ async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
         `Timed out after ${RESULTS_TIMEOUT_MS / 60_000}min waiting for run results on study ${studyId}. ` +
             `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`,
     )
+}
+
+// Assert the open results-preview modal actually rendered numeric data. The CSV
+// preview is a DataTable (real <table>); a decrypt-but-empty/garbled result would
+// show a dialog with no numbers. We check the dialog's text for a standalone
+// number rather than a specific value, so it survives run-to-run data changes.
+async function verifyResultsModalHasNumbers(ctx: RunContext): Promise<void> {
+    const dialog = ctx.page.getByRole('dialog')
+    await dialog.waitFor({ state: 'visible', timeout: 20_000 })
+    // Wait for the table body to populate (the CSV parses + DataTable hydrates a
+    // moment after the modal opens), then read its text once.
+    await dialog.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 15_000 })
+    const text = (await dialog.innerText()) ?? ''
+    // A standalone number (int or decimal), e.g. the safe-results "42" / "0.42".
+    if (!/(?:^|\s)\d+(?:\.\d+)?(?:\s|$)/.test(text)) {
+        throw new Error(`Results preview modal contained no numeric data. Modal text:\n${text.slice(0, 500)}`)
+    }
 }
