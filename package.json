@@ -10,13 +10,11 @@
         "lint": "biome check",
         "lint:fix": "biome check --write",
         "format": "biome format --write",
-        "release": "tsx scripts/release.ts",
         "qa": "tsx src/cli/index.ts",
         "qar": "tsx bin/qar.ts"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.1",
-        "@clack/prompts": "^1.6.0",
         "@faker-js/faker": "^10.5.0",
         "@types/node": "^22.0.0",
         "@types/ws": "^8.18.1",
