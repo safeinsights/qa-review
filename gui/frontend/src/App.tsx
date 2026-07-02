@@ -14,6 +14,9 @@ import { SyncButton } from './components/SyncButton'
 export function App() {
     const [tab, setTab] = useState<string | null>('suites')
     const [helpOpen, setHelpOpen] = useState(false)
+    // Bumped after a successful sync so SuitesTab re-fetches the (possibly changed)
+    // suite list — a pull that adds/removes suites now shows up without a restart.
+    const [suitesRefresh, setSuitesRefresh] = useState(0)
     return (
         <SetupGate>
             <KeyringAccessGate>
@@ -49,6 +52,7 @@ export function App() {
                             </div>
                         </div>
                         <SyncButton
+                            onSynced={() => setSuitesRefresh(n => n + 1)}
                             extraActions={
                                 <div style={{ display: 'flex', gap: 12 }}>
                                     <Button
@@ -89,7 +93,7 @@ export function App() {
                     in-flight run look stopped and interleaved a second run's steps.
                     Keeping panels mounted preserves the run across tab switches. */}
                         <Tabs.Panel value="suites" pt="lg" keepMounted>
-                            <SuitesTab />
+                            <SuitesTab refreshKey={suitesRefresh} />
                         </Tabs.Panel>
                         <Tabs.Panel value="exploratory" pt="lg" keepMounted>
                             <ExploratoryTab />

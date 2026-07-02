@@ -21,7 +21,7 @@ interface SuiteInfo {
     steps: string[]
 }
 
-export function SuitesTab() {
+export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
     const [env, setEnv] = useState<string>('qa')
     const [pr, setPr] = useState<string>('')
     const [role, setRole] = useState<string>('admin')
@@ -41,8 +41,13 @@ export function SuitesTab() {
     const [stepFailed, setStepFailed] = useState(false)
 
     // NOTE: this fetch reuses the global stdout-line/proc-exit events, same as a
-    // run. It only runs once on mount before any run is started, so it's safe.
+    // run — so it must NOT fire while a suite is running (it would hijack those
+    // events). It runs on mount, and again when refreshKey bumps (after a sync)
+    // provided nothing is running; the guard below enforces that. running/stopping
+    // are read as guards, not deps — refreshKey is the only intended trigger.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: running/stopping guard, not trigger
     useEffect(() => {
+        if (running || stopping) return // a run owns the shared events right now
         let buf = ''
         let offOut: (() => void) | undefined
         let offExit: (() => void) | undefined
@@ -65,7 +70,7 @@ export function SuitesTab() {
             offOut?.()
             offExit?.()
         }
-    }, [])
+    }, [refreshKey])
 
     // The role is determined BY the suite — a suite declares which role(s) it runs
     // as. Showing a free role dropdown was a footgun (e.g. create-study only works

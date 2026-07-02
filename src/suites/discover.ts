@@ -19,10 +19,23 @@ function isSuite(value: unknown): value is Suite {
 // Import each file and collect every export that matches the Suite shape.
 // Pure of the filesystem: the caller supplies the file list + importer, so this
 // is unit-testable and reusable for both real globbing and tests.
+//
+// A suite that throws on import (bad relative import, missing dep) must NOT hide
+// every other suite — otherwise one broken file collapses the whole list. So each
+// import is isolated: on failure we warn and skip that file, then keep going.
 export async function discoverSuites(files: string[], importer: Importer): Promise<Suite[]> {
     const suites: Suite[] = []
     for (const file of files) {
-        const mod = await importer(file)
+        let mod: Record<string, unknown>
+        try {
+            mod = await importer(file)
+        } catch (err) {
+            // Intentional: a skipped suite must be visible (this went to stderr and
+            // is folded into the run log), never silently dropped.
+            // biome-ignore lint/suspicious/noConsole: surface skipped suites
+            console.warn(`Skipping suite ${file}: ${err instanceof Error ? err.message : err}`)
+            continue
+        }
         for (const value of Object.values(mod)) {
             if (isSuite(value)) suites.push(value)
         }
