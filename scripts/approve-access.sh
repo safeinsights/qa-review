@@ -45,6 +45,15 @@ QAR="${QAR_BIN:-pnpm qar}"
 
 cd "$REPO"
 
+# Sanity-check we're in the qa-review repo (a keyring). Guards against running in
+# the wrong dir — e.g. the dev checkout when you meant the app's clone (set
+# QAR_REPO_DIR="$HOME/Library/Application Support/qa-runner/repo").
+if [[ ! -f "config/keyring.json" ]]; then
+    echo "error: $REPO doesn't look like the qa-review repo (no config/keyring.json)." >&2
+    echo "       Set QAR_REPO_DIR to the clone that holds your identity." >&2
+    exit 1
+fi
+
 # Refuse to clobber uncommitted work — rekey rewrites config/settings.secrets.json.
 if [[ -n "$(git status --porcelain)" ]]; then
     echo "error: working tree is dirty in $REPO — commit or discard changes first." >&2
@@ -62,8 +71,10 @@ echo "==> Approving PR #$PR (branch: $BRANCH) in $REPO" >&2
 STARTING_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 git fetch origin --quiet
-git checkout "$BRANCH" --quiet
-git pull --ff-only --quiet
+# The PR's remote branch is authoritative — check it out and hard-reset the local
+# branch to match. A plain `pull --ff-only` aborts if a stale local branch of the
+# same name has diverged (e.g. left over from an earlier request-access attempt).
+git checkout -B "$BRANCH" "origin/$BRANCH" --quiet
 
 # Re-encrypt every secret to the keyring on this branch (now including the new
 # recipient) and refresh keyring.lock. QAR may be "pnpm qar" (two words), so it
