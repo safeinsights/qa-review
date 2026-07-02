@@ -38,6 +38,12 @@ export function ExploratoryTab() {
             unReady = await onSessionReady((port) => {
                 setScreencastPort(port)
                 setStarting(false)
+                // Our session's browser is genuinely up → we ARE active. Setting this
+                // here (not only in start()) self-heals the case where our own
+                // startAuthoringSession evicted a prior session: Go broadcasts
+                // `session-ended` for that eviction, which our own onSessionEnded
+                // handler would otherwise use to flip us to active=false mid-start.
+                setActive(true)
             })
             unEnded = await onSessionEnded(() => {
                 setActive(false)
