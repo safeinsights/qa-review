@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type StepEnvelope, StreamParser, stepsByIndex } from '@/gui/lib/stepStream'
+import { type StepEnvelope, StreamParser, stepDuration, stepsByIndex } from '@/gui/lib/stepStream'
 
 const step = (name: string, status: string, extra: Partial<StepEnvelope> = {}): StepEnvelope => ({
     type: 'step',
@@ -77,5 +77,39 @@ describe('stepsByIndex', () => {
             ['B', 'failed'],
             ['C', 'running'],
         ])
+    })
+
+    it("carries the running event's start time onto the resolved event", () => {
+        const out = stepsByIndex([
+            step('A', 'running', { at: 1000 }),
+            step('A', 'passed', { at: 3500 }),
+        ])
+        expect(out[0].startedAt).toBe(1000)
+        expect(out[0].at).toBe(3500)
+    })
+})
+
+describe('stepDuration', () => {
+    const timed = (startedAt: number, at: number): StepEnvelope =>
+        step('A', 'passed', { startedAt, at })
+
+    it('formats sub-second as <1s', () => {
+        expect(stepDuration(timed(1000, 1400))).toBe('<1s')
+    })
+
+    it('formats whole seconds under a minute', () => {
+        expect(stepDuration(timed(0, 35_000))).toBe('35s')
+        expect(stepDuration(timed(0, 8_400))).toBe('8s')
+    })
+
+    it('formats a minute or more as m:ss with a zero-padded seconds', () => {
+        expect(stepDuration(timed(0, 83_000))).toBe('1:23')
+        expect(stepDuration(timed(0, 125_000))).toBe('2:05')
+    })
+
+    it('returns null when timing is unavailable or negative', () => {
+        expect(stepDuration(step('A', 'passed'))).toBeNull()
+        expect(stepDuration(step('A', 'running', { at: 1000 }))).toBeNull()
+        expect(stepDuration(timed(3000, 1000))).toBeNull()
     })
 })

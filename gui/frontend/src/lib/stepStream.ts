@@ -8,6 +8,12 @@ export type StepEnvelope = {
     screenshot?: string
     url?: string
     console?: ConsoleLine[]
+    // Epoch ms when this event was emitted (engine's StepEvent.at). On a 'running'
+    // event this is the step's start; on a resolved event it's the finish.
+    at?: number
+    // The 'running' event's `at`, carried onto the resolved event by stepsByIndex so
+    // a row can show its duration (resolved.at − startedAt). Only on resolved rows.
+    startedAt?: number
 }
 export type ResultEnvelope = {
     type: 'result'
@@ -54,10 +60,27 @@ export function stepsByIndex(steps: StepEnvelope[]): StepEnvelope[] {
     const byIndex: StepEnvelope[] = []
     for (const s of steps) {
         if (s.status === 'running') byIndex.push(s)
-        else if (byIndex.length > 0) byIndex[byIndex.length - 1] = s
-        else byIndex.push(s) // resolved event with no preceding 'running' (defensive)
+        else if (byIndex.length > 0) {
+            // Carry the 'running' event's start time onto the resolved event so the
+            // row can render its duration (the running entry is replaced here).
+            byIndex[byIndex.length - 1] = { ...s, startedAt: byIndex[byIndex.length - 1].at }
+        } else byIndex.push(s) // resolved event with no preceding 'running' (defensive)
     }
     return byIndex
+}
+
+// Short, human duration for a completed step: `<1s`, whole seconds under a minute
+// (`35s`), else minutes:seconds (`1:23`). Returns null when timing is unavailable
+// (e.g. a resolved event with no preceding 'running', or a still-running step).
+export function stepDuration(step: StepEnvelope): string | null {
+    if (step.startedAt === undefined || step.at === undefined) return null
+    const ms = step.at - step.startedAt
+    if (ms < 0) return null
+    if (ms < 1000) return '<1s'
+    const secs = Math.round(ms / 1000)
+    if (secs < 60) return `${secs}s`
+    const mins = Math.floor(secs / 60)
+    return `${mins}:${String(secs % 60).padStart(2, '0')}`
 }
 
 function parse(line: string): Envelope | null {
