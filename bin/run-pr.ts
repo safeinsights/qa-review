@@ -1,5 +1,5 @@
 import { resolvePrEnv } from '@/engine/env'
-import { runEngine, defaultDeps } from '@/engine/run'
+import { defaultDeps, runEngine } from '@/engine/run'
 import { loadSettings } from '@/engine/settings'
 import type { Role } from '@/engine/types'
 
@@ -15,7 +15,7 @@ async function main() {
 
     const result = await runEngine(
         { suite: suiteArg, env: envConfig.name, role: roleArg as Role, envConfig },
-        defaultDeps(vars),
+        defaultDeps(vars)
     )
 
     console.log('--- Result ---')
@@ -27,12 +27,13 @@ async function main() {
     console.log(`cleanup ok: ${result.cleanup.ok}`)
     if (!result.cleanup.ok) {
         console.log(`cleanup failed: ${result.cleanup.failed.join(', ')}`)
-        if (result.cleanup.statuses) console.log(`cleanup statuses: ${JSON.stringify(result.cleanup.statuses)}`)
+        if (result.cleanup.statuses)
+            console.log(`cleanup statuses: ${JSON.stringify(result.cleanup.statuses)}`)
     }
     console.log(`report: ${result.bundleDir}/report.html`)
 }
 
-main().catch((e) => {
+main().catch(e => {
     console.error('Error:', e.message)
     process.exit(1)
 })

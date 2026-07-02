@@ -1,7 +1,22 @@
 import type { ConsoleLine } from './screencast'
 
-export type StepEnvelope = { type: 'step'; name: string; status: string; error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }
-export type ResultEnvelope = { type: 'result'; ok: boolean; [k: string]: unknown }
+export type StepEnvelope = {
+    type: 'step'
+    name: string
+    status: string
+    error?: string
+    screenshot?: string
+    url?: string
+    console?: ConsoleLine[]
+}
+export type ResultEnvelope = {
+    type: 'result'
+    ok: boolean
+    failureCategory?: string
+    bundleDir?: string
+    cleanup?: { ok: boolean; failed?: string[] }
+    [k: string]: unknown
+}
 export type ScreencastEnvelope = { type: 'screencast'; port: number; cdpPort: number }
 // Emitted when the run halts before a step the user marked "pause before".
 export type PausedEnvelope = { type: 'paused'; name: string }
@@ -10,7 +25,12 @@ export type PausedEnvelope = { type: 'paused'; name: string }
 // {type:'resume'} control message arrives (same channel as `paused`), then it tears
 // down. Mirrors the engine's ErrorHoldInfo (src/engine/types.ts).
 export type ErrorHoldEnvelope = { type: 'error-hold'; failureCategory?: string; error?: string }
-export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope | PausedEnvelope | ErrorHoldEnvelope
+export type Envelope =
+    | StepEnvelope
+    | ResultEnvelope
+    | ScreencastEnvelope
+    | PausedEnvelope
+    | ErrorHoldEnvelope
 
 // Collapse the append-only step-event stream into one event per EXECUTED
 // position, in order. The engine emits each step as a 'running' entry then
@@ -37,7 +57,14 @@ function parse(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result' || t === 'screencast' || t === 'paused' || t === 'error-hold') return obj as Envelope
+        if (
+            t === 'step' ||
+            t === 'result' ||
+            t === 'screencast' ||
+            t === 'paused' ||
+            t === 'error-hold'
+        )
+            return obj as Envelope
     }
     return null
 }

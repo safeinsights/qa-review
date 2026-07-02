@@ -1,10 +1,16 @@
-import { describe, it, expect } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { describe, expect, it } from 'vitest'
 import {
-    readKeyring, writeKeyring, recipients, addMember,
-    fingerprint, readLock, writeLock, isInDrift,
+    addMember,
+    fingerprint,
+    isInDrift,
+    readKeyring,
+    readLock,
+    recipients,
+    writeKeyring,
+    writeLock,
 } from '@/engine/keyring'
 
 function tmpDir(): string {
@@ -18,14 +24,26 @@ describe('keyring', () => {
 
     it('adds a member and lists recipients', () => {
         const dir = tmpDir()
-        const next = addMember(readKeyring(dir), { name: 'Jane', publicKey: 'age1jane', email: 'jane@x.com', addedDate: '2026-06-30' })
+        const next = addMember(readKeyring(dir), {
+            name: 'Jane',
+            publicKey: 'age1jane',
+            email: 'jane@x.com',
+            addedDate: '2026-06-30',
+        })
         writeKeyring(dir, next)
         expect(recipients(readKeyring(dir))).toEqual(['age1jane'])
     })
 
     it('rejects a duplicate name', () => {
-        const k = addMember([], { name: 'Jane', publicKey: 'age1a', email: 'a', addedDate: '2026-06-30' })
-        expect(() => addMember(k, { name: 'Jane', publicKey: 'age1b', email: 'b', addedDate: '2026-06-30' })).toThrow(/already in the keyring/)
+        const k = addMember([], {
+            name: 'Jane',
+            publicKey: 'age1a',
+            email: 'a',
+            addedDate: '2026-06-30',
+        })
+        expect(() =>
+            addMember(k, { name: 'Jane', publicKey: 'age1b', email: 'b', addedDate: '2026-06-30' })
+        ).toThrow(/already in the keyring/)
     })
 
     it('fingerprint is order-independent and changes with membership', () => {
@@ -38,7 +56,10 @@ describe('keyring', () => {
 
     it('drift is true until the lock matches the keyring', () => {
         const dir = tmpDir()
-        writeKeyring(dir, addMember([], { name: 'Jane', publicKey: 'age1a', email: 'a', addedDate: '2026-06-30' }))
+        writeKeyring(
+            dir,
+            addMember([], { name: 'Jane', publicKey: 'age1a', email: 'a', addedDate: '2026-06-30' })
+        )
         expect(isInDrift(dir)).toBe(true)
         writeLock(dir, fingerprint(recipients(readKeyring(dir))))
         expect(readLock(dir)).toBe(fingerprint(['age1a']))

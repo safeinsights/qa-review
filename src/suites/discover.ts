@@ -11,7 +11,7 @@ function isSuite(value: unknown): value is Suite {
         Array.isArray((value as Suite).roles) &&
         Array.isArray((value as Suite).steps) &&
         (value as Suite).steps.every(
-            (s) => !!s && typeof s.name === 'string' && typeof s.run === 'function',
+            s => !!s && typeof s.name === 'string' && typeof s.run === 'function'
         )
     )
 }

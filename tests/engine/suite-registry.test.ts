@@ -1,15 +1,15 @@
-import { describe, it, expect } from 'vitest'
-import { listSuites, getSuite } from '@/engine/suite-registry'
+import { describe, expect, it } from 'vitest'
+import { getSuite, listSuites } from '@/engine/suite-registry'
 
 describe('suite-registry', () => {
     it('lists available suites with name + description', async () => {
-        const names = (await listSuites()).map((s) => s.name)
+        const names = (await listSuites()).map(s => s.name)
         expect(names).toContain('signin')
         expect(names).toContain('create-study')
     })
 
     it('lists each suite with its static step names in order', async () => {
-        const createStudy = (await listSuites()).find((s) => s.name === 'create-study')
+        const createStudy = (await listSuites()).find(s => s.name === 'create-study')
         expect(createStudy?.steps).toEqual([
             'Open the researcher org dashboard',
             'Start a new study proposal',

@@ -1,10 +1,15 @@
-import { describe, it, expect, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { encryptToRecipients, decryptWithIdentity, generateIdentity, publicKeyFromIdentity } from '@/engine/settings'
+import { beforeAll, describe, expect, it } from 'vitest'
+import {
+    decryptWithIdentity,
+    encryptToRecipients,
+    generateIdentity,
+    publicKeyFromIdentity,
+} from '@/engine/settings'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const guiDir = path.resolve(here, '../../gui')

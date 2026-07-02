@@ -1,8 +1,14 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { configDir, SECRETS_FILE, isEncryptedValue, decryptWithIdentity, encryptToRecipients } from '@/engine/settings'
 import { readIdentity } from '@/engine/identity'
-import { readKeyring, recipients, fingerprint, writeLock } from '@/engine/keyring'
+import { fingerprint, readKeyring, recipients, writeLock } from '@/engine/keyring'
+import {
+    configDir,
+    decryptWithIdentity,
+    encryptToRecipients,
+    isEncryptedValue,
+    SECRETS_FILE,
+} from '@/engine/settings'
 
 // Re-encrypt every secret in settings.secrets.json to the CURRENT keyring, then
 // update keyring.lock. `identity` must be able to decrypt the existing secrets.
@@ -22,7 +28,7 @@ export async function rekeyAll(dir: string = configDir(), identity?: string): Pr
         const plain = isEncryptedValue(value) ? await decryptWithIdentity(value, id) : value
         out[key] = await encryptToRecipients(plain, keys)
     }
-    fs.writeFileSync(secretsPath, JSON.stringify(out, null, 2) + '\n')
+    fs.writeFileSync(secretsPath, `${JSON.stringify(out, null, 2)}\n`)
     writeLock(dir, fingerprint(keys))
 }
 

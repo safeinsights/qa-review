@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'node:fs'
-import * as path from 'node:path'
 import * as os from 'node:os'
+import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { afterEach, describe, expect, it } from 'vitest'
 import { discoverSuites } from '@/suites/discover'
 
 // Compiles a .ts suite via the real `qar build-suites` machinery and confirms the
@@ -23,7 +23,7 @@ function makeTempRepo(): string {
             "    steps: [{ name: 'noop', run: async () => {} }],",
             '}',
             '',
-        ].join('\n'),
+        ].join('\n')
     )
     return dir
 }
@@ -48,8 +48,8 @@ describe('build-suites', () => {
         const mjs = path.join(repo, 'suites-compiled', 'demo.mjs')
         expect(fs.existsSync(mjs)).toBe(true)
 
-        const suites = await discoverSuites([mjs], (f) => import(pathToFileURL(f).href))
-        expect(suites.map((s) => s.name)).toEqual(['demo'])
+        const suites = await discoverSuites([mjs], f => import(pathToFileURL(f).href))
+        expect(suites.map(s => s.name)).toEqual(['demo'])
     }, 20000)
 
     it('clears stale .mjs outputs for removed source suites', async () => {

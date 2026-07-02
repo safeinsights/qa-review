@@ -1,7 +1,7 @@
+import { Button } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Button } from '@mantine/core'
-import { zipBundle, saveTrace } from '../lib/ipc'
+import { saveTrace, zipBundle } from '../lib/ipc'
 import { VideoPlayer } from './VideoPlayer'
 
 // Replaces the live browser on the right once a run finishes: the recorded
@@ -47,7 +47,7 @@ export function RecordingPanel({
             const dest = await zipBundle(bundleDir, suite)
             if (dest) setZipStatus(`Saved → ${dest}`)
         } catch (e) {
-            setZipStatus('Download failed: ' + String(e))
+            setZipStatus(`Download failed: ${String(e)}`)
         } finally {
             setZipping(false)
         }
@@ -60,11 +60,42 @@ export function RecordingPanel({
             const dest = await saveTrace(bundleDir, suite)
             if (dest) setTraceStatus(`Saved → ${dest}`)
         } catch (e) {
-            setTraceStatus('Download failed: ' + String(e))
+            setTraceStatus(`Download failed: ${String(e)}`)
         } finally {
             setSavingTrace(false)
         }
     }
+
+    // Inline player. While expanded, it's unmounted and the body-portaled overlay
+    // (below) shows the player instead; the two hand off playback position via
+    // `progress`. Falls back to a loading placeholder until the blob is ready.
+    const inlineRecording = videoUrl ? (
+        expanded ? null : (
+            <VideoPlayer
+                src={videoUrl}
+                startAt={playback.time}
+                startPlaying={playback.playing}
+                onProgress={onPlaybackProgress}
+                expanded={false}
+                onToggleExpand={() => setExpanded(true)}
+            />
+        )
+    ) : (
+        <div
+            style={{
+                aspectRatio: '16 / 10',
+                display: 'grid',
+                placeItems: 'center',
+                background: 'var(--paper-sunken)',
+                borderRadius: 8,
+                color: 'var(--ink-faint)',
+                fontStyle: 'italic',
+                fontSize: 13,
+            }}
+        >
+            Loading recording…
+        </div>
+    )
 
     return (
         <div>
@@ -78,42 +109,22 @@ export function RecordingPanel({
                     background: 'var(--paper-sunken)',
                 }}
             >
-                <span className="mono" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--teal)', letterSpacing: 1 }}>
+                <span
+                    className="mono"
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        color: 'var(--teal)',
+                        letterSpacing: 1,
+                    }}
+                >
                     ▶ RECORDING
                 </span>
             </div>
 
             <div style={{ padding: 16 }}>
-                {videoUrl ? (
-                    // Inline player. While expanded, it's unmounted and the
-                    // body-portaled overlay (below) shows the player instead; the
-                    // two hand off playback position via `progress`.
-                    expanded ? null : (
-                        <VideoPlayer
-                            src={videoUrl}
-                            startAt={playback.time}
-                            startPlaying={playback.playing}
-                            onProgress={onPlaybackProgress}
-                            expanded={false}
-                            onToggleExpand={() => setExpanded(true)}
-                        />
-                    )
-                ) : (
-                    <div
-                        style={{
-                            aspectRatio: '16 / 10',
-                            display: 'grid',
-                            placeItems: 'center',
-                            background: 'var(--paper-sunken)',
-                            borderRadius: 8,
-                            color: 'var(--ink-faint)',
-                            fontStyle: 'italic',
-                            fontSize: 13,
-                        }}
-                    >
-                        Loading recording…
-                    </div>
-                )}
+                {inlineRecording}
 
                 <div style={{ marginTop: 16 }}>
                     <div className="kicker" style={{ marginBottom: 6 }}>
@@ -142,9 +153,10 @@ export function RecordingPanel({
                         </Button>
                     </div>
                     <p className="st-dim" style={{ marginTop: 6, fontSize: 11 }}>
-                        <span className="mono">trace.zip</span> replays at <span className="mono">trace.playwright.dev</span>{' '}
-                        (network + console + DOM) — use it directly, don't re-zip. “All artifacts” bundles the
-                        screenshots, video &amp; report.
+                        <span className="mono">trace.zip</span> replays at{' '}
+                        <span className="mono">trace.playwright.dev</span> (network + console + DOM)
+                        — use it directly, don't re-zip. “All artifacts” bundles the screenshots,
+                        video &amp; report.
                     </p>
                     {traceStatus ? (
                         <p className="mono st-dim" style={{ marginTop: 6, fontSize: 11 }}>
@@ -159,39 +171,76 @@ export function RecordingPanel({
                 </div>
             </div>
 
-            {/* Expanded recording overlay — portaled to <body> so it escapes any
-                transformed ancestor (which would make position:fixed resolve
-                against IT, not the viewport, breaking the centering + backdrop). */}
-            {expanded && videoUrl
-                ? createPortal(
-                      <div
-                          onClick={() => setExpanded(false)}
-                          style={{
-                              position: 'fixed',
-                              inset: 0,
-                              background: 'rgba(8,10,14,0.82)',
-                              zIndex: 1000,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: 24,
-                          }}
-                      >
-                          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(95vw, 1600px)' }}>
-                              <VideoPlayer
-                                  src={videoUrl}
-                                  maxHeight="82vh"
-                                  startAt={playback.time}
-                                  startPlaying={playback.playing}
-                                  onProgress={onPlaybackProgress}
-                                  expanded
-                                  onToggleExpand={() => setExpanded(false)}
-                              />
-                          </div>
-                      </div>,
-                      document.body,
-                  )
-                : null}
+            <ExpandedRecordingOverlay
+                isVisible={expanded && !!videoUrl}
+                videoUrl={videoUrl}
+                playback={playback}
+                onPlaybackProgress={onPlaybackProgress}
+                onClose={() => setExpanded(false)}
+            />
         </div>
+    )
+}
+
+// Full-window recording overlay — portaled to <body> so it escapes any
+// transformed ancestor (which would make position:fixed resolve against IT, not
+// the viewport, breaking the centering + backdrop). Renders null when hidden.
+function ExpandedRecordingOverlay({
+    isVisible,
+    videoUrl,
+    playback,
+    onPlaybackProgress,
+    onClose,
+}: {
+    isVisible: boolean
+    videoUrl: string | null
+    playback: { time: number; playing: boolean }
+    onPlaybackProgress: (time: number, playing: boolean) => void
+    onClose: () => void
+}) {
+    if (!isVisible || !videoUrl) return null
+    return createPortal(
+        <div
+            style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(8,10,14,0.82)',
+                zIndex: 1000,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 24,
+            }}
+        >
+            {/* Full-screen backdrop button: clicking (or Enter/Space) anywhere
+                outside the player collapses it. Rendered as a sibling behind the
+                content so the player's own controls aren't nested inside a button. */}
+            <button
+                type="button"
+                aria-label="Collapse the expanded recording"
+                onClick={onClose}
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    border: 'none',
+                    padding: 0,
+                    margin: 0,
+                    background: 'transparent',
+                    cursor: 'default',
+                }}
+            />
+            <div style={{ position: 'relative', width: 'min(95vw, 1600px)' }}>
+                <VideoPlayer
+                    src={videoUrl}
+                    maxHeight="82vh"
+                    startAt={playback.time}
+                    startPlaying={playback.playing}
+                    onProgress={onPlaybackProgress}
+                    expanded
+                    onToggleExpand={onClose}
+                />
+            </div>
+        </div>,
+        document.body
     )
 }

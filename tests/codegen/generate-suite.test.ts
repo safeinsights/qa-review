@@ -1,8 +1,8 @@
-import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { describe, it, expect } from 'vitest'
-import { generateSuite } from '@/codegen/generate-suite'
+import fs from 'node:fs'
+import { describe, expect, it } from 'vitest'
 import type { ActionTrace } from '@/codegen/action-trace'
+import { generateSuite } from '@/codegen/generate-suite'
 
 const trace: ActionTrace = {
     name: 'admin-invites-user',
@@ -31,8 +31,9 @@ describe('generateSuite', () => {
 
     it('maps actions to Playwright calls', () => {
         const src = generateSuite(trace)
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting generated source contains a literal template expression
         expect(src).toContain('await ctx.page.goto(`${ctx.baseURL}/openstax/members`')
-        expect(src).toContain("ctx.page.locator('role=button[name=\"Invite\"]').click()")
+        expect(src).toContain('ctx.page.locator(\'role=button[name="Invite"]\').click()')
         expect(src).toContain("ctx.page.locator('label=Email').fill('x@y.com')")
         expect(src).toContain("ctx.page.locator('text=x@y.com').waitFor({ state: 'visible' })")
     })
@@ -51,7 +52,7 @@ describe('generateSuite escaping + identifier safety', () => {
             role: 'admin',
             actions: [
                 { step: "It's step one", kind: 'goto', url: '/x' },
-                { step: "It's step one", kind: 'fill', selector: "label=Name", value: "O'Brien" },
+                { step: "It's step one", kind: 'fill', selector: 'label=Name', value: "O'Brien" },
                 { step: 'Check', kind: 'expectVisible', selector: "text=O'Brien" },
             ],
         }
@@ -68,7 +69,9 @@ describe('generateSuite escaping + identifier safety', () => {
 
     it('produces a valid identifier for a name with a leading digit', () => {
         const t: ActionTrace = {
-            name: '2fa-login', description: 'x', role: 'admin',
+            name: '2fa-login',
+            description: 'x',
+            role: 'admin',
             actions: [{ step: 'Go', kind: 'goto', url: '/x' }],
         }
         const src = generateSuite(t)

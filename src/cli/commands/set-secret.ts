@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { configDir, SECRETS_FILE, encryptToRecipients } from '@/engine/settings'
-import { readKeyring, recipients, fingerprint, writeLock } from '@/engine/keyring'
+import { fingerprint, readKeyring, recipients, writeLock } from '@/engine/keyring'
+import { configDir, encryptToRecipients, SECRETS_FILE } from '@/engine/settings'
 
 // Encrypt ONE plaintext value to all current recipients, writing just that key
 // into settings.secrets.json. Updates the lock.
@@ -13,7 +13,7 @@ export async function setSecret(dir: string, key: string, plain: string): Promis
         ? JSON.parse(fs.readFileSync(secretsPath, 'utf8') || '{}')
         : {}
     secrets[key] = await encryptToRecipients(plain, keys)
-    fs.writeFileSync(secretsPath, JSON.stringify(secrets, null, 2) + '\n')
+    fs.writeFileSync(secretsPath, `${JSON.stringify(secrets, null, 2)}\n`)
     writeLock(dir, fingerprint(keys))
 }
 

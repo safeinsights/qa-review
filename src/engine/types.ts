@@ -81,7 +81,13 @@ export interface RunResult {
     failureCategory?: FailureCategory
     steps: StepEvent[]
     bundleDir: string // absolute path to the result bundle folder
-    cleanup: { ok: boolean; deleted: string[]; failed: string[]; error?: string; statuses?: Record<string, number> }
+    cleanup: {
+        ok: boolean
+        deleted: string[]
+        failed: string[]
+        error?: string
+        statuses?: Record<string, number>
+    }
     env: string
     role: Role
     mode: RunMode
@@ -108,5 +114,8 @@ export interface EnvConfig {
     // Each account carries its own second-factor (MFA) code and its own optional
     // results-decryption private key (only the study-happy-path suite needs the
     // key, so an unset value must NOT fail other runs).
-    accounts: Record<Role, { email: string; password: string; mfaCode: string; privateKey?: string }>
+    accounts: Record<
+        Role,
+        { email: string; password: string; mfaCode: string; privateKey?: string }
+    >
 }

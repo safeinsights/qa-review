@@ -30,7 +30,9 @@ export function readIdentity(dir: string = configDir()): string | null {
 
 // Create a new identity file if none exists. Returns its public key and whether
 // it was freshly created. Never overwrites an existing identity.
-export async function createIdentity(dir: string = configDir()): Promise<{ publicKey: string; created: boolean }> {
+export async function createIdentity(
+    dir: string = configDir()
+): Promise<{ publicKey: string; created: boolean }> {
     const existing = readIdentity(dir)
     if (existing) {
         return { publicKey: await publicKeyFromIdentity(existing), created: false }

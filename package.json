@@ -1,28 +1,32 @@
 {
-  "name": "qa-review",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "qa": "tsx src/cli/index.ts",
-    "qar": "tsx bin/qar.ts"
-  },
-  "devDependencies": {
-    "@faker-js/faker": "^10.5.0",
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1",
-    "esbuild": "^0.28.1",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
-  },
-  "dependencies": {
-    "@clerk/testing": "^1.3.0",
-    "@playwright/test": "^1.48.0",
-    "age-encryption": "^0.3.0",
-    "ws": "^8.21.0"
-  }
+    "name": "qa-review",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "typecheck": "tsc --noEmit",
+        "lint": "biome check",
+        "lint:fix": "biome check --write",
+        "format": "biome format --write",
+        "qa": "tsx src/cli/index.ts",
+        "qar": "tsx bin/qar.ts"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.5.1",
+        "@faker-js/faker": "^10.5.0",
+        "@types/node": "^22.0.0",
+        "@types/ws": "^8.18.1",
+        "esbuild": "^0.28.1",
+        "tsx": "^4.19.0",
+        "typescript": "^5.6.0",
+        "vitest": "^2.1.0"
+    },
+    "dependencies": {
+        "@clerk/testing": "^1.3.0",
+        "@playwright/test": "^1.48.0",
+        "age-encryption": "^0.3.0",
+        "ws": "^8.21.0"
+    }
 }

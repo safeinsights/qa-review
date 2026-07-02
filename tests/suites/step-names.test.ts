@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { signinSuite } from '@/suites/signin'
+import { describe, expect, it } from 'vitest'
 import { createStudySuite } from '@/suites/create-study'
+import { signinSuite } from '@/suites/signin'
 import { studyHappyPathSuite } from '@/suites/study-happy-path'
 import type { Suite } from '@/suites/types'
 
@@ -10,7 +10,7 @@ import type { Suite } from '@/suites/types'
 // change a suite's steps, update the expected array here.
 
 function names(s: Suite): string[] {
-    return s.steps.map((st) => st.name)
+    return s.steps.map(st => st.name)
 }
 
 describe('built-in suite step names', () => {
@@ -35,8 +35,8 @@ describe('built-in suite step names', () => {
         expect(n[n.length - 1]).toBe('Switch to the admin account for cleanup authority')
         // The account-switch steps recur across the lifecycle; positional steps
         // handle the duplicates (no coalescing by name).
-        expect(n.filter((x) => x === 'Switch to the reviewer account')).toHaveLength(3)
-        expect(n.filter((x) => x === 'Switch back to the researcher account')).toHaveLength(3)
+        expect(n.filter(x => x === 'Switch to the reviewer account')).toHaveLength(3)
+        expect(n.filter(x => x === 'Switch back to the researcher account')).toHaveLength(3)
     })
 
     it('every step has a non-empty name and a run function', () => {

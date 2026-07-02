@@ -8,7 +8,12 @@ export class AuthError extends Error {}
 // cookie header string (used by the cleanup client to authorize DELETE calls as
 // this user). Throws AuthError on failure so run.ts can categorize it as 'auth'.
 // `bundleDir` (when provided) is where a failure screenshot is written.
-export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?: string): Promise<string> {
+export async function loginAs(
+    page: Page,
+    env: EnvConfig,
+    role: Role,
+    bundleDir?: string
+): Promise<string> {
     const account = env.accounts[role]
 
     try {
@@ -55,7 +60,7 @@ export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?
         // for the "Hi, <name>" sidebar that every authenticated page shows. This
         // is more robust than a bare "dashboard" text match that can race the
         // mid-redirect blank screen.
-        await page.waitForURL((url) => !url.pathname.endsWith('/account/signin'), { timeout: 30_000 })
+        await page.waitForURL(url => !url.pathname.endsWith('/account/signin'), { timeout: 30_000 })
         await page
             .getByText(/^Hi,/i)
             .first()
@@ -69,9 +74,13 @@ export async function loginAs(page: Page, env: EnvConfig, role: Role, bundleDir?
         // Capture what the page looked like at the point of failure so the result
         // bundle shows WHY login failed (best-effort).
         if (bundleDir) {
-            await page.screenshot({ path: `${bundleDir}/screenshots/auth-failure.png` }).catch(() => {})
+            await page
+                .screenshot({ path: `${bundleDir}/screenshots/auth-failure.png` })
+                .catch(() => {})
         }
-        throw new AuthError(`Could not log in as ${role} on ${env.name}: ${(cause as Error).message}`)
+        throw new AuthError(
+            `Could not log in as ${role} on ${env.name}: ${(cause as Error).message}`
+        )
     }
 
     // Return a Clerk SESSION JWT for the QA cleanup client (it calls the
@@ -87,7 +96,11 @@ async function getClerkToken(page: Page): Promise<string> {
     for (let attempt = 0; attempt < 10; attempt++) {
         const token = await page
             .evaluate(async () => {
-                const clerk = (window as unknown as { Clerk?: { session?: { getToken(opts?: unknown): Promise<string | null> } } }).Clerk
+                const clerk = (
+                    window as unknown as {
+                        Clerk?: { session?: { getToken(opts?: unknown): Promise<string | null> } }
+                    }
+                ).Clerk
                 if (!clerk?.session) return null
                 return await clerk.session.getToken({ skipCache: true }).catch(() => null)
             })

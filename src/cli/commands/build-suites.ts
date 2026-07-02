@@ -64,8 +64,8 @@ export async function buildSuites(): Promise<string[]> {
     if (!fs.existsSync(srcDir)) return []
     const sources = fs
         .readdirSync(srcDir)
-        .filter((f) => f.endsWith('.ts') && !NON_SUITE.has(f))
-        .map((f) => path.join(srcDir, f))
+        .filter(f => f.endsWith('.ts') && !NON_SUITE.has(f))
+        .map(f => path.join(srcDir, f))
     const out: string[] = []
     for (const src of sources) out.push(await compileSuite(src, outDir))
     return out

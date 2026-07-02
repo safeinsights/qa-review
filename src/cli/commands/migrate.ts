@@ -14,7 +14,10 @@ function parseEnvFile(text: string): Record<string, string> {
         if (eq === -1) continue
         const key = line.slice(0, eq).trim()
         let value = line.slice(eq + 1).trim()
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+        ) {
             value = value.slice(1, -1)
         }
         if (key) out[key] = value
@@ -60,7 +63,7 @@ export async function migrateCommand(opts: Record<string, string>): Promise<void
         ? (JSON.parse(fs.readFileSync(localPath, 'utf8') || '{}') as Record<string, string>)
         : {}
     const merged = { ...existing, ...migrated }
-    fs.writeFileSync(localPath, JSON.stringify(merged, null, 2) + '\n')
+    fs.writeFileSync(localPath, `${JSON.stringify(merged, null, 2)}\n`)
 
     console.log(`Migrated ${Object.keys(migrated).length} value(s) into ${localPath}`)
     console.log(`Keys: ${Object.keys(migrated).join(', ') || '(none)'}`)

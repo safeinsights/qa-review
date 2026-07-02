@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Drawer } from '@mantine/core'
-import { Terminal } from './Terminal'
+import { useEffect, useRef, useState } from 'react'
 import { startRunCompanion, stopSessionIfOwner } from '../lib/ipc'
+import { Terminal } from './Terminal'
 
 // The "Ask Claude" run companion drawer. A bottom Mantine Drawer that slides up
 // over the run screen, NON-MODAL so the user keeps interacting with the run (click
@@ -68,10 +68,10 @@ export function CompanionDrawer({
             spawned.current = true
             setSpawnError(null)
             startRunCompanion(cdpPort, suite)
-                .then((token) => {
+                .then(token => {
                     sessionToken.current = token
                 })
-                .catch((e) => {
+                .catch(e => {
                     setSpawnError(String((e as { message?: string })?.message ?? e))
                     spawned.current = false // allow a retry on reopen
                 })
@@ -83,7 +83,8 @@ export function CompanionDrawer({
     // Token-scoped so a stale unmount doesn't kill the authoring session.
     useEffect(() => {
         return () => {
-            if (spawned.current && sessionToken.current) void stopSessionIfOwner(sessionToken.current)
+            if (spawned.current && sessionToken.current)
+                void stopSessionIfOwner(sessionToken.current)
         }
     }, [])
 

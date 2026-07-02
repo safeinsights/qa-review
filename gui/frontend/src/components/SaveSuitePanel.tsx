@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { TextInput, Button, Popover, Text } from '@mantine/core'
-import { sendToPty, promoteSuite, suiteFileExists } from '../lib/ipc'
+import { Button, Popover, Text, TextInput } from '@mantine/core'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { promoteSuite, sendToPty, suiteFileExists } from '../lib/ipc'
+import { useAsyncAction } from '../lib/useAsyncAction'
 
 // "Save as suite": send claude a finalizing instruction (write the suite, then run
 // + debug it until it passes), then open the PR. "Open PR" stays disabled until the
@@ -12,7 +13,6 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
     const [name, setName] = useState('')
     const [opened, setOpened] = useState(false)
     const [status, setStatus] = useState('')
-    const [busy, setBusy] = useState(false)
     // Gate for "Open PR": did we ask claude to write+verify, and does the file exist?
     const [verifySent, setVerifySent] = useState(false)
     const [fileReady, setFileReady] = useState(false)
@@ -21,12 +21,12 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
     // Filesystem/branch-safe: letters, digits, hyphen, underscore, up to 40 chars.
     const valid = /^[A-Za-z0-9_-]{1,40}$/.test(name)
 
-    const stopPolling = () => {
+    const stopPolling = useCallback(() => {
         if (pollRef.current) {
             clearInterval(pollRef.current)
             pollRef.current = null
         }
-    }
+    }, [])
 
     // After "Write + verify", poll the disk until claude has written the suite
     // file, then flip the gate. Stops once found (or when the gate is reset).
@@ -48,7 +48,7 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
         void check()
         pollRef.current = setInterval(check, 2000)
         return stopPolling
-    }, [verifySent, valid, fileReady, name])
+    }, [verifySent, valid, fileReady, name, stopPolling])
 
     // Reset the gate whenever the name changes — the old file no longer applies.
     const onNameChange = (next: string) => {
@@ -58,7 +58,7 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
         stopPolling()
     }
 
-    const finalize = async () => {
+    const { run: finalize } = useAsyncAction(async () => {
         if (!valid) return
         const target = pr ? `--pr ${pr}` : `--env ${env}`
         // Tell claude (in the live terminal) to author + self-verify the suite.
@@ -69,41 +69,39 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
                 `\`{ name, run: async (ctx) => { await ctx.step(name, async () => { … }) } }\`, and thread ` +
                 `any shared values between steps via \`ctx.state\` (there is no \`suite.run()\`). ` +
                 `Then run it with \`qar run --suite ${name} --role ${role} ${target}\` and debug until it passes. ` +
-                `Tell me when it's green.`,
+                `Tell me when it's green.`
         )
         setFileReady(false)
         setVerifySent(true)
         setStatus('Sent to Claude. "Open PR" enables once the suite file is written.')
-    }
+    })
 
-    const openPr = async () => {
+    const { run: openPr, busy } = useAsyncAction(async () => {
         if (!valid || !verifySent) return
-        setBusy(true)
         setStatus('Checking the suite file…')
         const exists = await suiteFileExists(name).catch(() => false)
         if (!exists) {
             setFileReady(false)
-            setStatus(`No src/suites/${name}.ts yet — let Claude finish writing + verifying it first.`)
-            setBusy(false)
+            setStatus(
+                `No src/suites/${name}.ts yet — let Claude finish writing + verifying it first.`
+            )
             return
         }
         setStatus('Compiling + opening PR…')
         try {
             const out = await promoteSuite(name)
-            setStatus('PR opened: ' + out)
+            setStatus(`PR opened: ${out}`)
         } catch (e) {
-            setStatus('Promote failed: ' + String(e))
-        } finally {
-            setBusy(false)
+            setStatus(`Promote failed: ${String(e)}`)
         }
-    }
+    })
 
     const canOpenPr = valid && verifySent && fileReady
 
     return (
         <Popover opened={opened} onChange={setOpened} position="bottom-start" withArrow width={360}>
             <Popover.Target>
-                <Button onClick={() => setOpened((o) => !o)} variant="light" color="teal" size="sm">
+                <Button onClick={() => setOpened(o => !o)} variant="light" color="teal" size="sm">
                     Save as suite
                 </Button>
             </Popover.Target>
@@ -113,16 +111,24 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
                 </Text>
                 <TextInput
                     value={name}
-                    onChange={(e) => onNameChange(e.currentTarget.value)}
+                    onChange={e => onNameChange(e.currentTarget.value)}
                     placeholder="suite name (max 40 chars)"
-                    error={name && !valid ? 'letters, digits, - and _ only; max 40 chars' : undefined}
+                    error={
+                        name && !valid ? 'letters, digits, - and _ only; max 40 chars' : undefined
+                    }
                     mb={8}
                 />
                 <div style={{ display: 'flex', gap: 8 }}>
                     <Button onClick={finalize} disabled={!valid} size="xs" variant="default">
                         Write + verify
                     </Button>
-                    <Button onClick={openPr} disabled={!canOpenPr} loading={busy} size="xs" color="teal">
+                    <Button
+                        onClick={openPr}
+                        disabled={!canOpenPr}
+                        loading={busy}
+                        size="xs"
+                        color="teal"
+                    >
                         Open PR
                     </Button>
                 </div>
@@ -132,7 +138,12 @@ export function SaveSuitePanel({ env, pr, role }: { env: string; pr: string; rol
                     </Text>
                 ) : null}
                 {status ? (
-                    <Text size="xs" mt={8} className="mono st-dim" style={{ whiteSpace: 'pre-wrap' }}>
+                    <Text
+                        size="xs"
+                        mt={8}
+                        className="mono st-dim"
+                        style={{ whiteSpace: 'pre-wrap' }}
+                    >
                         {status}
                     </Text>
                 ) : null}
