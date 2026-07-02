@@ -1,14 +1,21 @@
 import path from 'node:path'
-import { resultsRoot as resultsRootDir } from '@/engine/paths'
-import { resolveEnv } from '@/engine/env'
-import { Recorder } from '@/engine/recorder'
+import { AuthError, loginAs } from '@/engine/auth'
 import { CleanupClient } from '@/engine/cleanup'
-import { getSuite } from '@/engine/suite-registry'
-import { loginAs, AuthError } from '@/engine/auth'
-import type { RunRequest, RunResult, RunState, StepEvent, FailureCategory, ConsoleLine } from '@/engine/types'
+import { resolveEnv } from '@/engine/env'
+import { resultsRoot as resultsRootDir } from '@/engine/paths'
+import { Recorder } from '@/engine/recorder'
 import { buildRunState } from '@/engine/run-state'
 import { mapConsoleLevel } from '@/engine/screencast-codec'
-import type { Suite, RunContext } from '@/suites/types'
+import { getSuite } from '@/engine/suite-registry'
+import type {
+    ConsoleLine,
+    FailureCategory,
+    RunRequest,
+    RunResult,
+    RunState,
+    StepEvent,
+} from '@/engine/types'
+import type { RunContext, Suite } from '@/suites/types'
 
 export interface BrowserHandle {
     page: import('@playwright/test').Page
@@ -32,7 +39,7 @@ export interface RunDeps {
         handle: BrowserHandle,
         env: ReturnType<typeof resolveEnv>,
         role: RunRequest['role'],
-        bundleDir: string,
+        bundleDir: string
     ) => Promise<string>
     runCleanup: (client: CleanupClient) => Promise<RunResult['cleanup']>
     // Optional live step sink (the CLI --json mode prints each event). When
@@ -67,13 +74,23 @@ export interface RunDeps {
 function categorize(error: Error): FailureCategory {
     if (error instanceof AuthError) return 'auth'
     const m = error.message.toLowerCase()
-    if (m.includes('econnrefused') || m.includes('net::') || m.includes('timeout') || m.includes('5xx')) return 'environment'
+    if (
+        m.includes('econnrefused') ||
+        m.includes('net::') ||
+        m.includes('timeout') ||
+        m.includes('5xx')
+    )
+        return 'environment'
     // A failed web-first assertion / visibility wait reads as a real app issue.
     if (m.includes('visible') || m.includes('expect') || m.includes('tobe')) return 'app-assertion'
     return 'tool-crash'
 }
 
-export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: Suite): Promise<RunResult> {
+export async function runEngine(
+    req: RunRequest,
+    deps: RunDeps,
+    suiteOverride?: Suite
+): Promise<RunResult> {
     const startedAt = Date.now()
     const mode = req.mode ?? 'suite'
     const env = req.envConfig ?? resolveEnv(req.env, deps.vars)
@@ -83,12 +100,19 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
     // progress view). Not read here; recorder.finish() is the source of truth for steps.
     const events: StepEvent[] = []
     const recorder = new Recorder(
-        { root: deps.resultsRoot, suite: suite.name, env: env.name, role: req.role, mode, startedAt },
-        (e) => {
+        {
+            root: deps.resultsRoot,
+            suite: suite.name,
+            env: env.name,
+            role: req.role,
+            mode,
+            startedAt,
+        },
+        e => {
             events.push(e)
             deps.onStep?.(e)
             deps.onRunState?.(buildRunState(events))
-        },
+        }
     )
     // Emit the bundle dir before any step so a live consumer knows where to
     // write run-state.json (recorder.bundleDir is ready right after construction).
@@ -128,8 +152,14 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
             // Best-effort per-step still saved into the bundle. The recorder stays
             // Playwright-free; we hand it only the bundle-relative path. A capture
             // failure must never fail the step.
-            const slug = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)
-            const rel = path.join('screenshots', `${String(++stepIndex).padStart(2, '0')}-${slug}.png`)
+            const slug = label
+                .replace(/[^a-z0-9]+/gi, '-')
+                .toLowerCase()
+                .slice(0, 40)
+            const rel = path.join(
+                'screenshots',
+                `${String(++stepIndex).padStart(2, '0')}-${slug}.png`
+            )
             try {
                 // fullPage: capture the entire scrollable page, not just the
                 // 1280×720 viewport, so the snapshot shows the whole page (the GUI
@@ -164,8 +194,14 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
         // previous step. A single attachment survives navigations and loginAs().
         const consoleBuf: ConsoleLine[] = []
         const onConsole = (msg: import('@playwright/test').ConsoleMessage) =>
-            consoleBuf.push({ level: mapConsoleLevel(msg.type()), text: msg.text(), at: Date.now(), url: msg.location()?.url })
-        const onPageError = (err: Error) => consoleBuf.push({ level: 'error', text: String(err?.stack || err), at: Date.now() })
+            consoleBuf.push({
+                level: mapConsoleLevel(msg.type()),
+                text: msg.text(),
+                at: Date.now(),
+                url: msg.location()?.url,
+            })
+        const onPageError = (err: Error) =>
+            consoleBuf.push({ level: 'error', text: String(err?.stack || err), at: Date.now() })
         page.on('console', onConsole)
         page.on('pageerror', onPageError)
         // Drain the console captured since the previous step (best-effort metadata;
@@ -183,16 +219,25 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 try {
                     const out = await action()
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'passed', { screenshot, url: currentUrl(), console: drainConsole() })
+                    recorder.step(name, 'passed', {
+                        screenshot,
+                        url: currentUrl(),
+                        console: drainConsole(),
+                    })
                     return out
                 } catch (cause) {
                     const screenshot = await captureScreenshot(name)
-                    recorder.step(name, 'failed', { error: (cause as Error).message, screenshot, url: currentUrl(), console: drainConsole() })
+                    recorder.step(name, 'failed', {
+                        error: (cause as Error).message,
+                        screenshot,
+                        url: currentUrl(),
+                        console: drainConsole(),
+                    })
                     throw cause
                 }
             },
-            trackStudy: (id) => cleanup.trackStudy(id),
-            trackUser: (id) => cleanup.trackUser(id),
+            trackStudy: id => cleanup.trackStudy(id),
+            trackUser: id => cleanup.trackUser(id),
             // Results are decrypted as the reviewer, so surface the reviewer
             // account's private key. Undefined when unset (the suite errors clearly).
             resultsKey: env.accounts.reviewer.privateKey,
@@ -202,8 +247,8 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                 // auto-signout (the sign-in form renders null while it clears the
                 // session), which races the form hydration. Clearing cookies +
                 // web storage first lands loginAs() on a hydrated, logged-out form.
-                await handle!.page.context().clearCookies()
-                await handle!.page
+                await handle?.page.context().clearCookies()
+                await handle?.page
                     .evaluate(() => {
                         try {
                             localStorage.clear()
@@ -213,8 +258,9 @@ export async function runEngine(req: RunRequest, deps: RunDeps, suiteOverride?: 
                         }
                     })
                     .catch(() => {})
+                if (!handle) throw new Error('loginAs called before the browser was opened')
                 // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
-                const newToken = await deps.login(handle!, env, role, recorder.bundleDir)
+                const newToken = await deps.login(handle, env, role, recorder.bundleDir)
                 // Keep id-based cleanup authorized as the now-current user.
                 ;(cleanup as unknown as { authToken: string }).authToken = newToken
             },
@@ -280,7 +326,7 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
     return {
         vars,
         resultsRoot,
-        openBrowser: async (env) => {
+        openBrowser: async env => {
             const { launchChromeWithCdp } = await import('@/engine/cdp-launch')
             // channel:'chrome' + a remote-debugging port: drives the user's installed
             // Google Chrome (so the packaged app needs no browser download) AND lets
@@ -293,7 +339,9 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             // Capture a Playwright trace (DOM snapshots + screenshots + network +
             // console) so a tester can replay the whole run at trace.playwright.dev.
             // Best-effort: tracing must never fail the run.
-            await context.tracing.start({ screenshots: true, snapshots: true, sources: true }).catch(() => {})
+            await context.tracing
+                .start({ screenshots: true, snapshots: true, sources: true })
+                .catch(() => {})
             const video = page.video()
             let browserClosed = false
             const closeBrowser = async () => {
@@ -314,7 +362,9 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
                 },
                 saveTraceTo: async (bundleDir: string) => {
                     // Stop tracing straight into the bundle. Must run BEFORE close().
-                    await context.tracing.stop({ path: path.join(bundleDir, 'trace.zip') }).catch(() => {})
+                    await context.tracing
+                        .stop({ path: path.join(bundleDir, 'trace.zip') })
+                        .catch(() => {})
                 },
                 saveVideoTo: async (bundleDir: string) => {
                     // Persist the finalized video into the run bundle so
@@ -333,6 +383,6 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             }
         },
         login: async (handle, env, role, bundleDir) => loginAs(handle.page, env, role, bundleDir),
-        runCleanup: async (client) => client.run(),
+        runCleanup: async client => client.run(),
     }
 }

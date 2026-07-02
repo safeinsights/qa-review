@@ -31,8 +31,12 @@ describe('StreamParser', () => {
 
     it('emits an error-hold envelope', () => {
         const p = new StreamParser()
-        const out = p.push('{"type":"error-hold","failureCategory":"assertion","error":"expected X"}\n')
-        expect(out).toEqual([{ type: 'error-hold', failureCategory: 'assertion', error: 'expected X' }])
+        const out = p.push(
+            '{"type":"error-hold","failureCategory":"assertion","error":"expected X"}\n'
+        )
+        expect(out).toEqual([
+            { type: 'error-hold', failureCategory: 'assertion', error: 'expected X' },
+        ])
     })
 })
 

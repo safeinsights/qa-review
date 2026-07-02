@@ -1,13 +1,20 @@
-import { writeFileSync, renameSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
+import type { Page } from '@playwright/test'
+import {
+    errorHoldLine,
+    parseControlLine,
+    pausedLine,
+    resultLine,
+    screencastLine,
+    stepLine,
+} from '@/cli/step-stream'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
-import { runEngine, defaultDeps } from '@/engine/run'
 import { runStatePath } from '@/engine/paths'
+import { defaultDeps, runEngine } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
-import { stepLine, resultLine, screencastLine, pausedLine, errorHoldLine, parseControlLine } from '@/cli/step-stream'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
-import type { Role, StepEvent, RunState } from '@/engine/types'
-import type { Page } from '@playwright/test'
+import type { Role, RunState, StepEvent } from '@/engine/types'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
@@ -16,7 +23,9 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     const headed = opts.headed === 'true'
     const screencast = opts.screencast === 'true'
 
-    const envConfig = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
+    const envConfig = opts.pr
+        ? resolvePrEnv(Number(opts.pr), vars)
+        : resolveEnv(opts.env ?? 'qa', vars)
 
     const onStep = json ? (e: StepEvent) => process.stdout.write(stepLine(e)) : undefined
 
@@ -40,8 +49,8 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     const pausedSet = new Set<string>(
         (opts['pause-before'] ?? '')
             .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
+            .map(s => s.trim())
+            .filter(Boolean)
     )
     // A re-armable "resume" deferred: waitForResume awaits the current promise;
     // a {type:'resume'} control message resolves it, and we immediately re-arm for
@@ -49,7 +58,7 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     let resumeResolve: (() => void) | undefined
     let resumePromise: Promise<void> | undefined
     const armResume = () => {
-        resumePromise = new Promise<void>((r) => (resumeResolve = r))
+        resumePromise = new Promise<void>(r => (resumeResolve = r))
     }
     const controlDeps = {
         shouldPause: (name: string) => pausedSet.has(name),
@@ -63,8 +72,10 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         // existing resume/stop path releases the hold (a {type:'resume'} control
         // message resolves waitForResume; Stop SIGTERMs the process group). Harmless
         // to always wire — the engine ONLY calls it when a run actually fails.
-        onErrorHold: (info: { failureCategory?: import('@/engine/types').FailureCategory; error?: string }) =>
-            process.stdout.write(errorHoldLine(info)),
+        onErrorHold: (info: {
+            failureCategory?: import('@/engine/types').FailureCategory
+            error?: string
+        }) => process.stdout.write(errorHoldLine(info)),
     }
 
     // Read NDJSON control messages from stdin. Only the `run` command opts into
@@ -73,19 +84,21 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     let stdinBuf = ''
     const onStdin = (chunk: Buffer) => {
         stdinBuf += chunk.toString('utf8')
-        let nl: number
-        while ((nl = stdinBuf.indexOf('\n')) >= 0) {
+        let nl = stdinBuf.indexOf('\n')
+        while (nl >= 0) {
             const line = stdinBuf.slice(0, nl)
             stdinBuf = stdinBuf.slice(nl + 1)
             const msg = parseControlLine(line)
-            if (!msg) continue
-            if (msg.type === 'pause-set') {
-                pausedSet.clear()
-                for (const s of msg.steps) pausedSet.add(s)
-            } else if (msg.type === 'resume') {
-                // Tolerate a resume with nothing pending (no-op).
-                resumeResolve?.()
+            if (msg) {
+                if (msg.type === 'pause-set') {
+                    pausedSet.clear()
+                    for (const s of msg.steps) pausedSet.add(s)
+                } else if (msg.type === 'resume') {
+                    // Tolerate a resume with nothing pending (no-op).
+                    resumeResolve?.()
+                }
             }
+            nl = stdinBuf.indexOf('\n')
         }
     }
     process.stdin.on('data', onStdin)
@@ -137,7 +150,7 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             // Write to a temp file in the SAME directory, then rename over the
             // target — an atomic swap on the same filesystem — so the run companion
             // never observes a half-written (truncated) run-state.json.
-            const tmp = target + '.tmp'
+            const tmp = `${target}.tmp`
             writeFileSync(tmp, JSON.stringify(state, null, 2))
             renameSync(tmp, target)
         } catch (e) {
@@ -151,7 +164,14 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         }
     }
 
-    const deps = { ...base, openBrowser: wrappedOpenBrowser, onBundleDir, onRunState, onPage, ...controlDeps }
+    const deps = {
+        ...base,
+        openBrowser: wrappedOpenBrowser,
+        onBundleDir,
+        onRunState,
+        onPage,
+        ...controlDeps,
+    }
 
     try {
         const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)

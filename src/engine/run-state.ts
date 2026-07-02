@@ -1,4 +1,4 @@
-import type { StepEvent, RunResult, RunState } from '@/engine/types'
+import type { RunResult, RunState, StepEvent } from '@/engine/types'
 
 // Collapse the append-only step stream into one entry per executed position
 // (same rule as the GUI's stepsByIndex): a 'running' opens a position; its

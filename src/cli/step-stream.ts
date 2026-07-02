@@ -1,4 +1,11 @@
-import type { StepEvent, RunResult, ScreencastInfo, SessionInfo, PausedInfo, ErrorHoldInfo } from '@/engine/types'
+import type {
+    ErrorHoldInfo,
+    PausedInfo,
+    RunResult,
+    ScreencastInfo,
+    SessionInfo,
+    StepEvent,
+} from '@/engine/types'
 
 export type StepEnvelope = { type: 'step' } & StepEvent
 export type ResultEnvelope = { type: 'result' } & RunResult
@@ -15,30 +22,30 @@ export type Envelope =
     | ErrorHoldEnvelope
 
 export function stepLine(event: StepEvent): string {
-    return JSON.stringify({ type: 'step', ...event }) + '\n'
+    return `${JSON.stringify({ type: 'step', ...event })}\n`
 }
 
 export function resultLine(result: RunResult): string {
-    return JSON.stringify({ type: 'result', ...result }) + '\n'
+    return `${JSON.stringify({ type: 'result', ...result })}\n`
 }
 
 export function screencastLine(info: ScreencastInfo): string {
-    return JSON.stringify({ type: 'screencast', ...info }) + '\n'
+    return `${JSON.stringify({ type: 'screencast', ...info })}\n`
 }
 
 export function sessionLine(info: SessionInfo): string {
-    return JSON.stringify({ type: 'session', ...info }) + '\n'
+    return `${JSON.stringify({ type: 'session', ...info })}\n`
 }
 
 export function pausedLine(info: PausedInfo): string {
-    return JSON.stringify({ type: 'paused', ...info }) + '\n'
+    return `${JSON.stringify({ type: 'paused', ...info })}\n`
 }
 
 // Emitted when a failed run is holding the browser open (see ErrorHoldInfo). The
 // GUI distinguishes this from `paused` (which halts BEFORE a step) — here the run
 // has already failed and the browser is frozen for inspection.
 export function errorHoldLine(info: ErrorHoldInfo): string {
-    return JSON.stringify({ type: 'error-hold', ...info }) + '\n'
+    return `${JSON.stringify({ type: 'error-hold', ...info })}\n`
 }
 
 // Parse one stdout line into an Envelope, or null if it isn't one of ours
@@ -52,7 +59,14 @@ export function parseLine(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result' || t === 'screencast' || t === 'session' || t === 'paused' || t === 'error-hold') {
+        if (
+            t === 'step' ||
+            t === 'result' ||
+            t === 'screencast' ||
+            t === 'session' ||
+            t === 'paused' ||
+            t === 'error-hold'
+        ) {
             return obj as Envelope
         }
     }
@@ -69,11 +83,11 @@ export function parseLine(line: string): Envelope | null {
 export type ControlMessage = { type: 'pause-set'; steps: string[] } | { type: 'resume' }
 
 export function pauseSetLine(steps: string[]): string {
-    return JSON.stringify({ type: 'pause-set', steps }) + '\n'
+    return `${JSON.stringify({ type: 'pause-set', steps })}\n`
 }
 
 export function resumeLine(): string {
-    return JSON.stringify({ type: 'resume' }) + '\n'
+    return `${JSON.stringify({ type: 'resume' })}\n`
 }
 
 // Parse one inbound control line, or null if it isn't a valid control message.
@@ -89,7 +103,7 @@ export function parseControlLine(line: string): ControlMessage | null {
     if (t === 'resume') return { type: 'resume' }
     if (t === 'pause-set') {
         const steps = (obj as Record<string, unknown>).steps
-        if (Array.isArray(steps) && steps.every((s) => typeof s === 'string')) {
+        if (Array.isArray(steps) && steps.every(s => typeof s === 'string')) {
             return { type: 'pause-set', steps: steps as string[] }
         }
     }

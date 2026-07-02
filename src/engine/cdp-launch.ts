@@ -28,7 +28,7 @@ export interface CdpLaunch {
 // `contextOptions` lets callers add e.g. recordVideo without duplicating launch code.
 // Retries once if the picked port is taken in the TOCTOU window.
 export async function launchChromeWithCdp(
-    contextOptions: Parameters<Browser['newContext']>[0],
+    contextOptions: Parameters<Browser['newContext']>[0]
 ): Promise<CdpLaunch> {
     const { chromium } = await import('@playwright/test')
     let lastErr: unknown

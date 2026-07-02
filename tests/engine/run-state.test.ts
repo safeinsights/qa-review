@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { buildRunState } from '@/engine/run-state'
-import type { StepEvent, RunResult } from '@/engine/types'
+import type { RunResult, StepEvent } from '@/engine/types'
 
 const step = (over: Partial<StepEvent>): StepEvent =>
-    ({ name: 'X', status: 'running', at: 0, ...over } as StepEvent)
+    ({ name: 'X', status: 'running', at: 0, ...over }) as StepEvent
 
 describe('buildRunState', () => {
     it('collapses running→resolved into one entry per position, preserving order', () => {
@@ -14,7 +14,7 @@ describe('buildRunState', () => {
             step({ name: 'B', status: 'failed', error: 'boom' }),
         ]
         const rs = buildRunState(events)
-        expect(rs.steps.map((s) => [s.name, s.status])).toEqual([
+        expect(rs.steps.map(s => [s.name, s.status])).toEqual([
             ['A', 'passed'],
             ['B', 'failed'],
         ])
@@ -25,7 +25,12 @@ describe('buildRunState', () => {
     })
 
     it('includes the final result and marks running=false when given one', () => {
-        const result = { ok: false, steps: [], bundleDir: '/tmp/b', failureCategory: 'app-assertion' } as unknown as RunResult
+        const result = {
+            ok: false,
+            steps: [],
+            bundleDir: '/tmp/b',
+            failureCategory: 'app-assertion',
+        } as unknown as RunResult
         const rs = buildRunState([], result)
         expect(rs.result?.ok).toBe(false)
         expect(rs.running).toBe(false)

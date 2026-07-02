@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { screencastLine, parseLine } from '@/cli/step-stream'
+import { describe, expect, it } from 'vitest'
+import { parseLine, screencastLine } from '@/cli/step-stream'
 
 describe('screencast envelope carries cdpPort', () => {
     it('round-trips port and cdpPort', () => {
