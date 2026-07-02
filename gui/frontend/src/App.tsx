@@ -1,7 +1,8 @@
-import { Tabs } from '@mantine/core'
+import { Button, Tabs } from '@mantine/core'
 import { useState } from 'react'
 import { AutoDoctorModal } from './components/AutoDoctorModal'
 import { ExploratoryTab } from './components/ExploratoryTab'
+import { HelpDrawer } from './components/HelpDrawer'
 import { KeyringAccessGate } from './components/KeyringAccessGate'
 import { Logo } from './components/Logo'
 import { ReportIssueButton } from './components/ReportIssueButton'
@@ -12,6 +13,7 @@ import { SyncButton } from './components/SyncButton'
 
 export function App() {
     const [tab, setTab] = useState<string | null>('suites')
+    const [helpOpen, setHelpOpen] = useState(false)
     return (
         <SetupGate>
             <KeyringAccessGate>
@@ -46,8 +48,32 @@ export function App() {
                                 </div>
                             </div>
                         </div>
-                        <SyncButton extraActions={<ReportIssueButton tab={tab} />} />
+                        <SyncButton
+                            extraActions={
+                                <div style={{ display: 'flex', gap: 12 }}>
+                                    <Button
+                                        onClick={() => setHelpOpen(true)}
+                                        variant="outline"
+                                        color="dark"
+                                        radius="md"
+                                        size="sm"
+                                        leftSection={<span aria-hidden>?</span>}
+                                        styles={{
+                                            root: {
+                                                fontFamily: '"IBM Plex Mono", monospace',
+                                                fontSize: 12,
+                                            },
+                                        }}
+                                    >
+                                        help
+                                    </Button>
+                                    <ReportIssueButton tab={tab} />
+                                </div>
+                            }
+                        />
                     </header>
+
+                    <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
 
                     <Tabs value={tab} onChange={setTab} mt="lg">
                         <Tabs.List>
