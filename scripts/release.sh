@@ -10,7 +10,7 @@ set -euo pipefail
 
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
-    echo "usage: $0 <version>  (e.g. v1.2.10)" >&2
+    echo "usage: release.sh <version>  (e.g. v1.2.10)" >&2
     exit 1
 fi
 if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -18,7 +18,15 @@ if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve repo root without hard-depending on BASH_SOURCE — the array is unset
+# under zsh, where `set -u` makes even indexing it fatal. Use it only when it
+# exists (bash); otherwise fall back to $0.
+if [[ -n "${BASH_SOURCE:-}" ]]; then
+    SELF="${BASH_SOURCE[0]}"
+else
+    SELF="${0:-}"
+fi
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 DMG_SRC="$ROOT/gui/build/qa-runner.dmg"
 DMG_OUT="$ROOT/gui/build/qa-runner-$VERSION.dmg"
 
