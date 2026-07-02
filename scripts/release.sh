@@ -32,11 +32,18 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 DMG_SRC="$ROOT/gui/build/SI QA Review.dmg"
 DMG_OUT="$ROOT/gui/build/SI-QA-Review-$VERSION.dmg"
 
-# Build the signed + notarized .dmg. Redirect the whole pipeline to stderr so the
-# only thing on stdout is the artifact path the release tool consumes.
-make -C "$ROOT" dmg >&2
+# Build the signed + notarized .dmg. Capture ALL build output (stdout+stderr) to a
+# log so nothing leaks to the caller on success; on failure, replay the log to
+# stderr and exit non-zero so the problem is visible.
+BUILD_LOG="$(mktemp -t qar-release-build.XXXXXX)"
+trap 'rm -f "$BUILD_LOG"' EXIT
+if ! make -C "$ROOT" dmg >"$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG" >&2
+    exit 1
+fi
 
 if [[ ! -f "$DMG_SRC" ]]; then
+    cat "$BUILD_LOG" >&2
     echo "error: expected DMG not found: $DMG_SRC" >&2
     exit 1
 fi
