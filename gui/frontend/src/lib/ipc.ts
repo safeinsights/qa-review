@@ -32,6 +32,12 @@ export interface DoctorCheck {
     docURL: string
 }
 
+export interface KeyringAccess {
+    hasIdentity: boolean
+    isRecipient: boolean
+    note: string
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
@@ -66,6 +72,7 @@ interface WailsApp {
     RequestAccess(cwd: string, name: string): Promise<string>
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
+    CheckKeyringAccess(cwd: string): Promise<KeyringAccess>
 }
 
 interface WailsRuntime {
@@ -332,4 +339,10 @@ export async function rekey(): Promise<string> {
 // True if secrets are out of sync with the keyring (rekey needed).
 export async function isInDrift(): Promise<boolean> {
     return app().IsInDrift('')
+}
+
+// Pull the latest keyring + secrets and report whether the local identity can
+// decrypt shared secrets (is a recipient). Backs the first-launch access gate.
+export async function checkKeyringAccess(): Promise<KeyringAccess> {
+    return app().CheckKeyringAccess('')
 }

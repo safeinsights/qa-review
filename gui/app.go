@@ -776,6 +776,70 @@ func (a *App) Sync(cwd string) (string, error) {
 	return "synced", nil
 }
 
+// keyringFiles are the tracked config files that determine keyring access
+// (who's a recipient + the secrets encrypted to them). syncKeyringFiles pulls
+// only these so a dirty/diverged working copy (e.g. local suite edits) doesn't
+// block the access check.
+var keyringFiles = []string{
+	"config/keyring.json",
+	"config/keyring.lock",
+	"config/settings.secrets.json",
+	"config/settings.json",
+}
+
+// syncKeyringFiles fetches the upstream branch and overwrites ONLY the keyring +
+// settings files from it (git checkout <upstream> -- <files>), independent of
+// working-copy state elsewhere. Returns a non-fatal note (never blocks the access
+// check): a fetch failure or missing upstream just means we check the current
+// checkout. Files that don't yet exist upstream are skipped.
+func (a *App) syncKeyringFiles(dir string) string {
+	if _, err := a.git(dir, "fetch", "--quiet"); err != nil {
+		return "offline — checked local copy"
+	}
+	upstream, err := a.git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if err != nil {
+		return "no upstream — checked local copy"
+	}
+	ref := strings.TrimSpace(upstream)
+	// Restrict to files that actually exist upstream (checkout errors otherwise).
+	present := []string{}
+	for _, f := range keyringFiles {
+		if _, err := a.git(dir, "cat-file", "-e", ref+":"+f); err == nil {
+			present = append(present, f)
+		}
+	}
+	if len(present) == 0 {
+		return ""
+	}
+	if out, err := a.git(dir, append([]string{"checkout", ref, "--"}, present...)...); err != nil {
+		return "could not update keyring files: " + strings.TrimSpace(out)
+	}
+	return ""
+}
+
+// KeyringAccess is the first-launch encryption-access state: whether the local
+// identity exists and whether it's a recipient in the (freshly pulled) keyring.
+type KeyringAccess struct {
+	HasIdentity bool   `json:"hasIdentity"` // config/age-identity.txt exists
+	IsRecipient bool   `json:"isRecipient"` // its public key is in config/keyring.json
+	Note        string `json:"note"`        // non-fatal pull note (offline / skipped), if any
+}
+
+// CheckKeyringAccess pulls the latest keyring + secrets (only those files) and
+// reports whether the local identity can decrypt shared secrets. The frontend
+// gates the app on IsRecipient — a false value means "walk the user through
+// requesting access" — and re-calls this (the Retry button) to detect when a
+// teammate's rekey PR has merged.
+func (a *App) CheckKeyringAccess(cwd string) (KeyringAccess, error) {
+	dir := repoDir()
+	note := a.syncKeyringFiles(dir)
+	has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+	if err != nil {
+		return KeyringAccess{}, err
+	}
+	return KeyringAccess{HasIdentity: has, IsRecipient: isRecipient, Note: note}, nil
+}
+
 // RequestAccess runs the bundled engine's `request-access --name <name>` (generate
 // identity + open a keyring PR) in the cloned repo, returning combined output.
 func (a *App) RequestAccess(cwd, name string) (string, error) {
@@ -1235,12 +1299,18 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: "Test repository", OK: false, Detail: "not cloned at " + repoDir(), Hint: "Use the first-launch setup (or the Suites tab) to clone the repository."})
 	}
 
-	// Keyring identity — needed to decrypt shared secrets (without it, encrypted
-	// values are skipped and runs fail with "Missing required secret").
-	if _, err := os.Stat(filepath.Join(repoDir(), "config", "age-identity.txt")); err == nil {
-		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present"})
-	} else {
+	// Keyring identity — needed to decrypt shared secrets. Presence of the identity
+	// file isn't enough: the key must be a RECIPIENT in the keyring, else decryption
+	// fails at runtime ("your key may not be a recipient yet"). Check both.
+	switch has, isRecipient, err := identityInKeyring(filepath.Join(repoDir(), "config")); {
+	case err != nil:
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "check failed: " + err.Error(), Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
+	case !has:
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "no config/age-identity.txt", Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
+	case !isRecipient:
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "your key isn't in the keyring yet", Hint: "Ask a teammate to review & rekey your access PR, then sync."})
+	default:
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and in keyring"})
 	}
 
 	return checks

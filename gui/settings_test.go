@@ -154,6 +154,59 @@ func TestWriteSecretToProjectRequiresKeyring(t *testing.T) {
 	}
 }
 
+// writeTestIdentity writes config/age-identity.txt for the given identity in the
+// standard age file format (a "# public key:" comment + the secret key line).
+func writeTestIdentity(t *testing.T, dir string, id *age.X25519Identity) {
+	t.Helper()
+	body := "# public key: " + id.Recipient().String() + "\n" + id.String() + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "config", "age-identity.txt"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityInKeyring(t *testing.T) {
+	me, _ := age.GenerateX25519Identity()
+	other, _ := age.GenerateX25519Identity()
+
+	t.Run("no identity file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestKeyring(t, dir, me.Recipient().String())
+		has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+		if err != nil || has || isRecipient {
+			t.Fatalf("no identity: got has=%v recipient=%v err=%v", has, isRecipient, err)
+		}
+	})
+
+	t.Run("identity present but not a recipient", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestIdentity(t, dir, me)
+		writeTestKeyring(t, dir, other.Recipient().String())
+		has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+		if err != nil || !has || isRecipient {
+			t.Fatalf("not a recipient: got has=%v recipient=%v err=%v", has, isRecipient, err)
+		}
+	})
+
+	t.Run("identity is a recipient", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestIdentity(t, dir, me)
+		writeTestKeyring(t, dir, other.Recipient().String(), me.Recipient().String())
+		has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+		if err != nil || !has || !isRecipient {
+			t.Fatalf("recipient: got has=%v recipient=%v err=%v", has, isRecipient, err)
+		}
+	})
+}
+
 func TestReadSettingsReportsIdentityAndMasksSecrets(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QAR_REPO_DIR", dir)
