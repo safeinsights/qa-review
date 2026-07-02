@@ -38,6 +38,13 @@ export interface KeyringAccess {
     note: string
 }
 
+// One rendered help page for the Help drawer, read from <repo>/docs/help/*.md.
+export interface HelpDoc {
+    slug: string
+    title: string
+    body: string
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
@@ -80,6 +87,7 @@ interface WailsApp {
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
     CheckKeyringAccess(cwd: string): Promise<KeyringAccess>
+    HelpDocs(): Promise<HelpDoc[]>
 }
 
 interface WailsRuntime {
@@ -382,4 +390,10 @@ export async function isInDrift(): Promise<boolean> {
 // decrypt shared secrets (is a recipient). Backs the first-launch access gate.
 export async function checkKeyringAccess(): Promise<KeyringAccess> {
     return app().CheckKeyringAccess('')
+}
+
+// Read the in-app help pages (docs/help/*.md from the cloned repo). Returns []
+// if the docs dir is absent (stale/partial checkout) — the drawer shows nothing.
+export async function helpDocs(): Promise<HelpDoc[]> {
+    return app().HelpDocs()
 }
