@@ -1,4 +1,4 @@
-import { Button, Loader, Modal, Text } from '@mantine/core'
+import { Anchor, Button, Loader, Modal, Text } from '@mantine/core'
 import { useState } from 'react'
 import { type DoctorCheck, runDoctor } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
@@ -110,6 +110,14 @@ function CheckRow({ check }: { check: DoctorCheck }) {
                 {!check.ok && check.hint ? (
                     <div style={{ fontSize: 12, color: 'var(--amber, #b04a3a)', marginTop: 2 }}>
                         → {check.hint}
+                    </div>
+                ) : null}
+                {!check.ok && check.docURL ? (
+                    <div style={{ fontSize: 12, marginTop: 2 }}>
+                        ↓{' '}
+                        <Anchor href={check.docURL} target="_blank" style={{ fontSize: 12 }}>
+                            Download &amp; install instructions
+                        </Anchor>
                     </div>
                 ) : null}
             </div>

@@ -29,6 +29,7 @@ export interface DoctorCheck {
     ok: boolean
     detail: string
     hint: string
+    docURL: string
 }
 
 interface WailsApp {
