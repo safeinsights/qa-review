@@ -24,8 +24,6 @@
             "!**/.worktrees/**/*",
             "!**/test-results",
             "!**/test-results/**/*",
-            "!suites-compiled",
-            "!suites-compiled/**/*",
             "!gui/build",
             "!gui/build/**/*",
             "!gui/frontend/wailsjs",

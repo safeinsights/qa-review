@@ -1,8 +1,8 @@
 import path from 'node:path'
 import { faker } from '@faker-js/faker'
 import type { Locator } from '@playwright/test'
-import { repoDir } from '@/engine/paths'
-import type { RunContext, Suite } from '@/suites/types'
+import { repoDir } from '../engine/paths'
+import type { RunContext, Suite } from './types'
 
 // Traces the FULL study lifecycle end-to-end in one continuous run, switching
 // between the researcher and reviewer accounts (via ctx.loginAs) at each gate:
@@ -473,8 +473,8 @@ function generateStudyContent(tag: string): StudyContent {
 }
 
 // The two code files the app accepts, resolved against the cloned repo (NOT the
-// bundle) — build-suites bundles this suite into suites-compiled/, so module-
-// relative paths would break; repoDir() honors QAR_REPO_DIR at runtime.
+// engine bundle location) via repoDir(), which honors QAR_REPO_DIR at runtime.
+// (import.meta.url-relative paths would point at the bundle, not the clone.)
 function fixtureFiles(): string[] {
     const dir = path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]

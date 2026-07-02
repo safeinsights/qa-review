@@ -2,7 +2,6 @@ import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Page } from '@playwright/test'
-import { compileSuite } from '@/cli/commands/build-suites'
 import {
     errorHoldLine,
     parseControlLine,
@@ -13,7 +12,7 @@ import {
     stepLine,
 } from '@/cli/step-stream'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
-import { repoDir, runStatePath, suitesCompiledDir } from '@/engine/paths'
+import { runStatePath, suitesSrcDir } from '@/engine/paths'
 import { defaultDeps, runEngine } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
 import { ScreencastServer } from '@/engine/screencast'
@@ -75,14 +74,14 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     const armResolution = () => {
         resolutionPromise = new Promise<'retry' | 'giveUp'>(r => (resolutionResolve = r))
     }
-    // Recompile ONE suite from its .ts source, then cache-bust import it so an edited
-    // suite's new code is picked up on retry. A monotonic counter (not Date.now) busts
-    // Node's ESM URL cache. Reuses discoverSuites for import + Suite-shape validation.
+    // Cache-bust import ONE suite's .ts source so an edited suite's new code is picked
+    // up on retry (tsx transpiles it on import — no compile step). A monotonic counter
+    // (not Date.now) busts Node's ESM URL cache. Reuses discoverSuites for import +
+    // Suite-shape validation.
     let reloadCounter = 0
     const reloadSuite = async (name: string): Promise<Suite> => {
-        const src = path.join(repoDir(), 'src', 'suites', `${name}.ts`)
-        const mjs = await compileSuite(src, suitesCompiledDir())
-        const bust = `${pathToFileURL(mjs).href}?t=${++reloadCounter}`
+        const src = path.join(suitesSrcDir(), `${name}.ts`)
+        const bust = `${pathToFileURL(src).href}?t=${++reloadCounter}`
         const found = await discoverSuites([bust], f => import(f))
         const fresh = found.find(s => s.name === name) ?? found[0]
         if (!fresh) throw new Error(`Reloaded ${name} but found no Suite export`)
@@ -118,8 +117,8 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     }
 
     // Read NDJSON control messages from stdin. Only the `run` command opts into
-    // reading stdin, so `list`/`build-suites` (which share the Go spawn path) are
-    // unaffected — an unread stdin pipe is inert.
+    // reading stdin, so other commands like `list` (which share the Go spawn path)
+    // are unaffected — an unread stdin pipe is inert.
     let stdinBuf = ''
     const onStdin = (chunk: Buffer) => {
         stdinBuf += chunk.toString('utf8')

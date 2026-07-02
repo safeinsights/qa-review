@@ -131,9 +131,9 @@ func (a *App) ChooseDirectory() (string, error) {
 	})
 }
 
-// Setup clones the qa-review repo into `dir` (or the default when empty) and
-// compiles its suites, so the app becomes usable on first launch. The chosen
-// location is persisted for future launches. Idempotent.
+// Setup clones the qa-review repo into `dir` (or the default when empty), so the
+// app becomes usable on first launch. The chosen location is persisted for future
+// launches. Idempotent.
 func (a *App) Setup(dir string) (string, error) {
 	// gh/git clone requires the target dir to not already exist (or be empty).
 	// Clone into <dir>/qa-review when the user picked a parent folder; if they
@@ -151,9 +151,6 @@ func (a *App) Setup(dir string) (string, error) {
 	out, err := cloneRepo()
 	if err != nil {
 		return out, err
-	}
-	if buildOut, err := engineCmd("build-suites").CombinedOutput(); err != nil {
-		return out + "\n" + string(buildOut), fmt.Errorf("cloned, but compiling suites failed: %s", string(buildOut))
 	}
 	return out, nil
 }
@@ -572,7 +569,7 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
 	}
 	cmd.Stderr = cmd.Stdout // fold stderr into the same stream (stray lines ignored by the parser)
 	// A stdin pipe so SendToRun can push pause/resume control messages into a
-	// `run`. Harmless for commands that don't read stdin (list/build-suites): an
+	// `run`. Harmless for commands that don't read stdin (e.g. list): an
 	// unwritten, unread pipe is inert, and it's closed when the process exits.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -889,12 +886,7 @@ func (a *App) Sync(cwd string) (string, error) {
 	if _, err := a.git(dir, "pull", "--ff-only"); err != nil {
 		return "skipped-diverged", nil
 	}
-	// Newly-pulled .ts suites must be compiled to .mjs for the bundled engine to
-	// load them. A compile failure shouldn't block the sync result, but we surface
-	// it so the user knows new suites may not appear.
-	if out, err := engineCmd("build-suites").CombinedOutput(); err != nil {
-		return "synced", fmt.Errorf("synced, but compiling suites failed: %s", string(out))
-	}
+	// Newly-pulled .ts suites are loaded directly by the engine (tsx) — no compile step.
 	return "synced", nil
 }
 
@@ -1140,22 +1132,20 @@ func firstNonEmpty(vals ...string) string {
 // has been captured and restored onto a clean branch (see PromoteSuite). Pure (no
 // I/O) so it's unit-testable. The "qar" step is routed through the bundled engine.
 //
-// It is deliberately SURGICAL: it stages ONLY this suite's two files
-// (src/suites/<name>.ts and its compiled suites-compiled/<name>.mjs), never the
-// whole directories — otherwise every suite authored in earlier attempts plus any
-// other dirty file would ride along into the PR.
+// It is deliberately SURGICAL: it stages ONLY this suite's source file
+// (src/suites/<name>.ts), never the whole directory — otherwise every suite
+// authored in earlier attempts plus any other dirty file would ride along into
+// the PR. The engine loads the .ts directly (tsx), so there is no compiled artifact.
 // PromoteSuite has already cut the clean qa/<name> branch off origin/main and
 // written the suite source onto it, so these steps must NOT switch branches again
 // (that would discard the restored file).
 func promoteSteps(name string) [][]string {
 	branch := "qa/" + name
 	suiteFile := "src/suites/" + name + ".ts"
-	compiledFile := "suites-compiled/" + name + ".mjs"
 	return [][]string{
-		{"qar", "build-suites"}, // compile src/suites/*.ts -> suites-compiled/*.mjs
-		// Stage ONLY this suite's two files — never the whole dirs.
-		{"git", "add", "--", suiteFile, compiledFile},
-		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (authored interactively, review selectors)", name), "--", suiteFile, compiledFile},
+		// Stage ONLY this suite's source file — never the whole dir.
+		{"git", "add", "--", suiteFile},
+		{"git", "commit", "-m", fmt.Sprintf("test: add %s suite (authored interactively, review selectors)", name), "--", suiteFile},
 		{"git", "push", "-u", "origin", branch},
 		{"gh", "pr", "create", "--fill"},
 	}
@@ -1169,7 +1159,7 @@ func promoteSteps(name string) [][]string {
 //  1. capture the authored suite source into memory,
 //  2. fetch the latest upstream main,
 //  3. cut a fresh branch off origin/main (a clean base),
-//  4. write the captured source back, compile it, and commit only those two files.
+//  4. write the captured source back and commit only that one file.
 //
 // Capturing the bytes up front (rather than git-stashing) means it works whether the
 // suite was untracked, modified, or already committed on a stale qa/* branch.

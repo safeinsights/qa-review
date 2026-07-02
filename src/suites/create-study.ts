@@ -1,4 +1,4 @@
-import type { RunContext, Suite } from '@/suites/types'
+import type { RunContext, Suite } from './types'
 
 // Creates a study as a researcher, captures its id for guaranteed cleanup, and
 // submits the initial proposal. Selectors mirror the management-app e2e

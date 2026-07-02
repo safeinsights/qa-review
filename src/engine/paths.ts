@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url'
 // root by walking UP from this module until we find the package.json.
 //
 // We can't hard-code a fixed "../.." offset: this module is imported both from
-// src/engine/ (source) AND, once esbuild bundles a suite, inlined into a file
-// under suites-compiled/ — a different depth. Walking up to package.json is
-// correct from either location (only the repo root has one).
+// src/engine/ (source, via tsx) AND, in the packaged app, from the esbuild-bundled
+// qar.bundle.mjs under Contents/Resources/ — a different depth entirely. Walking up
+// to package.json is correct from source; in the packaged app QAR_REPO_DIR wins
+// (the bundle location has no package.json).
 export function repoDir(): string {
     const override = process.env.QAR_REPO_DIR
     if (override) return override
@@ -43,8 +44,9 @@ export function runStatePath(bundleDir: string): string {
     return path.join(bundleDir, 'run-state.json')
 }
 
-// Compiled suites the bundled engine imports at runtime. `qar build-suites`
-// writes <name>.mjs here from src/suites/*.ts; the registry globs this dir.
-export function suitesCompiledDir(): string {
-    return path.join(repoDir(), 'suites-compiled')
+// Suite source dir. The engine imports these .ts files directly via tsx (both
+// `pnpm qar` and the packaged app run node with `--import tsx`), so there is no
+// compile step — the registry globs this dir.
+export function suitesSrcDir(): string {
+    return path.join(repoDir(), 'src', 'suites')
 }

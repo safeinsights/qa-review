@@ -59,10 +59,11 @@ suite already exists and the engine is driving the run.
      and re-runs JUST the failed step against the SAME live browser (no re-login, no
      re-doing earlier steps), then continues. Because the retry is **strict by step
      INDEX**, fix the step's selectors/logic — do NOT rename, reorder, or delete the
-     failing step (that breaks the index match). If your edit doesn't compile, the
-     browser stays held and the compile error surfaces — fix it and Retry again.
+     failing step (that breaks the index match). If your edit has a syntax error, the
+     browser stays held and the load error surfaces — fix it and Retry again.
    - **Finished / other cases:** tell the user *"Fixed <what> — press Run to re-run
-     and verify."* The QA Runner recompiles (`build-suites`) and re-runs from the top.
+     and verify."* The QA Runner reloads the edited `.ts` (via tsx) and re-runs from
+     the top.
    Either way you never call `qar run`; the GUI owns the authoritative run and its
    live browser.
 

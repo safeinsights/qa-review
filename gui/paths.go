@@ -170,14 +170,17 @@ func engineCmd(args ...string) *exec.Cmd {
 	if res != "" {
 		node := filepath.Join(res, "runtime", "node")
 		bundle := filepath.Join(res, "engine", "qar.bundle.mjs")
-		cmd = exec.Command(node, append([]string{bundle}, args...)...)
+		// --import tsx lets plain node import the clone's .ts suites directly (no
+		// compile step). tsx ships in Resources/engine/node_modules alongside Playwright.
+		nodeArgs := append([]string{"--import", "tsx", bundle}, args...)
+		cmd = exec.Command(node, nodeArgs...)
 		// Playwright is shipped under Resources/engine/node_modules; let the bundle
 		// resolve it. PLAYWRIGHT_SKIP... avoids any download attempt at runtime.
 		env := withGuiPath()
 		env = append(env,
 			"NODE_PATH="+filepath.Join(res, "engine", "node_modules"),
 			"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1",
-			"QAR_BIN="+node+" "+bundle,
+			"QAR_BIN="+node+" --import tsx "+bundle,
 		)
 		cmd.Env = env
 	} else {

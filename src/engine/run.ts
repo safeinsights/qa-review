@@ -83,9 +83,9 @@ export interface RunDeps {
         failureCategory: FailureCategory
     }) => void
     waitForResolution?: () => Promise<'retry' | 'giveUp'>
-    // Recompile ONE suite from disk and return the fresh Suite (or throw on a compile
+    // Reload ONE suite from disk and return the fresh Suite (or throw on a load
     // error). Called on retry so an edited suite's new code is picked up. Injected so
-    // tests fake it; production wires esbuild + a cache-busting dynamic import.
+    // tests fake it; production is a cache-busting dynamic import of the .ts (tsx).
     reloadSuite?: (name: string) => Promise<Suite>
 }
 

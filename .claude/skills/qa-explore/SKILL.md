@@ -68,8 +68,10 @@ needless permission prompts and noise:
 - Drive the EXISTING browser via chrome-devtools MCP; never open your own.
 - The suite file is the deliverable — make it self-contained and re-runnable, with
   stable selectors a reviewer can trust.
+- **Use RELATIVE imports in the suite** (`./types`, `../engine/paths`), NOT the `@/`
+  alias — suites load directly via tsx and the alias isn't resolved at load time.
 - Always clean up created entities.
 - There is **no machine-readable output contract** — this is an interactive terminal
   session. Communicate with the user in plain language.
-- The QA Runner's "Save as suite → Open PR" button compiles your `src/suites/<name>.ts`
-  (`qar build-suites`) and opens the PR; you just need to leave a passing suite file.
+- The QA Runner's "Save as suite → Open PR" button commits your `src/suites/<name>.ts`
+  and opens the PR; you just need to leave a passing suite file.

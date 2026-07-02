@@ -1,6 +1,5 @@
 node_modules/
 results/
-suites-compiled/
 gui/build/engine/
 gui/build/stage/
 gui/build/node-cache/

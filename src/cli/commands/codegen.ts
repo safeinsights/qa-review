@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { compileSuite } from '@/cli/commands/build-suites'
+import { pathToFileURL } from 'node:url'
 import { parseTrace } from '@/codegen/action-trace'
 import { generateSuite } from '@/codegen/generate-suite'
-import { repoDir, suitesCompiledDir } from '@/engine/paths'
+import { repoDir } from '@/engine/paths'
+import { discoverSuites } from '@/suites/discover'
 
 // Repo root for writing the generated suite into src/suites. In the packaged app
 // this is the cloned repo (QAR_REPO_DIR); for `pnpm qar` it's this checkout.
@@ -29,16 +30,17 @@ export async function codegenCommand(opts: Record<string, string>): Promise<void
     fs.writeFileSync(outPath, generateSuite(trace))
     console.log(`wrote ${outPath}`)
 
-    // Compile the generated suite to suites-compiled/<name>.mjs so the bundled
-    // engine can load it without a TS toolchain. A compile (i.e. type/syntax)
-    // error means the generated suite is bad — remove it and fail, preserving the
-    // previous "generated suite failed; removed it" UX.
+    // Validate the generated suite by importing it (tsx transpiles the .ts on the
+    // fly — no compile step). An import error (bad syntax) or a missing Suite export
+    // means the generated suite is bad — remove it and fail, preserving the previous
+    // "generated suite failed; removed it" UX.
     try {
-        await compileSuite(outPath, suitesCompiledDir())
+        const found = await discoverSuites([pathToFileURL(outPath).href], f => import(f))
+        if (!found.length) throw new Error('no Suite export found')
     } catch (e) {
         fs.rmSync(outPath, { force: true })
-        console.error(`Generated suite failed to compile; removed it.\n${(e as Error).message}`)
+        console.error(`Generated suite failed to load; removed it.\n${(e as Error).message}`)
         process.exit(1)
     }
-    console.log(`ok: ${outPath} compiled`)
+    console.log(`ok: ${outPath} validated`)
 }

@@ -87,11 +87,17 @@ TMP="$(mktemp -d)"
 #     temp dir and copy the resolved tree. channel:'chrome' needs the driver, not
 #     the bundled browsers, so skip the browser download.
 PW_VERSION="$(node -e "console.log(require('@playwright/test/package.json').version)")"
-echo "    staging @playwright/test@$PW_VERSION (no browser download)"
+# tsx ships alongside Playwright so the packaged node can `--import tsx` and load
+# the clone's .ts suites directly (no compile step). Suites load as raw .ts at
+# runtime (not bundled), so their non-relative imports — @faker-js/faker — must be
+# resolvable from this shipped node_modules via NODE_PATH too.
+TSX_VERSION="$(node -e "console.log(require('tsx/package.json').version)")"
+FAKER_VERSION="$(node -e "console.log(require('@faker-js/faker/package.json').version)")"
+echo "    staging @playwright/test@$PW_VERSION + tsx@$TSX_VERSION + @faker-js/faker@$FAKER_VERSION (no browser download)"
 mkdir -p "$TMP/pw" && cd "$TMP/pw"
 npm init -y >/dev/null 2>&1
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
-    "@playwright/test@$PW_VERSION" >/dev/null 2>&1
+    "@playwright/test@$PW_VERSION" "tsx@$TSX_VERSION" "@faker-js/faker@$FAKER_VERSION" >/dev/null 2>&1
 mkdir -p "$STAGE/engine/node_modules"
 cp -R "$TMP/pw/node_modules/." "$STAGE/engine/node_modules/"
 cd "$ROOT"
