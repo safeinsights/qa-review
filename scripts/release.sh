@@ -27,8 +27,10 @@ else
     SELF="${0:-}"
 fi
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
-DMG_SRC="$ROOT/gui/build/qa-runner.dmg"
-DMG_OUT="$ROOT/gui/build/qa-runner-$VERSION.dmg"
+# The build emits the user-facing "SI QA Review.dmg"; the release artifact keeps a
+# space-free, versioned name for a clean download URL.
+DMG_SRC="$ROOT/gui/build/SI QA Review.dmg"
+DMG_OUT="$ROOT/gui/build/SI-QA-Review-$VERSION.dmg"
 
 # Build the signed + notarized .dmg. Redirect the whole pipeline to stderr so the
 # only thing on stdout is the artifact path the release tool consumes.

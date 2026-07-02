@@ -2,6 +2,9 @@
     "$schema": "https://wails.io/schemas/config.v2.json",
     "name": "qa-runner",
     "outputfilename": "qa-runner",
+    "info": {
+        "productName": "SI QA Review"
+    },
     "frontend:dir": "frontend",
     "frontend:install": "pnpm install",
     "frontend:build": "pnpm build",

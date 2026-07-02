@@ -25,7 +25,8 @@ fi
 # ---- Config ----------------------------------------------------------------
 NODE_VERSION="${NODE_VERSION:-22.14.0}"          # pinned bundled node (LTS)
 NODE_ARCH="${NODE_ARCH:-arm64}"                  # darwin-arm64 build
-APP_NAME="qa-runner"
+APP_NAME="qa-runner"                             # wails build output basename + executable
+DISPLAY_NAME="SI QA Review"                      # user-facing name: the .app, .dmg, and volume
 
 # SIGNING — set in .env or export before running:
 #   DEVELOPER_ID:    "Developer ID Application: Your Org (TEAMID)"
@@ -44,10 +45,14 @@ fi
 GUI="$ROOT/gui"
 ENGINE_OUT="$GUI/build/engine"
 STAGE="$GUI/build/stage"                          # Resources payload staged here
-APP="$GUI/build/bin/$APP_NAME.app"
+# wails build emits <outputfilename>.app; we rename it to the user-facing
+# DISPLAY_NAME after building so the bundle, DMG, and /Applications entry all
+# read "SI QA Review" (the executable inside stays $APP_NAME).
+BUILT_APP="$GUI/build/bin/$APP_NAME.app"
+APP="$GUI/build/bin/$DISPLAY_NAME.app"
 RES="$APP/Contents/Resources"
 ENTITLEMENTS="$GUI/build/darwin/entitlements.plist"
-DMG="$GUI/build/$APP_NAME.dmg"
+DMG="$GUI/build/$DISPLAY_NAME.dmg"
 # Downloaded node binaries are cached here so repeat builds don't re-download.
 NODE_CACHE="$GUI/build/node-cache"
 
@@ -106,6 +111,10 @@ rm -rf "$TMP"
 echo "==> 4/7 wails build"
 cd "$GUI"
 wails build -platform "darwin/$NODE_ARCH" -clean
+# Rename the built bundle to the user-facing display name before staging/signing,
+# so every downstream path ($APP/$RES) — payload copy, codesign, DMG — uses it.
+rm -rf "$APP"
+mv "$BUILT_APP" "$APP"
 # Copy the staged payload into the freshly built .app.
 mkdir -p "$RES/runtime" "$RES/engine"
 cp -R "$STAGE/." "$RES/"
@@ -128,7 +137,7 @@ done < <(find "$RES" -type f \( -perm -u+x -o -name '*.node' \))
 sign "$APP"
 
 echo "==> 6/7 notarize + staple"
-ZIP="$GUI/build/$APP_NAME.zip"
+ZIP="$GUI/build/$DISPLAY_NAME.zip"
 /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
 xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
@@ -138,9 +147,9 @@ echo "==> 7/7 build + sign + notarize .dmg"
 rm -f "$DMG"
 # create-dmg (brew install create-dmg) gives a /Applications symlink + layout.
 if command -v create-dmg >/dev/null 2>&1; then
-    create-dmg --volname "$APP_NAME" --app-drop-link 480 160 "$DMG" "$APP" || true
+    create-dmg --volname "$DISPLAY_NAME" --app-drop-link 480 160 "$DMG" "$APP" || true
 else
-    /usr/bin/hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
+    /usr/bin/hdiutil create -volname "$DISPLAY_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
 fi
 codesign --force --timestamp --sign "$DEVELOPER_ID" "$DMG"
 xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
