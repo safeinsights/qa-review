@@ -161,8 +161,7 @@ const layout = {
     gridTemplateColumns: 'minmax(340px, 400px) 1fr',
     gap: 22,
     marginTop: 22,
-    maxHeight: 'calc(100vh - 32px)',
-    overflowY: 'auto',
+    height: 'calc(100vh - 32px)',
 } as const
 
 const idlePlaceholder = {

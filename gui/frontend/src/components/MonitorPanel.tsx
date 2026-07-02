@@ -172,8 +172,7 @@ const styles: Record<string, CSSProperties> = {
         overflow: 'hidden',
         boxShadow: 'var(--shadow-monitor)',
         alignSelf: 'start',
-        position: 'sticky',
-        top: 16,
+        maxHeight: '100%',
     },
     liveHeader: {
         display: 'flex',

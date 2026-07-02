@@ -166,7 +166,8 @@ const styles: Record<string, CSSProperties> = {
         borderRadius: 10,
         padding: '18px 20px',
         boxShadow: 'var(--shadow-card)',
-        alignSelf: 'start',
+        maxHeight: '100%',
+        overflowY: 'auto',
     },
     header: {
         display: 'flex',
