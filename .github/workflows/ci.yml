@@ -72,9 +72,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: gui/frontend/pnpm-lock.yaml
       - uses: actions/setup-go@v5
         with:
           go-version-file: gui/go.mod
           cache-dependency-path: gui/go.sum
+      # gui/main.go embeds `all:frontend/dist`, so the Go package won't compile
+      # until the frontend is built into that (gitignored) directory.
+      - name: Build frontend (for go:embed)
+        working-directory: gui/frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
       - run: go test ./...
         working-directory: gui
