@@ -29,12 +29,14 @@ export interface DoctorCheck {
     ok: boolean
     detail: string
     hint: string
+    docURL: string
 }
 
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
     StopRun(): Promise<void>
+    IsRunning(): Promise<boolean>
     SendToRun(line: string): Promise<void>
     StartAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
@@ -93,8 +95,15 @@ export async function runProcess(program: string, args: string[], cwd: string): 
     await app().RunProcess(program, args, cwd)
 }
 
+// A run was rejected because one is already active (Go's ErrRunInProgress).
+export const RUN_IN_PROGRESS = 'a run is already in progress'
+export function isRunInProgressError(e: unknown): boolean {
+    return String((e as { message?: string })?.message ?? e).includes(RUN_IN_PROGRESS)
+}
+
 // Run the bundled engine (`qar <args>`). The engine/node/bundle paths live in Go;
-// the frontend only supplies the qar args.
+// the frontend only supplies the qar args. Rejects with ErrRunInProgress if a
+// run is already active (the caller should surface it + reflect running state).
 export async function runEngine(args: string[]): Promise<void> {
     await app().RunEngine(args)
 }
@@ -102,6 +111,12 @@ export async function runEngine(args: string[]): Promise<void> {
 // Stop the in-flight Suites/engine run (kills the engine + its Chromium).
 export async function stopRun(): Promise<void> {
     await app().StopRun()
+}
+
+// Authoritative "is a tracked run active right now?" — used to sync the UI's
+// Run/Stop button on mount, independent of streamed event history.
+export async function isRunning(): Promise<boolean> {
+    return app().IsRunning()
 }
 
 // --- Pause/resume control channel (GUI → running engine, over its stdin) ---

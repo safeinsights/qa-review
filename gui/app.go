@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -146,7 +147,7 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 	// cwd from the frontend is vestigial — spawns run in the cloned repo dir.
 	cmd.Dir = repoDir()
 	cmd.Env = withGuiPath()
-	return a.streamCmd(cmd, program)
+	return a.streamCmd(cmd, program, true)
 }
 
 // RunEngine streams the bundled engine (`qar <args...>`) into the same
@@ -154,7 +155,15 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 // Go (engineCmd) so the frontend never has to know about node/pnpm/bundle paths.
 func (a *App) RunEngine(args []string) error {
 	cmd := engineCmd(args...)
-	return a.streamCmd(cmd, "qar "+strings.Join(args, " "))
+	return a.streamCmd(cmd, "qar "+strings.Join(args, " "), isTrackedRun(args))
+}
+
+// isTrackedRun reports whether an engine invocation is THE stoppable, one-at-a-time
+// run. `list` (and any other read-only query the UI fires on mount) must NOT be
+// tracked — otherwise a tab remount's list fetch would kill an in-flight run and
+// confuse StopRun. Only `run` is tracked.
+func isTrackedRun(args []string) bool {
+	return len(args) == 0 || args[0] != "list"
 }
 
 // authoringAllowedTools is the SCOPED pre-approval set for the interactive
@@ -382,10 +391,58 @@ func (a *App) StopSession() {
 	}
 }
 
+// ErrRunInProgress is returned by RunEngine/RunProcess when a tracked run is
+// already active — the second run is rejected rather than superseding the first.
+// The frontend matches on this message to show "already running" and flip its
+// button to Stop.
+var ErrRunInProgress = errors.New("a run is already in progress")
+
+// IsRunning reports whether a tracked run is currently active. The frontend calls
+// this on mount so its Run/Stop button reflects the authoritative engine state
+// (e.g. after a reload while a run is live), independent of event history.
+func (a *App) IsRunning() bool {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	return a.runCmd != nil
+}
+
 // streamCmd starts cmd, folding stderr into stdout, emitting each stdout line as
 // a "stdout-line" event and a final "proc-exit" with the exit code. `label` names
 // the process in spawn-failure messages.
-func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
+//
+// `track` marks this as THE stoppable run: it's registered in a.runCmd/a.runStdin
+// (so StopRun/SendToRun target it), and any run already tracked is terminated
+// first — only one live run at a time. Untracked commands (e.g. the suite `list`
+// query) stream their output but never touch run state, so a background query
+// can't be mistaken for the run and a run can't be silently orphaned by starting
+// another. Both still emit stdout-line/proc-exit on the shared event bus.
+func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
+	// Only ONE tracked run at a time. REJECT a second run rather than superseding
+	// the first — an in-flight run (esp. a long study lifecycle) must not be
+	// clobbered by an accidental/stale second Run. The reserve is atomic under
+	// runMu so two near-simultaneous starts can't both pass the check. The caller
+	// (the UI) surfaces ErrRunInProgress and flips its button to Stop.
+	registered := false
+	if track {
+		a.runMu.Lock()
+		if a.runCmd != nil {
+			a.runMu.Unlock()
+			return ErrRunInProgress
+		}
+		// Reserve the slot with a non-nil placeholder so a racing start is rejected
+		// too; replaced with the real *exec.Cmd once Start() succeeds below.
+		a.runCmd = &exec.Cmd{}
+		a.runMu.Unlock()
+		// If we bail before registering the real cmd (a pipe/Start failure), release
+		// the reservation so the next Run isn't wrongly rejected.
+		defer func() {
+			if !registered {
+				a.runMu.Lock()
+				a.runCmd = nil
+				a.runMu.Unlock()
+			}
+		}()
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		a.emitSpawnFailure(label, err)
@@ -411,10 +468,16 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 		a.emitSpawnFailure(label, err)
 		return err
 	}
-	a.runMu.Lock()
-	a.runCmd = cmd
-	a.runStdin = stdin
-	a.runMu.Unlock()
+	if track {
+		a.runMu.Lock()
+		a.runCmd = cmd
+		a.runStdin = stdin
+		a.runMu.Unlock()
+		registered = true
+	} else {
+		// Untracked: nothing will write to stdin, so close our write end now.
+		_ = stdin.Close()
+	}
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // allow long NDJSON lines
@@ -434,15 +497,17 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 				code = -1
 			}
 		}
-		a.runMu.Lock()
-		if a.runCmd == cmd {
-			a.runCmd = nil
-			if a.runStdin != nil {
-				_ = a.runStdin.Close()
-				a.runStdin = nil
+		if track {
+			a.runMu.Lock()
+			if a.runCmd == cmd {
+				a.runCmd = nil
+				if a.runStdin != nil {
+					_ = a.runStdin.Close()
+					a.runStdin = nil
+				}
 			}
+			a.runMu.Unlock()
 		}
-		a.runMu.Unlock()
 		runtime.EventsEmit(a.ctx, "proc-exit", code)
 	}()
 	return nil
@@ -453,22 +518,46 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string) error {
 // is running. The reader goroutine in streamCmd reaps the process and emits the
 // final proc-exit, so the UI returns to idle on its own.
 func (a *App) StopRun() error {
+	a.terminateRun()
+	return nil
+}
+
+// terminateRun kills the tracked run's process group and waits (bounded) for it
+// to actually exit, so callers can rely on the run being gone when it returns.
+// Used by StopRun and by streamCmd before starting a new tracked run (only one
+// run at a time — no orphans). No-op if nothing is running.
+func (a *App) terminateRun() {
 	a.runMu.Lock()
 	cmd := a.runCmd
 	a.runMu.Unlock()
 	if cmd == nil || cmd.Process == nil {
-		return nil
+		return
 	}
 	pid := cmd.Process.Pid
 	// Setpgid made the child a group leader (PGID == PID); -pid hits the whole group.
-	// The engine handles SIGTERM and exits promptly (see run.ts onStop), so this is
-	// normally instant; the SIGKILL is only a fallback for a wedged process.
+	// The engine handles SIGTERM and exits promptly (see run.ts onStop); SIGKILL is
+	// only a fallback for a wedged process.
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	go func() {
-		time.Sleep(1500 * time.Millisecond)
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-	}()
-	return nil
+	// Wait for streamCmd's reader goroutine to reap it and clear a.runCmd, escalating
+	// to SIGKILL if it doesn't die promptly. Bounded so a truly stuck process can't
+	// hang the caller (a later spawn still supersedes it on the shared event bus).
+	deadline := time.Now().Add(3 * time.Second)
+	killed := false
+	for time.Now().Before(deadline) {
+		a.runMu.Lock()
+		gone := a.runCmd != cmd
+		a.runMu.Unlock()
+		if gone {
+			return
+		}
+		if !killed && time.Now().After(deadline.Add(-1500*time.Millisecond)) {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			killed = true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Last-resort SIGKILL if it never cleared within the window.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // SendToRun writes one NDJSON control line to the in-flight run's stdin. The
@@ -984,6 +1073,9 @@ func doctorMarkdown(checks []DoctorCheck) string {
 		if !c.OK && strings.TrimSpace(c.Hint) != "" {
 			b.WriteString("  - hint: " + strings.TrimSpace(c.Hint) + "\n")
 		}
+		if !c.OK && strings.TrimSpace(c.DocURL) != "" {
+			b.WriteString("  - download: " + strings.TrimSpace(c.DocURL) + "\n")
+		}
 	}
 	return b.String()
 }
@@ -994,6 +1086,7 @@ type DoctorCheck struct {
 	OK     bool   `json:"ok"`     // passed?
 	Detail string `json:"detail"` // version / "authenticated" on success; the error on failure
 	Hint   string `json:"hint"`   // remediation shown when !OK
+	DocURL string `json:"docURL"` // download/install page for the tool, shown as a link when !OK
 }
 
 // runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
@@ -1014,19 +1107,19 @@ func (a *App) RunDoctor() []DoctorCheck {
 	checks := []DoctorCheck{}
 
 	// Required CLIs (presence + version).
-	for _, t := range []struct{ label, bin, flag, hint string }{
-		{"git", "git", "--version", "Install git (e.g. xcode-select --install or Homebrew)."},
-		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh"},
-		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH."},
-		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node"},
+	for _, t := range []struct{ label, bin, flag, hint, docURL string }{
+		{"git", "git", "--version", "Install git (e.g. xcode-select --install or Homebrew).", "https://git-scm.com/downloads"},
+		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh", "https://cli.github.com/"},
+		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH.", "https://docs.anthropic.com/en/docs/claude-code/setup"},
+		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node", "https://nodejs.org/en/download"},
 	} {
 		if !toolOnPath(t.bin) {
-			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint})
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint, DocURL: t.docURL})
 			continue
 		}
 		ver, err := runTool(t.bin, t.flag)
 		if err != nil {
-			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint})
+			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint, DocURL: t.docURL})
 			continue
 		}
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
@@ -1046,7 +1139,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 	if chromeInstalled() {
 		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: true, Detail: "installed"})
 	} else {
-		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: false, Detail: "not found in /Applications", Hint: "Install Google Chrome — the runner drives it for tests."})
+		checks = append(checks, DoctorCheck{Name: "Google Chrome", OK: false, Detail: "not found in /Applications", Hint: "Install Google Chrome — the runner drives it for tests.", DocURL: "https://www.google.com/chrome/"})
 	}
 
 	// The cloned qa-review repo (suites + config live here).

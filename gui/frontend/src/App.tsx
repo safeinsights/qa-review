@@ -52,13 +52,19 @@ export function App() {
                     <Tabs.Tab value="settings">Settings</Tabs.Tab>
                 </Tabs.List>
 
-                <Tabs.Panel value="suites" pt="lg">
+                {/* keepMounted: the Suites tab owns a live run (process + global
+                    stdout-line/proc-exit listeners + run state). Unmounting it on a
+                    tab switch tore that down — losing `running`, detaching the
+                    listeners, then RE-attaching on return mid-stream — which let an
+                    in-flight run look stopped and interleaved a second run's steps.
+                    Keeping panels mounted preserves the run across tab switches. */}
+                <Tabs.Panel value="suites" pt="lg" keepMounted>
                     <SuitesTab />
                 </Tabs.Panel>
-                <Tabs.Panel value="exploratory" pt="lg">
+                <Tabs.Panel value="exploratory" pt="lg" keepMounted>
                     <ExploratoryTab />
                 </Tabs.Panel>
-                <Tabs.Panel value="settings" pt="lg">
+                <Tabs.Panel value="settings" pt="lg" keepMounted>
                     <SettingsTab />
                 </Tabs.Panel>
             </Tabs>
