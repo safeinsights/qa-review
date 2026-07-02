@@ -141,7 +141,12 @@ export async function resumeRun(): Promise<void> {
 
 // Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.
 // The GUI then receives `session-ready` (screencast port) + `pty-output` events.
-export async function startAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void> {
+export async function startAuthoringSession(
+    env: string,
+    pr: string,
+    role: string,
+    instruction: string
+): Promise<void> {
     await app().StartAuthoringSession(env, pr, role, instruction)
 }
 
@@ -243,7 +248,12 @@ export async function openSuiteInEditor(name: string): Promise<void> {
 
 // Open a GitHub issue with debug context (Suites run state, or the full authoring
 // transcript) auto-attached. Returns the new issue URL.
-export async function reportIssue(title: string, note: string, tab: string, runState: string): Promise<string> {
+export async function reportIssue(
+    title: string,
+    note: string,
+    tab: string,
+    runState: string
+): Promise<string> {
     return app().ReportIssue(title, note, tab, runState)
 }
 
@@ -262,13 +272,17 @@ export async function readScreenshot(bundleDir: string, rel: string): Promise<st
 // URL). Caller should URL.revokeObjectURL when done.
 export async function readVideoObjectUrl(bundleDir: string): Promise<string> {
     const b64 = await app().ReadVideo(bundleDir)
-    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
     return URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }))
 }
 
 // Prompt to save one screenshot, named "<suite>-<file>.png"; returns the saved
 // path ('' if cancelled).
-export async function saveScreenshotAs(bundleDir: string, rel: string, suite: string): Promise<string> {
+export async function saveScreenshotAs(
+    bundleDir: string,
+    rel: string,
+    suite: string
+): Promise<string> {
     return app().SaveScreenshotAs(bundleDir, rel, suite)
 }
 

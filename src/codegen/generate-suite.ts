@@ -1,12 +1,12 @@
-import type { ActionTrace, Action } from '@/codegen/action-trace'
+import type { Action, ActionTrace } from '@/codegen/action-trace'
 
 // Escape a string for safe interpolation into a single-quoted TS string literal.
 const sq = (s: string): string => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
 function camelConst(name: string): string {
     const camel = name.replace(/[-_\s]+(.)/g, (_, c: string) => c.toUpperCase())
-    const safe = /^\d/.test(camel) ? '_' + camel : camel
-    return safe.charAt(0).toLowerCase() + safe.slice(1) + 'Suite'
+    const safe = /^\d/.test(camel) ? `_${camel}` : camel
+    return `${safe.charAt(0).toLowerCase() + safe.slice(1)}Suite`
 }
 
 function actionLine(a: Action): string {
@@ -40,9 +40,9 @@ function groupByStep(actions: Action[]): Array<{ label: string; actions: Action[
 export function generateSuite(trace: ActionTrace): string {
     const groups = groupByStep(trace.actions)
     const stepBlocks = groups
-        .map((g) => {
+        .map(g => {
             // actionLine emits 12-space indent; the step body here nests 8 deeper.
-            const body = g.actions.map((a) => '        ' + actionLine(a)).join('\n')
+            const body = g.actions.map(a => `        ${actionLine(a)}`).join('\n')
             return (
                 `        {\n` +
                 `            name: '${sq(g.label)}',\n` +

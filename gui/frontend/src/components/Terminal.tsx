@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react'
-import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { useEffect, useRef } from 'react'
 import '@xterm/xterm/css/xterm.css'
-import { onPtyOutput, onPtyExit, writeToPty, resizePty } from '../lib/ipc'
+import { onPtyExit, onPtyOutput, resizePty, writeToPty } from '../lib/ipc'
 
 // Embedded interactive terminal for the claude PTY. Renders raw PTY bytes and
 // forwards keystrokes back to Go (which writes them to claude's pseudo-terminal),
@@ -11,6 +11,8 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
     const hostRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
+        const host = hostRef.current
+        if (!host) return
         const term = new XTerm({
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 13,
@@ -20,7 +22,7 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         })
         const fit = new FitAddon()
         term.loadAddon(fit)
-        term.open(hostRef.current!)
+        term.open(host)
         fit.fit()
         resizePty(term.rows, term.cols).catch(() => {})
         // The container's final size may not be settled on first paint (flex/grid
@@ -37,23 +39,25 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
 
         // PTY bytes (base64) -> terminal. Decode base64 to a byte array so UTF-8 /
         // control sequences render correctly.
-        const decode = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+        const decode = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0))
 
         let unOut: (() => void) | undefined
         let unExit: (() => void) | undefined
         ;(async () => {
-            unOut = await onPtyOutput((b64) => term.write(decode(b64)))
-            unExit = await onPtyExit((code) => {
+            unOut = await onPtyOutput(b64 => term.write(decode(b64)))
+            unExit = await onPtyExit(code => {
                 term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n')
                 onExit?.(code)
             })
         })()
 
         // Keystrokes -> Go (base64-encode to preserve raw bytes).
-        const dataDisp = term.onData((d) => {
+        const dataDisp = term.onData(d => {
             const bytes = new TextEncoder().encode(d)
             let bin = ''
-            bytes.forEach((b) => (bin += String.fromCharCode(b)))
+            bytes.forEach(b => {
+                bin += String.fromCharCode(b)
+            })
             writeToPty(btoa(bin)).catch(() => {})
         })
 
@@ -65,7 +69,7 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
                 /* ignore transient layout */
             }
         })
-        ro.observe(hostRef.current!)
+        ro.observe(host)
 
         return () => {
             cancelAnimationFrame(raf)
@@ -75,7 +79,7 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
             unExit?.()
             term.dispose()
         }
-    }, [])
+    }, [onExit])
 
     return <div ref={hostRef} style={{ width: '100%', height: '100%', minHeight: 360 }} />
 }

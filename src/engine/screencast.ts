@@ -1,6 +1,30 @@
-import { WebSocketServer, type WebSocket } from 'ws'
-import type { Page, Frame, ConsoleMessage as PwConsoleMessage } from '@playwright/test'
-import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, consoleMessage, mapConsoleLevel, type CdpFrameMeta, type ConsoleLine } from '@/engine/screencast-codec'
+import type { Frame, Page, ConsoleMessage as PwConsoleMessage } from '@playwright/test'
+import { type WebSocket, WebSocketServer } from 'ws'
+import {
+    type CdpFrameMeta,
+    type ConsoleLine,
+    clipboardMessage,
+    consoleMessage,
+    cursorMessage,
+    frameBytes,
+    mapConsoleLevel,
+    parseInput,
+    toCdpKey,
+    toCdpMouse,
+    urlMessage,
+} from '@/engine/screencast-codec'
+
+// Minimal typed escape hatch for raw CDP methods/events that Playwright's
+// CDPSession typing doesn't surface (Page.screencastFrame/Ack, Page.start/
+// stopScreencast, and the Runtime.evaluate result shape). We narrow the event
+// payload inside each handler rather than typing `args` loosely.
+type RawCdp = {
+    on(event: string, cb: (...args: unknown[]) => void): void
+    send(method: string, params?: object): Promise<{ result?: { value?: unknown } }>
+}
+
+// The Page.screencastFrame event payload we care about.
+type ScreencastFrame = { data: string; metadata: CdpFrameMeta; sessionId: number }
 
 // Hosts a localhost WebSocket that streams live JPEG frames from `page` (via CDP
 // Page.startScreencast) to a connected webview, and replays input events the
@@ -25,7 +49,7 @@ export class ScreencastServer {
     // Start on an ephemeral port (0 = OS-assigned). Returns once listening.
     static async start(page: Page): Promise<ScreencastServer> {
         const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
-        await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+        await new Promise<void>(resolve => wss.once('listening', () => resolve()))
         const addr = wss.address()
         const port = typeof addr === 'object' && addr ? addr.port : 0
         const server = new ScreencastServer(wss, port)
@@ -41,12 +65,22 @@ export class ScreencastServer {
     private wireConsole(page: Page) {
         const record = (line: ConsoleLine) => {
             this.consoleHistory.push(line)
-            if (this.consoleHistory.length > ScreencastServer.CONSOLE_HISTORY_CAP) this.consoleHistory.shift()
+            if (this.consoleHistory.length > ScreencastServer.CONSOLE_HISTORY_CAP)
+                this.consoleHistory.shift()
             const msg = consoleMessage(line)
             for (const c of this.clients) if (c.readyState === c.OPEN) c.send(msg)
         }
-        page.on('console', (msg: PwConsoleMessage) => record({ level: mapConsoleLevel(msg.type()), text: msg.text(), at: Date.now(), url: msg.location()?.url }))
-        page.on('pageerror', (err: Error) => record({ level: 'error', text: String(err?.stack || err), at: Date.now() }))
+        page.on('console', (msg: PwConsoleMessage) =>
+            record({
+                level: mapConsoleLevel(msg.type()),
+                text: msg.text(),
+                at: Date.now(),
+                url: msg.location()?.url,
+            })
+        )
+        page.on('pageerror', (err: Error) =>
+            record({ level: 'error', text: String(err?.stack || err), at: Date.now() })
+        )
     }
 
     private wire(page: Page) {
@@ -74,27 +108,37 @@ export class ScreencastServer {
             }
 
             const cdp = await page.context().newCDPSession(page)
+            const raw = cdp as unknown as RawCdp
 
             // Frame device-pixels ÷ pageScaleFactor = CSS px. CDP screencast
             // coords (and the ones the webview sends) are device pixels; the DOM
             // hit-test below wants CSS px. Kept fresh from each frame's metadata.
             let pageScaleFactor = 1
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ;(cdp as any).on('Page.screencastFrame', async (frame: { data: string; metadata: CdpFrameMeta; sessionId: number }) => {
-                if (frame.metadata?.pageScaleFactor) pageScaleFactor = frame.metadata.pageScaleFactor
-                if (socket.readyState === socket.OPEN) {
-                    // Send raw JPEG bytes as a BINARY ws message (no base64/JSON).
-                    socket.send(frameBytes(frame.data))
-                }
-                // Ack so Chromium keeps sending (backpressure control).
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                await (cdp as any).send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {})
+            raw.on('Page.screencastFrame', (...args: unknown[]) => {
+                const frame = args[0] as ScreencastFrame
+                void (async () => {
+                    if (frame.metadata?.pageScaleFactor)
+                        pageScaleFactor = frame.metadata.pageScaleFactor
+                    if (socket.readyState === socket.OPEN) {
+                        // Send raw JPEG bytes as a BINARY ws message (no base64/JSON).
+                        socket.send(frameBytes(frame.data))
+                    }
+                    // Ack so Chromium keeps sending (backpressure control).
+                    await raw
+                        .send('Page.screencastFrameAck', { sessionId: frame.sessionId })
+                        .catch(() => {})
+                })()
             })
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (cdp as any)
-                .send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 720, everyNthFrame: 1 })
+            await raw
+                .send('Page.startScreencast', {
+                    format: 'jpeg',
+                    quality: 70,
+                    maxWidth: 1280,
+                    maxHeight: 720,
+                    everyNthFrame: 1,
+                })
                 .catch(() => {})
 
             // CDP has no cursor-changed event, so we sample the CSS cursor under
@@ -109,13 +153,16 @@ export class ScreencastServer {
                 try {
                     const cssX = x / pageScaleFactor
                     const cssY = y / pageScaleFactor
-                    const res = await cdp.send('Runtime.evaluate', {
+                    const res = await raw.send('Runtime.evaluate', {
                         expression: `(() => { const el = document.elementFromPoint(${cssX}, ${cssY}); return el ? getComputedStyle(el).cursor : 'default'; })()`,
                         returnByValue: true,
                     })
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const value = (res as any)?.result?.value
-                    if (typeof value === 'string' && value !== lastCursor && socket.readyState === socket.OPEN) {
+                    const value = res.result?.value
+                    if (
+                        typeof value === 'string' &&
+                        value !== lastCursor &&
+                        socket.readyState === socket.OPEN
+                    ) {
                         lastCursor = value
                         socket.send(cursorMessage(value))
                     }
@@ -131,12 +178,16 @@ export class ScreencastServer {
             // mirror it into the OS clipboard. Selection is the reliable signal
             // (a programmatic copy with no selection can't always be observed).
             const readPageClipboard = async (): Promise<string> => {
-                const sel = await page.evaluate(() => (window.getSelection?.()?.toString() ?? '')).catch(() => '')
+                const sel = await page
+                    .evaluate(() => window.getSelection?.()?.toString() ?? '')
+                    .catch(() => '')
                 if (sel) return sel
-                return page.evaluate(() => navigator.clipboard.readText().catch(() => '')).catch(() => '')
+                return page
+                    .evaluate(() => navigator.clipboard.readText().catch(() => ''))
+                    .catch(() => '')
             }
 
-            socket.on('message', async (raw) => {
+            socket.on('message', async raw => {
                 // Input arrives as JSON text; ignore the binary frames we sent.
                 const ev = parseInput(raw.toString())
                 if (!ev) return
@@ -154,7 +205,8 @@ export class ScreencastServer {
                         // page→GUI copy: reply with the page's current copy so the
                         // webview writes it to the OS clipboard.
                         const value = await readPageClipboard()
-                        if (value && socket.readyState === socket.OPEN) socket.send(clipboardMessage(value))
+                        if (value && socket.readyState === socket.OPEN)
+                            socket.send(clipboardMessage(value))
                     }
                 } catch {
                     // input replay best-effort; never crash the run
@@ -162,8 +214,7 @@ export class ScreencastServer {
             })
 
             socket.on('close', async () => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                await (cdp as any).send('Page.stopScreencast').catch(() => {})
+                await raw.send('Page.stopScreencast').catch(() => {})
                 await cdp.detach().catch(() => {})
             })
         })
@@ -174,10 +225,10 @@ export class ScreencastServer {
     // connected client(s) disconnect, or `graceMs` elapses — whichever first.
     async waitForClientThenClose(graceMs: number): Promise<void> {
         // Give a late-connecting client a moment to attach first.
-        await new Promise((r) => setTimeout(r, 1000))
+        await new Promise(r => setTimeout(r, 1000))
         if (this.clients.size === 0) return // nobody watching → don't hold the run open
 
-        await new Promise<void>((resolve) => {
+        await new Promise<void>(resolve => {
             const timer = setTimeout(resolve, graceMs)
             const check = () => {
                 if (this.clients.size === 0) {
@@ -190,6 +241,6 @@ export class ScreencastServer {
     }
 
     async close(): Promise<void> {
-        await new Promise<void>((resolve) => this.wss.close(() => resolve()))
+        await new Promise<void>(resolve => this.wss.close(() => resolve()))
     }
 }

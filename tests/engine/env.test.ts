@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 
 // Shared accounts (email + password + per-account MFA), plus the per-env base URL.
@@ -20,8 +20,16 @@ describe('resolveEnv', () => {
         const cfg = resolveEnv('qa', ENV_VARS)
         expect(cfg.name).toBe('qa')
         expect(cfg.baseURL).toBe('https://qa.example.com')
-        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a', mfaCode: '111111' })
-        expect(cfg.accounts.researcher).toEqual({ email: 'r@example.com', password: 'pw-r', mfaCode: '222222' })
+        expect(cfg.accounts.admin).toEqual({
+            email: 'a@example.com',
+            password: 'pw-a',
+            mfaCode: '111111',
+        })
+        expect(cfg.accounts.researcher).toEqual({
+            email: 'r@example.com',
+            password: 'pw-r',
+            mfaCode: '222222',
+        })
         expect(cfg.accounts.reviewer.email).toBe('v@example.com')
         expect(cfg.accounts.admin.mfaCode).toBe('111111')
         expect(cfg.accounts.reviewer.mfaCode).toBe('333333')
@@ -71,7 +79,11 @@ describe('resolvePrEnv', () => {
         const cfg = resolvePrEnv(839, ENV_VARS)
         expect(cfg.name).toBe('pr839')
         expect(cfg.baseURL).toBe('https://pr839.qa.safeinsights.org')
-        expect(cfg.accounts.admin).toEqual({ email: 'a@example.com', password: 'pw-a', mfaCode: '111111' })
+        expect(cfg.accounts.admin).toEqual({
+            email: 'a@example.com',
+            password: 'pw-a',
+            mfaCode: '111111',
+        })
     })
 
     it('rejects a non-positive or non-integer PR number', () => {

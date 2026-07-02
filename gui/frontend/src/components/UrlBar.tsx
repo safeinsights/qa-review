@@ -3,7 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // A selectable, truncated URL display with a copy-to-clipboard button. Shared by
 // the live-browser header (RunScreen) and the per-step snapshot footer
 // (SnapshotPanel) so both format + copy a URL the same way.
-export function UrlBar({ url, placeholder = 'waiting for page…' }: { url: string | null | undefined; placeholder?: string }) {
+export function UrlBar({
+    url,
+    placeholder = 'waiting for page…',
+}: {
+    url: string | null | undefined
+    placeholder?: string
+}) {
     const [copied, setCopied] = useState(false)
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const copy = useCallback(() => {
@@ -66,7 +72,17 @@ export function UrlBar({ url, placeholder = 'waiting for page…' }: { url: stri
 // Two overlapping rounded rectangles — the standard "copy" glyph.
 function CopyIcon() {
     return (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            <title>Copy</title>
             <rect x="9" y="9" width="13" height="13" rx="2" />
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
@@ -76,7 +92,17 @@ function CopyIcon() {
 // A checkmark shown briefly after a successful copy.
 function CheckIcon() {
     return (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            <title>Copied</title>
             <path d="M20 6 9 17l-5-5" />
         </svg>
     )

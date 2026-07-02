@@ -1,26 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { runProcess, runEngine, onStdoutLine, onExit, readVideoObjectUrl, isRunInProgressError } from '../lib/ipc'
-import { StreamParser, type StepEnvelope, type ResultEnvelope } from '../lib/stepStream'
-import type { ConsoleLine } from '../lib/screencast'
-import { setRunState } from '../lib/runState'
-import { StepChecklist } from './StepChecklist'
-import { ResultPanel } from './ResultPanel'
-import { RecordingPanel } from './RecordingPanel'
-import { BrowserPanel } from './BrowserPanel'
-import { SnapshotPanel } from './SnapshotPanel'
-import { UrlBar } from './UrlBar'
-import { ConsoleLog } from './ConsoleLog'
+import type { ResultEnvelope } from '../lib/stepStream'
+import { useReportIssueMirror } from '../lib/useReportIssueMirror'
+import { useRunStream } from '../lib/useRunStream'
+import { useSnapshotSelection } from '../lib/useSnapshotSelection'
+import { useVideoObjectUrl } from '../lib/useVideoObjectUrl'
+import { MonitorPanel } from './MonitorPanel'
+import { StepsPanel } from './StepsPanel'
 
 // A run is the bundled engine (`qar <args>`, kind 'engine') or an arbitrary
 // process (kind 'process'). All command paths live in Go.
 export type RunSpec =
     | { kind: 'engine'; args: string[] }
     | { kind: 'process'; program: string; args: string[] }
-
-interface Selected {
-    index: number
-    step: StepEnvelope
-}
 
 export function RunScreen({
     spec,
@@ -40,350 +30,93 @@ export function RunScreen({
     onRunningChange?: (running: boolean) => void
     onPausedChange?: (paused: boolean) => void
 }) {
-    const [steps, setSteps] = useState<StepEnvelope[]>([])
-    const [result, setResult] = useState<ResultEnvelope | null>(null)
-    const [running, setRunning] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-    const [port, setPort] = useState<number | null>(null)
-    // Current top-frame URL of the live browser (pushed over the screencast).
-    const [url, setUrl] = useState<string | null>(null)
-    // Live browser console, accumulated across the whole run (cleared per run).
-    const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([])
-    const [selected, setSelected] = useState<Selected | null>(null)
-    // The step the run is currently halted before (null when not paused).
-    const [pausedAt, setPausedAt] = useState<string | null>(null)
-    const parser = useRef(new StreamParser())
+    // The viewed snapshot + recording playback (state that sits beside a run).
+    const snap = useSnapshotSelection(stepNames)
 
-    // bundleDir is needed to load/zip artifacts; it arrives on the result envelope.
-    const bundleDir = (result?.bundleDir as string | undefined) ?? null
+    // The run state machine: steps/result/running/error/port/url/console/pausedAt,
+    // plus the setters the live BrowserPanel feeds back. Reports running/paused
+    // transitions + the finished result up, and rewinds the snapshot on each start.
+    const run = useRunStream(spec, stepNames, {
+        onDone,
+        onRunningChange,
+        onPausedChange,
+        onReset: snap.reset,
+    })
 
-    // Recording playback state is lifted here (above RecordingPanel) so it
-    // survives flipping to a step snapshot and back — RecordingPanel unmounts
-    // while the snapshot shows, which would otherwise reset the video to 0.
-    const playback = useRef({ time: 0, playing: false })
-    const onPlaybackProgress = useCallback((time: number, playing: boolean) => {
-        playback.current = { time, playing }
-    }, [])
-    // The video blob URL is also loaded here (not in RecordingPanel) so the bytes
-    // aren't re-fetched every time the recording remounts after a snapshot flip.
-    const [videoUrl, setVideoUrl] = useState<string | null>(null)
-    useEffect(() => {
-        if (!bundleDir) {
-            setVideoUrl(null)
-            return
-        }
-        let url: string | null = null
-        let alive = true
-        readVideoObjectUrl(bundleDir)
-            .then((u) => {
-                if (alive) {
-                    url = u
-                    setVideoUrl(u)
-                } else {
-                    URL.revokeObjectURL(u)
-                }
-            })
-            .catch(() => alive && setVideoUrl(null))
-        return () => {
-            alive = false
-            if (url) URL.revokeObjectURL(url)
-            setVideoUrl(null)
-        }
-    }, [bundleDir])
+    // bundleDir (for artifacts) arrives on the result envelope; the video blob is
+    // loaded here, not in RecordingPanel, so it isn't re-fetched on snapshot flips.
+    const bundleDir = (run.result?.bundleDir as string | undefined) ?? null
+    const videoUrl = useVideoObjectUrl(bundleDir)
 
-    // Mirror the run into the module-level store so the header's "Report Issue"
-    // button can attach the current state regardless of which tab is active.
-    useEffect(() => {
-        const specArgs = spec?.kind === 'engine' ? spec.args : spec ? [spec.program, ...spec.args] : null
-        setRunState({ spec: specArgs, steps, result, running, error })
-    }, [spec, steps, result, running, error])
+    useReportIssueMirror(spec, run)
 
-    // Let the parent (which owns the Run/Stop button) track run state.
-    useEffect(() => {
-        onRunningChange?.(running)
-    }, [running, onRunningChange])
+    // Idle before the first run AND with no suite steps to preview: nothing to show.
+    const isIdle = !spec && stepNames.length === 0
+    if (isIdle) return <IdlePlaceholder />
 
-    // Switching suites (which changes stepNames) must clear the prior run's
-    // output — otherwise the new suite's step list renders against the old run's
-    // steps/result/error and shows a stale "failed" step. Keyed on stepNames
-    // ONLY (not `running`), so a run finishing — which flips running→false but
-    // leaves stepNames unchanged — keeps its result on screen. The join gives a
-    // stable identity for the suite's step set across renders.
-    const stepNamesKey = stepNames.join(' ')
-    const prevStepNamesKey = useRef(stepNamesKey)
-    useEffect(() => {
-        if (prevStepNamesKey.current === stepNamesKey) return
-        prevStepNamesKey.current = stepNamesKey
-        setSteps([])
-        setResult(null)
-        setError(null)
-        setSelected(null)
-        setPort(null)
-        setUrl(null)
-        setConsoleLines([])
-    }, [stepNamesKey])
-
-    useEffect(() => {
-        if (!spec) return
-        setSteps([])
-        setResult(null)
-        setError(null)
-        setPort(null)
-        setUrl(null)
-        setConsoleLines([])
-        setSelected(null)
-        setRunning(true)
-        setPausedAt(null)
-        onPausedChange?.(false)
-        playback.current = { time: 0, playing: false }
-        parser.current = new StreamParser()
-
-        let unlistenOut: (() => void) | undefined
-        let unlistenExit: (() => void) | undefined
-
-        ;(async () => {
-            unlistenOut = await onStdoutLine((line) => {
-                for (const env of parser.current.push(line + '\n')) {
-                    if (env.type === 'step') {
-                        // The first 'running' event after a pause means the run
-                        // resumed — clear the paused state.
-                        if (env.status === 'running') {
-                            setPausedAt(null)
-                            onPausedChange?.(false)
-                        }
-                        setSteps((prev) => [...prev, env])
-                    } else if (env.type === 'screencast') setPort(env.port)
-                    else if (env.type === 'paused') {
-                        setPausedAt(env.name)
-                        onPausedChange?.(true)
-                    } else {
-                        setResult(env)
-                        onDone?.(env)
-                    }
-                }
-            })
-            unlistenExit = await onExit(() => {
-                setRunning(false)
-                // A hard stop while paused must return the UI to idle, not stick on Resume.
-                setPausedAt(null)
-                onPausedChange?.(false)
-            })
-            try {
-                if (spec.kind === 'engine') await runEngine(spec.args)
-                else await runProcess(spec.program, spec.args, '')
-            } catch (e) {
-                // A run was rejected because one is already active: the OTHER run
-                // is the real one, so stay "running" (the button is a working Stop)
-                // and don't clobber its live output with an error. Any other
-                // failure means nothing started — surface it and reset to idle.
-                if (isRunInProgressError(e)) {
-                    setError('A run is already in progress — stop it before starting another.')
-                } else {
-                    const what = spec.kind === 'engine' ? 'qar' : spec.program
-                    setError(`Could not start "${what}": ${String(e)}`)
-                    setRunning(false)
-                }
-            }
-        })()
-
-        return () => {
-            unlistenOut?.()
-            unlistenExit?.()
-        }
-    }, [spec])
-
-    // Idle state before the first run AND with no suite steps to preview yet.
-    // Once a suite is selected its steps render (below), so only show the
-    // placeholder when there's genuinely nothing to display.
-    if (!spec && stepNames.length === 0) {
-        return (
-            <div
-                style={{
-                    marginTop: 24,
-                    padding: '40px 24px',
-                    textAlign: 'center',
-                    color: 'var(--ink-dim)',
-                    border: '1px dashed var(--line)',
-                    borderRadius: 10,
-                    fontStyle: 'italic',
-                }}
-            >
-                Configure a run above and press <span style={{ color: 'var(--teal)', fontStyle: 'normal' }}>▶ Run</span> to
-                begin.
-            </div>
-        )
-    }
-
-    // Right-panel state, highest priority first:
-    //  1. snapshot   — a step with a screenshot is selected
-    //  2. recording  — the run finished (result + bundleDir): live browser is gone,
-    //                  replaced by the replay video + artifacts
-    //  3. live       — the run is in progress (or idle)
-    const showSnapshot = selected && bundleDir && selected.step.screenshot
-    const showRecording = !showSnapshot && bundleDir
-    const stepCount = new Set(steps.map((s) => s.name)).size
+    // Distinct executed-step count — the snapshot "N of total" denominator + hints.
+    const stepCount = new Set(run.steps.map(s => s.name)).size
 
     return (
-        <div
-            style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(340px, 400px) 1fr',
-                gap: 22,
-                marginTop: 22,
-                // Stick the whole run view (steps + browser) to the top so it stays
-                // in view as the page scrolls. Capped to the viewport with internal
-                // scroll so a tall run scrolls WITHIN the sticky block rather than
-                // pushing it off-screen.
-                position: 'sticky',
-                top: 16,
-                maxHeight: 'calc(100vh - 32px)',
-                overflowY: 'auto',
-            }}
-        >
-            {/* Left: execution log + verdict */}
-            <section
-                style={{
-                    background: 'var(--paper-card)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    padding: '18px 20px',
-                    boxShadow: 'var(--shadow-card)',
-                    alignSelf: 'start',
-                }}
-            >
-                <div className="kicker" style={{ marginBottom: 12 }}>
-                    Steps
-                </div>
-                <StepChecklist
-                    stepNames={stepNames}
-                    steps={steps}
-                    pausedSteps={pausedSteps}
-                    pausedAt={pausedAt}
-                    onTogglePause={onTogglePause}
-                    selectedIndex={selected?.index ?? null}
-                    onSelect={(index, step) => setSelected({ index, step })}
-                />
-                {pausedAt ? (
-                    <p
-                        style={{
-                            marginTop: 12,
-                            background: 'var(--amber-soft, #fdf3e0)',
-                            borderLeft: '3px solid var(--amber, #d08a1a)',
-                            padding: '10px 14px',
-                            color: 'var(--ink)',
-                            fontSize: 14,
-                        }}
-                    >
-                        ⏸ Paused before <strong>{pausedAt}</strong> — interact with the browser on the right, then press{' '}
-                        <span style={{ color: 'var(--teal)' }}>Resume</span>.
-                    </p>
-                ) : !running && !result && stepNames.length > 0 ? (
-                    <p className="st-dim" style={{ marginTop: 10, fontSize: 12, fontStyle: 'italic' }}>
-                        Tip: click a step to pause before it, then press Run.
-                    </p>
-                ) : bundleDir && stepCount > 0 ? (
-                    <p className="st-dim" style={{ marginTop: 10, fontSize: 12, fontStyle: 'italic' }}>
-                        Tip: click a step with 📷 to view its snapshot.
-                    </p>
-                ) : null}
-                {running && !result && !pausedAt ? (
-                    <p className="st-dim" style={{ marginTop: 12, fontStyle: 'italic' }}>
-                        Running… the live browser appears on the right.
-                    </p>
-                ) : null}
-                {error ? (
-                    <p
-                        style={{
-                            marginTop: 12,
-                            background: '#fbe9e7',
-                            borderLeft: '3px solid var(--red)',
-                            padding: '10px 14px',
-                            color: 'var(--red)',
-                            fontSize: 14,
-                            overflowWrap: 'anywhere',
-                            wordBreak: 'break-word',
-                        }}
-                    >
-                        ⚠ {error}
-                    </p>
-                ) : null}
-                {result ? <ResultPanel result={result} /> : null}
-            </section>
-
-            {/* Right: step snapshot, else recording (post-run replay + artifacts),
-                else the live browser monitor. */}
-            <section
-                style={{
-                    background: 'var(--paper-card)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    overflow: 'hidden',
-                    boxShadow: 'var(--shadow-monitor)',
-                    alignSelf: 'start',
-                }}
-            >
-                {showSnapshot ? (
-                    <SnapshotPanel
-                        bundleDir={bundleDir}
-                        rel={selected!.step.screenshot!}
-                        stepName={selected!.step.name}
-                        stepUrl={selected!.step.url}
-                        stepConsole={selected!.step.console}
-                        suite={(result?.suite as string | undefined) ?? ''}
-                        index={selected!.index}
-                        total={stepCount}
-                        onBack={() => setSelected(null)}
-                        // After a run finishes we return to the recording, not the
-                        // (now-gone) live browser.
-                        backLabel={bundleDir ? '← Back to recording' : '← Back to live'}
-                    />
-                ) : showRecording ? (
-                    <RecordingPanel
-                        bundleDir={bundleDir}
-                        suite={(result?.suite as string | undefined) ?? ''}
-                        videoUrl={videoUrl}
-                        playback={playback.current}
-                        onPlaybackProgress={onPlaybackProgress}
-                    />
-                ) : (
-                    <>
-                        <div
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                padding: '11px 16px',
-                                borderBottom: '1px solid var(--line)',
-                            }}
-                        >
-                            {/* Pulsing teal status dot — the "live" indicator. */}
-                            <span className="live-dot" style={{ flex: 'none' }} title="Live browser" />
-                            {/* Current live URL: selectable + copyable. */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <UrlBar url={url} />
-                            </div>
-                        </div>
-                        {port ? (
-                            <BrowserPanel port={port} onUrl={setUrl} onConsole={(line) => setConsoleLines((prev) => [...prev, line])} />
-                        ) : (
-                            <div
-                                style={{
-                                    aspectRatio: '16 / 10',
-                                    display: 'grid',
-                                    placeItems: 'center',
-                                    background: 'var(--paper-sunken)',
-                                    color: 'var(--ink-faint)',
-                                    fontStyle: 'italic',
-                                }}
-                            >
-                                {running ? 'Waiting for the browser to start…' : 'No live session.'}
-                            </div>
-                        )}
-                        {/* The live page's console, accumulating for the whole run. */}
-                        {port ? <ConsoleLog live lines={consoleLines} emptyText="No console output yet." /> : null}
-                    </>
-                )}
-            </section>
+        <div style={layout}>
+            <StepsPanel
+                stepNames={stepNames}
+                steps={run.steps}
+                stepCount={stepCount}
+                result={run.result}
+                error={run.error}
+                running={run.running}
+                bundleDir={bundleDir}
+                pausedSteps={pausedSteps}
+                pausedAt={run.pausedAt}
+                onTogglePause={onTogglePause}
+                selectedIndex={snap.selected?.index ?? null}
+                onSelect={snap.select}
+            />
+            <MonitorPanel
+                result={run.result}
+                bundleDir={bundleDir}
+                running={run.running}
+                port={run.port}
+                url={run.url}
+                consoleLines={run.consoleLines}
+                selected={snap.selected}
+                stepCount={stepCount}
+                videoUrl={videoUrl}
+                playback={snap.playback}
+                onPlaybackProgress={snap.onPlaybackProgress}
+                onUrl={run.setUrl}
+                onConsoleLine={run.addConsoleLine}
+                onClearSelected={snap.clear}
+            />
         </div>
     )
 }
+
+function IdlePlaceholder() {
+    return (
+        <div style={idlePlaceholder}>
+            Configure a run above and press{' '}
+            <span style={{ color: 'var(--teal)', fontStyle: 'normal' }}>▶ Run</span> to begin.
+        </div>
+    )
+}
+
+const layout = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(340px, 400px) 1fr',
+    gap: 22,
+    marginTop: 22,
+    maxHeight: 'calc(100vh - 32px)',
+    overflowY: 'auto',
+} as const
+
+const idlePlaceholder = {
+    marginTop: 24,
+    padding: '40px 24px',
+    textAlign: 'center',
+    color: 'var(--ink-dim)',
+    border: '1px dashed var(--line)',
+    borderRadius: 10,
+    fontStyle: 'italic',
+} as const

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { faker } from '@faker-js/faker'
 import type { Locator } from '@playwright/test'
 import { repoDir } from '@/engine/paths'
-import type { Suite, RunContext } from '@/suites/types'
+import type { RunContext, Suite } from '@/suites/types'
 
 // Traces the FULL study lifecycle end-to-end in one continuous run, switching
 // between the researcher and reviewer accounts (via ctx.loginAs) at each gate:
@@ -32,7 +32,12 @@ import type { Suite, RunContext } from '@/suites/types'
 const RESEARCHER_DASH = '/openstax-lab/dashboard'
 const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
-const CODE_CRITERIA_KEYS = ['proposalAlignment', 'agreementCompliance', 'securityChecks', 'privacyProtection']
+const CODE_CRITERIA_KEYS = [
+    'proposalAlignment',
+    'agreementCompliance',
+    'securityChecks',
+    'privacyProtection',
+]
 
 // How long to wait for the external enclave runner to produce results before
 // giving up. The run happens outside the app (an editor service polls for
@@ -56,38 +61,50 @@ function id(ctx: RunContext): string {
 
 export const studyHappyPathSuite: Suite = {
     name: 'study-happy-path',
-    description: 'Full study lifecycle: create, upload, IDE, submit, review, resubmit, re-run, approve results',
+    description:
+        'Full study lifecycle: create, upload, IDE, submit, review, resubmit, re-run, approve results',
     roles: ['researcher'],
     steps: [
         // ---- Researcher: create + submit the proposal (mirrors create-study) ----
         {
             name: 'Open the researcher org dashboard',
-            run: async (ctx) => {
+            run: async ctx => {
                 // Realistic-but-clearly-synthetic study + review content (faker).
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
                 await ctx.step('Open the researcher org dashboard', async () => {
-                    await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASH}`, { waitUntil: 'domcontentloaded' })
-                    await ctx.page.getByRole('link', { name: /Propose New Study/i }).first().waitFor({ state: 'visible' })
+                    await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASH}`, {
+                        waitUntil: 'domcontentloaded',
+                    })
+                    await ctx.page
+                        .getByRole('link', { name: /Propose New Study/i })
+                        .first()
+                        .waitFor({ state: 'visible' })
                 })
             },
         },
         {
             name: 'Start a new study proposal',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Start a new study proposal', async () => {
-                    await ctx.page.getByRole('link', { name: /Propose New Study/i }).first().click()
+                    await ctx.page
+                        .getByRole('link', { name: /Propose New Study/i })
+                        .first()
+                        .click()
                     await ctx.page.waitForURL(/\/study\/request$/)
                 })
             },
         },
         {
             name: 'Step 1: choose org and language',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Step 1: choose org and language', async () => {
                     const orgSelect = ctx.page.getByTestId('org-select')
                     await orgSelect.click()
-                    await ctx.page.getByRole('option', { name: /openstax/i }).first().click()
+                    await ctx.page
+                        .getByRole('option', { name: /openstax/i })
+                        .first()
+                        .click()
                     const rRadio = ctx.page.getByRole('radio', { name: 'R', exact: true })
                     await rRadio.waitFor({ state: 'visible' })
                     await rRadio.click()
@@ -97,13 +114,19 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Reach Step 2 and capture the study id',
-            run: async (ctx) => {
-                const studyId = await ctx.step('Reach Step 2 and capture the study id', async () => {
-                    await ctx.page.waitForURL(/\/study\/[0-9a-f-]+\/proposal$/i)
-                    const match = ctx.page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
-                    if (!match) throw new Error(`Could not find study id in proposal URL: ${ctx.page.url()}`)
-                    return match[1]
-                })
+            run: async ctx => {
+                const studyId = await ctx.step(
+                    'Reach Step 2 and capture the study id',
+                    async () => {
+                        await ctx.page.waitForURL(/\/study\/[0-9a-f-]+\/proposal$/i)
+                        const match = ctx.page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
+                        if (!match)
+                            throw new Error(
+                                `Could not find study id in proposal URL: ${ctx.page.url()}`
+                            )
+                        return match[1]
+                    }
+                )
                 // Track for cleanup BEFORE anything else can fail — the study exists now.
                 ctx.state.studyId = studyId
                 ctx.trackStudy(studyId)
@@ -111,7 +134,7 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Step 2: fill the proposal',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Step 2: fill the proposal', async () => {
                     const study = content(ctx)
                     await ctx.page.getByLabel('Study Title').fill(study.title)
@@ -128,18 +151,22 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Submit the initial request',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Submit the initial request', async () => {
                     await ctx.page.getByRole('button', { name: /Submit initial request/i }).click()
-                    await ctx.page.getByRole('button', { name: /Yes, submit initial request/i }).click()
-                    await ctx.page.getByText(/successfully submitted/i).waitFor({ state: 'visible' })
+                    await ctx.page
+                        .getByRole('button', { name: /Yes, submit initial request/i })
+                        .click()
+                    await ctx.page
+                        .getByText(/successfully submitted/i)
+                        .waitFor({ state: 'visible' })
                 })
             },
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
         {
             name: 'Switch to the reviewer account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch to the reviewer account', async () => {
                     await ctx.loginAs('reviewer')
                 })
@@ -147,10 +174,12 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Reviewer approves the proposal',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Reviewer approves the proposal', async () => {
                     await gotoReview(ctx, id(ctx))
-                    const feedback = ctx.page.getByTestId('review-feedback-section').locator('[contenteditable="true"]')
+                    const feedback = ctx.page
+                        .getByTestId('review-feedback-section')
+                        .locator('[contenteditable="true"]')
                     await feedback.click()
                     await ctx.page.keyboard.type(content(ctx).proposalFeedback)
                     await ctx.page
@@ -166,7 +195,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- Researcher: route to code upload, launch IDE, upload + submit ----
         {
             name: 'Switch back to the researcher account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch back to the researcher account', async () => {
                     await ctx.loginAs('researcher')
                 })
@@ -174,20 +203,31 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Route to the code upload page',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Route to the code upload page', async () => {
-                    await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/submitted`, {
-                        waitUntil: 'domcontentloaded',
-                    })
-                    await clickAndWaitForURL(ctx, ctx.page.getByRole('link', { name: /Proceed to step 3/i }), /\/agreements\/researcher(\?.*)?$/)
-                    await clickAndWaitForURL(ctx, ctx.page.getByRole('button', { name: /Proceed to Step 4/i }), /\/code$/)
+                    await ctx.page.goto(
+                        `${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/submitted`,
+                        {
+                            waitUntil: 'domcontentloaded',
+                        }
+                    )
+                    await clickAndWaitForURL(
+                        ctx,
+                        ctx.page.getByRole('link', { name: /Proceed to step 3/i }),
+                        /\/agreements\/researcher(\?.*)?$/
+                    )
+                    await clickAndWaitForURL(
+                        ctx,
+                        ctx.page.getByRole('button', { name: /Proceed to Step 4/i }),
+                        /\/code$/
+                    )
                     await ctx.page.getByText('Upload your files').waitFor({ state: 'visible' })
                 })
             },
         },
         {
             name: 'Launch the IDE (best-effort)',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Launch the IDE (best-effort)', async () => {
                     await launchIdeBestEffort(ctx)
                 })
@@ -195,7 +235,7 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Upload the study code (round 1)',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Upload the study code (round 1)', async () => {
                     await uploadCode(ctx)
                 })
@@ -203,7 +243,7 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Submit the study code (round 1)',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Submit the study code (round 1)', async () => {
                     await submitCode(ctx)
                 })
@@ -212,7 +252,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- Reviewer: request code changes (round 1) ----
         {
             name: 'Switch to the reviewer account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch to the reviewer account', async () => {
                     await ctx.loginAs('reviewer')
                 })
@@ -220,7 +260,7 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Reviewer requests code changes',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Reviewer requests code changes', async () => {
                     await openCodeReview(ctx, id(ctx))
                     await setCodeCriteria(ctx, 'no')
@@ -233,7 +273,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- Researcher: resubmit code (round 2 == the re-run) ----
         {
             name: 'Switch back to the researcher account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch back to the researcher account', async () => {
                     await ctx.loginAs('researcher')
                 })
@@ -241,18 +281,27 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Resubmit the study code (round 2 / re-run)',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Resubmit the study code (round 2 / re-run)', async () => {
-                    await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/resubmit`, {
-                        waitUntil: 'domcontentloaded',
-                    })
-                    await ctx.page.getByRole('heading', { name: /Edit study code/i }).waitFor({ state: 'visible' })
+                    await ctx.page.goto(
+                        `${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/resubmit`,
+                        {
+                            waitUntil: 'domcontentloaded',
+                        }
+                    )
+                    await ctx.page
+                        .getByRole('heading', { name: /Edit study code/i })
+                        .waitFor({ state: 'visible' })
                     await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
-                    await ctx.page.getByLabel(/Resubmission Note/i).fill(content(ctx).resubmissionNote)
+                    await ctx.page
+                        .getByLabel(/Resubmission Note/i)
+                        .fill(content(ctx).resubmissionNote)
                     // The fixed AppShell footer intercepts pointer events on the submit button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /^Resubmit study code$/i }).click()
-                    await ctx.page.getByRole('button', { name: /^Yes, resubmit study code$/i }).click()
+                    await ctx.page
+                        .getByRole('button', { name: /^Yes, resubmit study code$/i })
+                        .click()
                     await ctx.page.waitForURL('**/view')
                 })
             },
@@ -260,7 +309,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- Reviewer: approve code (round 2) ----
         {
             name: 'Switch to the reviewer account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch to the reviewer account', async () => {
                     await ctx.loginAs('reviewer')
                 })
@@ -268,7 +317,7 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Reviewer approves the code',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Reviewer approves the code', async () => {
                     await openCodeReview(ctx, id(ctx))
                     await setCodeCriteria(ctx, 'yes')
@@ -281,7 +330,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- qa runs the job; wait for results, then decrypt + approve ----
         {
             name: 'Wait for the run to complete and produce results',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Wait for the run to complete and produce results', async () => {
                     await waitForResults(ctx, id(ctx))
                 })
@@ -289,16 +338,18 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Reviewer decrypts and views the results',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Reviewer decrypts and views the results', async () => {
                     const key = ctx.resultsKey
                     if (!key) {
                         throw new Error(
                             'Missing reviewer results key for this environment: set the Reviewer "Results private key" ' +
-                                'for this env (qa/staging) in the Settings panel.',
+                                'for this env (qa/staging) in the Settings panel.'
                         )
                     }
-                    await ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.').fill(key)
+                    await ctx.page
+                        .getByPlaceholder('Enter your Results Key to access encrypted content.')
+                        .fill(key)
                     await ctx.page.getByRole('button', { name: /Decrypt Files/i }).click()
                     // Open the RESULTS file's preview — NOT a run log — and confirm it
                     // actually rendered the decrypted output, not just that a View
@@ -309,16 +360,26 @@ export const studyHappyPathSuite: Suite = {
                     await openResultsPreview(ctx)
                     await verifyResultsModalHasContent(ctx)
                     // Close the preview so it doesn't overlay the Approve button.
-                    await ctx.page.getByRole('dialog').getByRole('button', { name: /close/i }).first().click()
-                    await ctx.page.getByRole('dialog').waitFor({ state: 'hidden' }).catch(() => {})
+                    await ctx.page
+                        .getByRole('dialog')
+                        .getByRole('button', { name: /close/i })
+                        .first()
+                        .click()
+                    await ctx.page
+                        .getByRole('dialog')
+                        .waitFor({ state: 'hidden' })
+                        .catch(() => {})
                 })
             },
         },
         {
             name: 'Reviewer approves the results',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Reviewer approves the results', async () => {
-                    await ctx.page.getByRole('button', { name: /^Approve$/i }).last().click()
+                    await ctx.page
+                        .getByRole('button', { name: /^Approve$/i })
+                        .last()
+                        .click()
                     await ctx.page.waitForURL('**/dashboard')
                 })
             },
@@ -326,7 +387,7 @@ export const studyHappyPathSuite: Suite = {
         // ---- Researcher: confirm the approved results are visible ----
         {
             name: 'Switch back to the researcher account',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch back to the researcher account', async () => {
                     await ctx.loginAs('researcher')
                 })
@@ -334,12 +395,14 @@ export const studyHappyPathSuite: Suite = {
         },
         {
             name: 'Researcher sees the approved results',
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Researcher sees the approved results', async () => {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/view`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    await ctx.page.getByText(/results of your study have been approved/i).waitFor({ state: 'visible' })
+                    await ctx.page
+                        .getByText(/results of your study have been approved/i)
+                        .waitFor({ state: 'visible' })
                 })
             },
         },
@@ -348,7 +411,7 @@ export const studyHappyPathSuite: Suite = {
             // End as admin so guaranteed teardown cleanup runs with delete
             // authority: the /api/qa DELETE endpoints require isSiAdmin, which the
             // researcher and reviewer accounts lack (a reviewer-session cleanup 401s).
-            run: async (ctx) => {
+            run: async ctx => {
                 await ctx.step('Switch to the admin account for cleanup authority', async () => {
                     await ctx.loginAs('admin')
                 })
@@ -375,7 +438,13 @@ interface StudyContent {
 // unique-per-run suffix) so the study row stays findable and traceable.
 function generateStudyContent(tag: string): StudyContent {
     const topic = faker.commerce.productName().toLowerCase()
-    const cohort = faker.helpers.arrayElement(['first-year', 'transfer', 'STEM', 'part-time', 'online'])
+    const cohort = faker.helpers.arrayElement([
+        'first-year',
+        'transfer',
+        'STEM',
+        'part-time',
+        'online',
+    ])
     const outcome = faker.helpers.arrayElement([
         'course completion',
         'assessment scores',
@@ -384,8 +453,10 @@ function generateStudyContent(tag: string): StudyContent {
         'engagement',
     ])
     // Join 2–3 English-ish sentences into one paragraph; up to `paras` paragraphs.
-    const para = () => faker.helpers.multiple(() => faker.hacker.phrase(), { count: { min: 2, max: 3 } }).join(' ')
-    const body = (paras: number) => faker.helpers.multiple(para, { count: { min: 1, max: paras } }).join('\n\n')
+    const para = () =>
+        faker.helpers.multiple(() => faker.hacker.phrase(), { count: { min: 2, max: 3 } }).join(' ')
+    const body = (paras: number) =>
+        faker.helpers.multiple(para, { count: { min: 1, max: paras } }).join('\n\n')
     return {
         title: `${faker.company.catchPhraseNoun()} and ${outcome} (QA ${tag})`,
         researchQuestion: `How does ${topic} relate to ${outcome} among ${cohort} students? ${faker.hacker.phrase()}`,
@@ -414,7 +485,9 @@ async function fillLexical(ctx: RunContext, ariaLabel: string, text: string): Pr
 }
 
 async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
-    await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, { waitUntil: 'domcontentloaded' })
+    await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, {
+        waitUntil: 'domcontentloaded',
+    })
 }
 
 // Click a nav control and wait for the URL to match. On the PR preview the app is
@@ -495,7 +568,10 @@ async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<vo
 }
 
 async function typeCodeFeedback(ctx: RunContext, text: string): Promise<void> {
-    const feedback = ctx.page.getByTestId('code-review-section').locator('[contenteditable="true"]').first()
+    const feedback = ctx.page
+        .getByTestId('code-review-section')
+        .locator('[contenteditable="true"]')
+        .first()
     await feedback.click()
     await ctx.page.keyboard.type(text)
 }
@@ -529,7 +605,10 @@ async function launchIdeBestEffort(ctx: RunContext): Promise<void> {
         const btn = ctx.page.getByRole('button', { name: /Launch IDE|Edit files in IDE/i }).first()
         if (!(await btn.isVisible().catch(() => false))) return
         const [popup] = await Promise.all([
-            ctx.page.context().waitForEvent('page', { timeout: 60_000 }).catch(() => null),
+            ctx.page
+                .context()
+                .waitForEvent('page', { timeout: 60_000 })
+                .catch(() => null),
             btn.click(),
         ])
         if (popup) {
@@ -553,25 +632,39 @@ async function launchIdeBestEffort(ctx: RunContext): Promise<void> {
 // react the instant either renders; a short sleep only spaces genuine retries.
 async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
     const deadline = Date.now() + RESULTS_TIMEOUT_MS
-    const keyBox = () => ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.')
+    const keyBox = () =>
+        ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.')
     const errored = () => ctx.page.getByText(/The code errored/i)
     while (Date.now() < deadline) {
         await gotoReview(ctx, studyId)
         // Wait out the render window (reload + SPA hydration + a margin) for
         // whichever terminal state appears first, instead of a single snapshot.
         await Promise.race([
-            keyBox().waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS }).catch(() => {}),
-            errored().waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS }).catch(() => {}),
+            keyBox()
+                .waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS })
+                .catch(() => {}),
+            errored()
+                .waitFor({ state: 'visible', timeout: RESULTS_RENDER_WAIT_MS })
+                .catch(() => {}),
         ])
-        if (await keyBox().isVisible().catch(() => false)) return
-        if (await errored().isVisible().catch(() => false)) {
+        if (
+            await keyBox()
+                .isVisible()
+                .catch(() => false)
+        )
+            return
+        if (
+            await errored()
+                .isVisible()
+                .catch(() => false)
+        ) {
             throw new Error(`Study ${studyId} run ERRORED before producing results`)
         }
         await ctx.page.waitForTimeout(RESULTS_POLL_INTERVAL_MS)
     }
     throw new Error(
         `Timed out after ${RESULTS_TIMEOUT_MS / 60_000}min waiting for run results on study ${studyId}. ` +
-            `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`,
+            `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`
     )
 }
 
@@ -607,6 +700,8 @@ async function verifyResultsModalHasContent(ctx: RunContext): Promise<void> {
     const text = (await firstRow.innerText())?.trim() ?? ''
     if (!text) {
         const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
-        throw new Error(`Results preview modal rendered an empty grid row. Modal text:\n${modalText}`)
+        throw new Error(
+            `Results preview modal rendered an empty grid row. Modal text:\n${modalText}`
+        )
     }
 }

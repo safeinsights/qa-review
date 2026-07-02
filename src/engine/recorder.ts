@@ -1,6 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { RunMode, Role, StepEvent, StepStatus, FailureCategory, RunResult, ConsoleLine } from '@/engine/types'
+import type {
+    ConsoleLine,
+    FailureCategory,
+    Role,
+    RunMode,
+    RunResult,
+    StepEvent,
+    StepStatus,
+} from '@/engine/types'
 
 export interface RecorderInit {
     root: string // base results dir, e.g. <repo>/results
@@ -28,17 +36,21 @@ export class Recorder {
 
     constructor(
         private init: RecorderInit,
-        private listener?: Listener,
+        private listener?: Listener
     ) {
         const stamp = stampFor(init.startedAt)
         this.bundleDir = path.join(init.root, `${stamp}_${init.suite}_${init.env}`)
         fs.mkdirSync(path.join(this.bundleDir, 'screenshots'), { recursive: true })
     }
 
-    step(name: string, status: StepStatus, extra?: { error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }) {
+    step(
+        name: string,
+        status: StepStatus,
+        extra?: { error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }
+    ) {
         const event: StepEvent = { name, status, at: Date.now(), ...extra }
         // Replace the prior 'running' entry for the same step name when it resolves.
-        const idx = this.steps.findIndex((s) => s.name === name && s.status === 'running')
+        const idx = this.steps.findIndex(s => s.name === name && s.status === 'running')
         if (idx >= 0 && status !== 'running') this.steps[idx] = event
         else this.steps.push(event)
         this.listener?.(event)
@@ -73,7 +85,7 @@ function stampFor(epoch: number): string {
 
 function renderReport(r: RunResult): string {
     const rows = r.steps
-        .map((s) => {
+        .map(s => {
             const mark = s.status === 'passed' ? '✓' : s.status === 'failed' ? '✗' : '…'
             const err = s.error ? ` — <em>${escapeHtml(s.error)}</em>` : ''
             const shot = s.screenshot
@@ -94,5 +106,8 @@ function renderReport(r: RunResult): string {
 }
 
 function escapeHtml(s: string): string {
-    return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+    return s.replace(
+        /[&<>"]/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c
+    )
 }

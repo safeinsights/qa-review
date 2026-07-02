@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RunScreen, type RunSpec } from './RunScreen'
-import { RunControls } from './RunControls'
 import {
-    runEngine,
-    onStdoutLine,
     onExit,
-    stopRun,
-    setPauses,
-    resumeRun,
-    isRunning as queryIsRunning,
+    onStdoutLine,
     openSuiteInEditor,
+    isRunning as queryIsRunning,
+    resumeRun,
+    runEngine,
+    setPauses,
+    stopRun,
 } from '../lib/ipc'
+import { RunControls } from './RunControls'
+import { RunScreen, type RunSpec } from './RunScreen'
 
 interface SuiteInfo {
     name: string
@@ -42,8 +42,8 @@ export function SuitesTab() {
         let offOut: (() => void) | undefined
         let offExit: (() => void) | undefined
         ;(async () => {
-            offOut = await onStdoutLine((line) => {
-                buf += line + '\n'
+            offOut = await onStdoutLine(line => {
+                buf += `${line}\n`
             })
             offExit = await onExit(() => {
                 const last = buf.trim().split('\n').pop() ?? '{}'
@@ -65,7 +65,7 @@ export function SuitesTab() {
     // The role is determined BY the suite — a suite declares which role(s) it runs
     // as. Showing a free role dropdown was a footgun (e.g. create-study only works
     // as researcher). Constrain role to the selected suite's allowed roles.
-    const selectedSuite = useMemo(() => suites.find((s) => s.name === suite), [suites, suite])
+    const selectedSuite = useMemo(() => suites.find(s => s.name === suite), [suites, suite])
     const allowedRoles = selectedSuite?.roles ?? []
     const stepNames = useMemo(() => selectedSuite?.steps ?? [], [selectedSuite])
 
@@ -79,6 +79,7 @@ export function SuitesTab() {
 
     // A pause set is meaningful only for the current suite's steps — clear it when
     // the suite changes so stale names don't linger.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: fires on suite change; setPausedSteps is stable
     useEffect(() => {
         setPausedSteps(new Set())
     }, [suite])
@@ -103,7 +104,7 @@ export function SuitesTab() {
     // Open the selected suite's source in the user's editor. Fire-and-forget: the
     // editor launches detached, so there's nothing to await in the UI.
     const editSuite = () => {
-        void openSuiteInEditor(suite).catch((e) => console.error('open suite in editor failed', e))
+        void openSuiteInEditor(suite).catch(_e => {})
     }
 
     // Once the run has genuinely started, `running` becoming false means it exited
@@ -117,7 +118,7 @@ export function SuitesTab() {
     // so the control shows Stop — not a Run that would just be rejected.
     useEffect(() => {
         let alive = true
-        void queryIsRunning().then((active) => {
+        void queryIsRunning().then(active => {
             if (alive && active) setRunning(true)
         })
         return () => {
@@ -137,7 +138,7 @@ export function SuitesTab() {
     // --pause-before launch arg.
     const onTogglePause = useCallback(
         (name: string) => {
-            setPausedSteps((prev) => {
+            setPausedSteps(prev => {
                 const next = new Set(prev)
                 if (next.has(name)) next.delete(name)
                 else next.add(name)
@@ -145,7 +146,7 @@ export function SuitesTab() {
                 return next
             })
         },
-        [running],
+        [running]
     )
 
     return (

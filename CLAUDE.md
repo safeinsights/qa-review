@@ -7,6 +7,47 @@ A QA runner for SafeInsights. A TypeScript engine uses Playwright to drive
 Chromium through the suites (plain TS objects, not Playwright test files); a
 Wails (Go + React/Vite) desktop GUI wraps it for "pick suite, press Run" use.
 
+## Code rules
+
+(Portable subset of the SafeInsights management-app conventions, adapted to this
+repo. Formatting + linting are enforced by **Biome** (`biome.json`, rules ported
+from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
+— run `pnpm lint:fix`. `pnpm lint` is the CI gate.)
+
+### React / TypeScript
+
+- Keep JSX minimal: no complex ternaries, `map`, or calculations inside the
+  `return`. Move state, event handling, and data processing into custom hooks
+  (`useFeatureName`) or helper functions outside the component.
+- Co-locate, don't embed: if logic is used only by one component, define it just
+  above the JSX — keep the JSX clean of declarations and other logic.
+- Extract: if a sub-section of a function or JSX is complex, break it into
+  smaller parts.
+- Conditional visibility: instead of hiding/showing large blocks with
+  `{condition && <Component />}`, give the component an `isVisible` prop and
+  return `null` when it shouldn't render.
+- Comments explain "why", not "what". No trivial comments (`// delete users`
+  before `deleteFrom('user')`). If the code is self-explanatory, add nothing.
+
+### Testing
+
+- Write tests for new features (vitest for TS, `go test` for the GUI). Test
+  critical behavior (state changes, decrypt/encrypt round-trips), not the
+  appearance of every UI element.
+- Don't mock our own components/actions or the real data path — assert on real
+  outputs.
+- **E2E flakiness: ZERO tolerance.** A suite that only passes on retry is a bug —
+  fix the root cause (await the right signal, use web-first `expect`
+  assertions/`toPass`, isolate per-run data), never mask it with a retry, an
+  inline timeout, or a bare `waitForTimeout`. Don't set inline Playwright
+  timeouts; configure them globally.
+
+### Stop conditions
+
+- Stop if unit tests, `pnpm typecheck`, or lint fail — fix before proceeding.
+- Ask before committing work.
+- Don't commit planning/scratch files unless explicitly told to.
+
 ## Architecture (one-liners)
 
 - `src/engine/` — the run engine. `runEngine()` is the entry; `env.ts` resolves
@@ -192,6 +233,7 @@ rather than `pnpm qar <args>`.
 ## Useful commands
 
 - `pnpm test` (vitest), `pnpm typecheck`
+- `pnpm lint` (biome check — CI gate), `pnpm lint:fix` (auto-fix + format)
 - `pnpm qar list` — list suites and their roles
 - `pnpm qar run --suite create-study --role researcher --env qa`
 - `pnpm qar run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
 import { Alert, Button, Group, Text } from '@mantine/core'
-import { isRepoReady, preflight, setup, chooseDirectory, defaultRepoDir } from '../lib/ipc'
+import { useCallback, useEffect, useState } from 'react'
+import { chooseDirectory, defaultRepoDir, isRepoReady, preflight, setup } from '../lib/ipc'
+import { useAsyncAction } from '../lib/useAsyncAction'
 
 // Gates the app on first launch: (1) a blocking banner if required tools
 // (git/gh/claude/Chrome) are missing, and (2) a one-time consent + clone of the
@@ -8,12 +9,11 @@ import { isRepoReady, preflight, setup, chooseDirectory, defaultRepoDir } from '
 export function SetupGate({ children }: { children: React.ReactNode }) {
     const [ready, setReady] = useState<boolean | null>(null)
     const [missing, setMissing] = useState<string[]>([])
-    const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
     const [log, setLog] = useState('')
     const [dir, setDir] = useState('')
 
-    const refresh = async () => {
+    const refresh = useCallback(async () => {
         try {
             // Go returns []string; guard against a null marshal just in case.
             setMissing((await preflight()) ?? [])
@@ -23,11 +23,11 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
             setError(String(e))
             setReady(false)
         }
-    }
+    }, [])
 
     useEffect(() => {
         void refresh()
-    }, [])
+    }, [refresh])
 
     const choose = async () => {
         try {
@@ -38,18 +38,15 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         }
     }
 
-    const runSetup = async () => {
-        setBusy(true)
+    const setupAction = useAsyncAction(async () => {
+        // Clear any prior refresh/choose error, mirroring the old setError('').
         setError('')
-        try {
-            setLog(await setup(dir))
-            setReady(await isRepoReady())
-        } catch (e) {
-            setError(String(e))
-        } finally {
-            setBusy(false)
-        }
-    }
+        setLog(await setup(dir))
+        setReady(await isRepoReady())
+    })
+    const { run: runSetup, busy } = setupAction
+    // Surface a setup failure in the same Alert used by refresh/choose.
+    const displayError = setupAction.error ?? error
 
     if (ready === null) return null // brief: preflight/ready check in flight
 
@@ -69,30 +66,43 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
                 </h1>
                 {toolBanner}
                 <p style={{ color: 'var(--ink-dim)' }}>
-                    First, we'll clone the SafeInsights test repository to your machine so the runner has
-                    the suites, environments, and shared secrets. This uses your GitHub access (gh).
+                    First, we'll clone the SafeInsights test repository to your machine so the
+                    runner has the suites, environments, and shared secrets. This uses your GitHub
+                    access (gh).
                 </p>
                 <Text size="sm" mb={4} className="kicker">
                     Location
                 </Text>
                 <Group mb="md" gap="sm" align="center">
-                    <Text size="sm" className="mono st-dim" style={{ wordBreak: 'break-all', flex: 1 }}>
+                    <Text
+                        size="sm"
+                        className="mono st-dim"
+                        style={{ wordBreak: 'break-all', flex: 1 }}
+                    >
                         {dir || '…'}
                     </Text>
                     <Button variant="default" size="xs" onClick={choose} disabled={busy}>
                         Choose folder…
                     </Button>
                 </Group>
-                {error ? (
+                {displayError ? (
                     <Alert color="red" mb="md">
-                        {error}
+                        {displayError}
                     </Alert>
                 ) : null}
-                <Button onClick={runSetup} loading={busy} color="teal" disabled={missing.length > 0 || !dir}>
+                <Button
+                    onClick={runSetup}
+                    loading={busy}
+                    color="teal"
+                    disabled={missing.length > 0 || !dir}
+                >
                     Set up tests
                 </Button>
                 {log ? (
-                    <pre className="mono st-dim" style={{ fontSize: 12, marginTop: 14, whiteSpace: 'pre-wrap' }}>
+                    <pre
+                        className="mono st-dim"
+                        style={{ fontSize: 12, marginTop: 14, whiteSpace: 'pre-wrap' }}
+                    >
                         {log}
                     </pre>
                 ) : null}

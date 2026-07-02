@@ -1,7 +1,12 @@
-import { describe, it, expect } from 'vitest'
-import { StreamParser, stepsByIndex, type StepEnvelope } from '@/gui/lib/stepStream'
+import { describe, expect, it } from 'vitest'
+import { type StepEnvelope, StreamParser, stepsByIndex } from '@/gui/lib/stepStream'
 
-const step = (name: string, status: string, extra: Partial<StepEnvelope> = {}): StepEnvelope => ({ type: 'step', name, status, ...extra })
+const step = (name: string, status: string, extra: Partial<StepEnvelope> = {}): StepEnvelope => ({
+    type: 'step',
+    name,
+    status,
+    ...extra,
+})
 
 describe('StreamParser', () => {
     it('emits envelopes for complete lines and buffers partial ones', () => {
@@ -27,7 +32,10 @@ describe('StreamParser', () => {
 
 describe('stepsByIndex', () => {
     it('collapses each running→resolved pair into one positional event', () => {
-        const out = stepsByIndex([step('A', 'running'), step('A', 'passed', { screenshot: 'a.png' })])
+        const out = stepsByIndex([
+            step('A', 'running'),
+            step('A', 'passed', { screenshot: 'a.png' }),
+        ])
         expect(out).toEqual([step('A', 'passed', { screenshot: 'a.png' })])
     })
 
@@ -40,7 +48,9 @@ describe('stepsByIndex', () => {
             step('Switch to the reviewer account', 'running'),
         ])
         expect(out).toHaveLength(2)
-        expect(out[0]).toEqual(step('Switch to the reviewer account', 'passed', { screenshot: '1.png' }))
+        expect(out[0]).toEqual(
+            step('Switch to the reviewer account', 'passed', { screenshot: '1.png' })
+        )
         expect(out[1]).toEqual(step('Switch to the reviewer account', 'running'))
     })
 
@@ -52,7 +62,7 @@ describe('stepsByIndex', () => {
             step('B', 'failed', { error: 'boom' }),
             step('C', 'running'),
         ])
-        expect(out.map((s) => [s.name, s.status])).toEqual([
+        expect(out.map(s => [s.name, s.status])).toEqual([
             ['A', 'passed'],
             ['B', 'failed'],
             ['C', 'running'],

@@ -1,25 +1,21 @@
+import { Button, Group, Text, TextInput } from '@mantine/core'
 import { useState } from 'react'
-import { Button, TextInput, Group, Text } from '@mantine/core'
 import { requestAccess } from '../lib/ipc'
+import { useAsyncAction } from '../lib/useAsyncAction'
 
 export function RequestAccessButton() {
     const [name, setName] = useState('')
-    const [busy, setBusy] = useState(false)
-    const [msg, setMsg] = useState('')
+    const { run, busy, error, result } = useAsyncAction(async () => {
+        const out = await requestAccess(name.trim())
+        return out || 'Access requested — a teammate will approve & rekey.'
+    })
 
-    const submit = async () => {
+    const submit = () => {
         if (!name.trim()) return
-        setBusy(true)
-        setMsg('')
-        try {
-            const out = await requestAccess(name.trim())
-            setMsg(out || 'Access requested — a teammate will approve & rekey.')
-        } catch (e) {
-            setMsg('Request failed: ' + String(e))
-        } finally {
-            setBusy(false)
-        }
+        void run()
     }
+
+    const msg = error ? `Request failed: ${error}` : result
 
     return (
         <div>
@@ -30,7 +26,7 @@ export function RequestAccessButton() {
                 <TextInput
                     placeholder="Your name"
                     value={name}
-                    onChange={(e) => setName(e.currentTarget.value)}
+                    onChange={e => setName(e.currentTarget.value)}
                 />
                 <Button onClick={submit} loading={busy} color="teal">
                     Request access

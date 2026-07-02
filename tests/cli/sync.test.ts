@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { syncRepo } from '@/cli/commands/sync'
 
 // A fake git runner driven by a scripted map of "args.join(' ')" -> stdout, or a
@@ -27,7 +27,10 @@ describe('sync', () => {
     })
 
     it('skips when pull cannot fast-forward', async () => {
-        const git = fakeGit({ 'status --porcelain': '', 'pull --ff-only': new Error('Not possible to fast-forward') })
+        const git = fakeGit({
+            'status --porcelain': '',
+            'pull --ff-only': new Error('Not possible to fast-forward'),
+        })
         const r = await syncRepo('/repo', git)
         expect(r.status).toBe('skipped-diverged')
     })

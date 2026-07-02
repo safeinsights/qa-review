@@ -1,6 +1,6 @@
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { createHash } from 'node:crypto'
 import { configDir } from '@/engine/settings'
 
 export const KEYRING_FILE = 'keyring.json'
@@ -32,16 +32,16 @@ export function readKeyring(dir: string = configDir()): Member[] {
 
 export function writeKeyring(dir: string = configDir(), members: Member[]): void {
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(keyringPath(dir), JSON.stringify(members, null, 2) + '\n')
+    fs.writeFileSync(keyringPath(dir), `${JSON.stringify(members, null, 2)}\n`)
 }
 
 export function recipients(members: Member[]): string[] {
-    return members.map((m) => m.publicKey)
+    return members.map(m => m.publicKey)
 }
 
 // Add a member, rejecting a duplicate name. Returns a new array (pure).
 export function addMember(members: Member[], member: Member): Member[] {
-    if (members.some((m) => m.name === member.name)) {
+    if (members.some(m => m.name === member.name)) {
         throw new Error(`"${member.name}" is already in the keyring (names must be unique)`)
     }
     return [...members, member]
@@ -61,7 +61,7 @@ export function readLock(dir: string = configDir()): string | null {
 
 export function writeLock(dir: string = configDir(), fp: string): void {
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(lockPath(dir), fp + '\n')
+    fs.writeFileSync(lockPath(dir), `${fp}\n`)
 }
 
 // True when the secrets are NOT known to be encrypted to the current keyring:

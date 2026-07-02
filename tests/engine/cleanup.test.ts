@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CleanupClient } from '@/engine/cleanup'
 
 function fakeFetch(responses: Record<string, { status: number }>) {
     return vi.fn(async (url: string, _init?: RequestInit) => {
-        const key = Object.keys(responses).find((k) => url.endsWith(k))
+        const key = Object.keys(responses).find(k => url.endsWith(k))
         const status = key ? responses[key].status : 500
         return { status, ok: status >= 200 && status < 300, json: async () => ({}) } as Response
     })
@@ -25,7 +25,7 @@ describe('CleanupClient', () => {
         expect(result.deleted.sort()).toEqual(['study:study-1', 'user:user-1'])
         expect(result.failed).toEqual([])
         // Studies deleted before users (a study FK references its owner user).
-        expect((fetchImpl.mock.calls[0][0] as string)).toContain('/api/qa/studies/study-1')
+        expect(fetchImpl.mock.calls[0][0] as string).toContain('/api/qa/studies/study-1')
         // Authorizes with a Bearer token (Clerk session JWT), NOT a cookie —
         // the /api/qa endpoints only read the Authorization header.
         const init = fetchImpl.mock.calls[0][1] as RequestInit
@@ -48,9 +48,9 @@ describe('CleanupClient', () => {
 
         await client.run()
 
-        const urls = fetchImpl.mock.calls.map((c) => c[0] as string)
-        const lastStudyIdx = urls.map((u) => u.includes('/api/qa/studies/')).lastIndexOf(true)
-        const firstUserIdx = urls.findIndex((u) => u.includes('/api/qa/users/'))
+        const urls = fetchImpl.mock.calls.map(c => c[0] as string)
+        const lastStudyIdx = urls.map(u => u.includes('/api/qa/studies/')).lastIndexOf(true)
+        const firstUserIdx = urls.findIndex(u => u.includes('/api/qa/users/'))
         expect(lastStudyIdx).toBeLessThan(firstUserIdx)
     })
 

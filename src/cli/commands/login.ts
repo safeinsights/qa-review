@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test'
-import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { loginAs } from '@/engine/auth'
+import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import type { Vars } from '@/engine/settings'
 import type { Role } from '@/engine/types'
 
@@ -16,7 +16,7 @@ export async function loginCommand(opts: Record<string, string>, vars: Vars): Pr
     const page = await context.newPage()
     try {
         const cookie = await loginAs(page, env, role)
-        process.stdout.write(cookie + '\n')
+        process.stdout.write(`${cookie}\n`)
     } finally {
         await context.close()
         await browser.close()

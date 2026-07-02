@@ -1,17 +1,17 @@
 import { parseArgs } from '@/cli/args'
-import { loadSettings } from '@/engine/settings'
-import { runCommand } from '@/cli/commands/run'
-import { loginCommand } from '@/cli/commands/login'
+import { buildSuitesCommand } from '@/cli/commands/build-suites'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { listCommand } from '@/cli/commands/list'
+import { loginCommand } from '@/cli/commands/login'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
+import { runCommand } from '@/cli/commands/run'
+import { sessionCommand } from '@/cli/commands/session'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { syncCommand } from '@/cli/commands/sync'
-import { buildSuitesCommand } from '@/cli/commands/build-suites'
-import { sessionCommand } from '@/cli/commands/session'
+import { loadSettings } from '@/engine/settings'
 
 const BOOLEANS = ['json', 'headed', 'screencast']
 
@@ -46,12 +46,14 @@ async function main() {
         case 'session':
             return sessionCommand(opts, await loadSettings())
         default:
-            console.error(`Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | build-suites | session`)
+            console.error(
+                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | build-suites | session`
+            )
             process.exit(1)
     }
 }
 
-main().catch((e) => {
+main().catch(e => {
     console.error('Error:', (e as Error).message)
     process.exit(1)
 })

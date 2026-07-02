@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { configDir } from '@/engine/settings'
-import { repoDir } from '@/engine/paths'
-import { isInDrift } from '@/engine/keyring'
 import type { GitRunner } from '@/cli/commands/request-access'
+import { isInDrift } from '@/engine/keyring'
+import { repoDir } from '@/engine/paths'
+import { configDir } from '@/engine/settings'
 
 const execFileAsync = promisify(execFile)
 
@@ -14,12 +14,12 @@ export interface SyncResult {
 }
 
 function gitIn(cwd: string): GitRunner {
-    return async (args) => (await execFileAsync('git', args, { cwd })).stdout
+    return async args => (await execFileAsync('git', args, { cwd })).stdout
 }
 
 // Fast-forward-only pull. Skips (never resets) when the working copy is dirty or
 // the pull can't fast-forward. After a successful pull, reports keyring drift.
-export async function syncRepo(repoDir: string, git: GitRunner): Promise<SyncResult> {
+export async function syncRepo(_repoDir: string, git: GitRunner): Promise<SyncResult> {
     const dirty = (await git(['status', '--porcelain'])).trim() !== ''
     if (dirty) return { status: 'skipped-dirty', drift: false }
     try {
@@ -35,13 +35,20 @@ export async function syncCommand(): Promise<void> {
     const r = await syncRepo(dir, gitIn(dir))
     switch (r.status) {
         case 'synced':
-            console.log('Synced (fast-forward).' + (r.drift ? ' Secrets are out of sync with the keyring — run `qar rekey`.' : ''))
+            console.log(
+                'Synced (fast-forward).' +
+                    (r.drift ? ' Secrets are out of sync with the keyring — run `qar rekey`.' : '')
+            )
             break
         case 'skipped-dirty':
-            console.log('Skipped sync — you have local changes. Commit/stash them, or discard uncommitted edits and retry.')
+            console.log(
+                'Skipped sync — you have local changes. Commit/stash them, or discard uncommitted edits and retry.'
+            )
             break
         case 'skipped-diverged':
-            console.log('Skipped sync — your branch has diverged (unpushed commits). Push or open a PR, then retry.')
+            console.log(
+                'Skipped sync — your branch has diverged (unpushed commits). Push or open a PR, then retry.'
+            )
             break
     }
 }

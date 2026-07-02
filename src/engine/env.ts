@@ -1,11 +1,20 @@
-import { ENVIRONMENTS, SHARED_ACCOUNTS, prBaseUrl, privateKeyVar, privateKeyEnvFor } from '../../config/environments'
 import type { EnvConfig, Role } from '@/engine/types'
+import {
+    ENVIRONMENTS,
+    prBaseUrl,
+    privateKeyEnvFor,
+    privateKeyVar,
+    SHARED_ACCOUNTS,
+} from '../../config/environments'
 
 type Vars = Record<string, string | undefined>
 
 function read(vars: Vars, key: string): string {
     const value = vars[key]
-    if (!value) throw new Error(`Missing required secret: ${key} (set it in the Settings panel or config/settings.local.json)`)
+    if (!value)
+        throw new Error(
+            `Missing required secret: ${key} (set it in the Settings panel or config/settings.local.json)`
+        )
     return value
 }
 
@@ -34,9 +43,9 @@ function resolveSharedCredentials(vars: Vars, envName: string): Pick<EnvConfig, 
 // Resolve a named, stable environment (qa, staging) from the committed
 // declaration + secret values in `vars` (defaults to process.env).
 export function resolveEnv(name: string, vars: Vars = process.env): EnvConfig {
-    const decl = ENVIRONMENTS.find((e) => e.name === name)
+    const decl = ENVIRONMENTS.find(e => e.name === name)
     if (!decl) {
-        const known = ENVIRONMENTS.map((e) => e.name).join(', ')
+        const known = ENVIRONMENTS.map(e => e.name).join(', ')
         throw new Error(`Unknown environment "${name}". Known environments: ${known}`)
     }
     return {

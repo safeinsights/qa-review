@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
-import path from 'node:path'
 import os from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runEngine } from '@/engine/run'
 import type { Suite } from '@/suites/types'
 
@@ -18,9 +18,15 @@ function tmpRoot() {
 
 const ENV_VARS = {
     QA_BASE_URL: 'https://qa.example.com',
-    ADMIN_EMAIL: 'a@example.com', ADMIN_PASSWORD: 'p', ADMIN_MFA_CODE: '424242',
-    RESEARCHER_EMAIL: 'r@example.com', RESEARCHER_PASSWORD: 'p', RESEARCHER_MFA_CODE: '424242',
-    REVIEWER_EMAIL: 'v@example.com', REVIEWER_PASSWORD: 'p', REVIEWER_MFA_CODE: '424242',
+    ADMIN_EMAIL: 'a@example.com',
+    ADMIN_PASSWORD: 'p',
+    ADMIN_MFA_CODE: '424242',
+    RESEARCHER_EMAIL: 'r@example.com',
+    RESEARCHER_PASSWORD: 'p',
+    RESEARCHER_MFA_CODE: '424242',
+    REVIEWER_EMAIL: 'v@example.com',
+    REVIEWER_PASSWORD: 'p',
+    REVIEWER_MFA_CODE: '424242',
 }
 
 function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {
@@ -48,8 +54,17 @@ function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {
 }
 
 const passingSuite: Suite = {
-    name: 'demo', description: '', roles: ['admin'],
-    steps: [{ name: 'do thing', run: async (ctx) => { await ctx.step('do thing', async () => {}) } }],
+    name: 'demo',
+    description: '',
+    roles: ['admin'],
+    steps: [
+        {
+            name: 'do thing',
+            run: async ctx => {
+                await ctx.step('do thing', async () => {})
+            },
+        },
+    ],
 }
 
 describe('runEngine', () => {
@@ -82,19 +97,27 @@ describe('runEngine', () => {
             })),
         })
         const suite: Suite = {
-            name: 'demo', description: '', roles: ['admin'],
-            steps: [{
-                name: 'logs',
-                run: async (ctx) => {
-                    await ctx.step('logs', async () => {
-                        // Simulate a Playwright ConsoleMessage during the step.
-                        consoleHandler?.({ type: () => 'error', text: () => 'kaboom', location: () => ({ url: 'x.js' }) })
-                    })
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'logs',
+                    run: async ctx => {
+                        await ctx.step('logs', async () => {
+                            // Simulate a Playwright ConsoleMessage during the step.
+                            consoleHandler?.({
+                                type: () => 'error',
+                                text: () => 'kaboom',
+                                location: () => ({ url: 'x.js' }),
+                            })
+                        })
+                    },
                 },
-            }],
+            ],
         }
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
-        const step = result.steps.find((s) => s.name === 'logs' && s.status === 'passed')
+        const step = result.steps.find(s => s.name === 'logs' && s.status === 'passed')
         expect(step?.console).toBeDefined()
         expect(step?.console?.[0]).toMatchObject({ level: 'error', text: 'kaboom', url: 'x.js' })
     })
@@ -102,8 +125,19 @@ describe('runEngine', () => {
     it('categorizes a thrown assertion as app-assertion and STILL runs cleanup', async () => {
         const d = deps()
         const failingSuite: Suite = {
-            name: 'demo', description: '', roles: ['admin'],
-            steps: [{ name: 'boom', run: async (ctx) => { await ctx.step('boom', async () => { throw new Error('expected X to be visible') }) } }],
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'boom',
+                    run: async ctx => {
+                        await ctx.step('boom', async () => {
+                            throw new Error('expected X to be visible')
+                        })
+                    },
+                },
+            ],
         }
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
         expect(result.ok).toBe(false)
@@ -112,7 +146,11 @@ describe('runEngine', () => {
     })
 
     it('categorizes login failure as auth and still runs cleanup', async () => {
-        const d = deps({ login: vi.fn(async () => { throw new Error('OTP rejected') }) })
+        const d = deps({
+            login: vi.fn(async () => {
+                throw new Error('OTP rejected')
+            }),
+        })
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
         expect(result.ok).toBe(false)
         expect(result.failureCategory).toBe('auth')
@@ -120,7 +158,9 @@ describe('runEngine', () => {
     })
 
     it('surfaces a cleanup failure on an otherwise-passing run', async () => {
-        const d = deps({ runCleanup: vi.fn(async () => ({ ok: false, deleted: [], failed: ['study:s1'] })) })
+        const d = deps({
+            runCleanup: vi.fn(async () => ({ ok: false, deleted: [], failed: ['study:s1'] })),
+        })
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
         expect(result.ok).toBe(true) // the test itself passed
         expect(result.cleanup.ok).toBe(false)
@@ -152,7 +192,9 @@ describe('runEngine', () => {
     })
 
     it('assigns the cleanup failure category on a passing run whose cleanup failed', async () => {
-        const d = deps({ runCleanup: vi.fn(async () => ({ ok: false, deleted: [], failed: ['study:s1'] })) })
+        const d = deps({
+            runCleanup: vi.fn(async () => ({ ok: false, deleted: [], failed: ['study:s1'] })),
+        })
         const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
         expect(result.ok).toBe(true)
         expect(result.failureCategory).toBe('cleanup')
@@ -161,13 +203,30 @@ describe('runEngine', () => {
     it('lets a suite switch roles mid-run via ctx.loginAs (re-drives login)', async () => {
         const d = deps()
         const twoRoleSuite: Suite = {
-            name: 'demo', description: '', roles: ['researcher'],
+            name: 'demo',
+            description: '',
+            roles: ['researcher'],
             steps: [
-                { name: 'as researcher', run: async (ctx) => { await ctx.step('as researcher', async () => {}) } },
-                { name: 'as reviewer', run: async (ctx) => { await ctx.loginAs('reviewer'); await ctx.step('as reviewer', async () => {}) } },
+                {
+                    name: 'as researcher',
+                    run: async ctx => {
+                        await ctx.step('as researcher', async () => {})
+                    },
+                },
+                {
+                    name: 'as reviewer',
+                    run: async ctx => {
+                        await ctx.loginAs('reviewer')
+                        await ctx.step('as reviewer', async () => {})
+                    },
+                },
             ],
         }
-        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'researcher' }, d, twoRoleSuite)
+        const result = await runEngine(
+            { suite: 'demo', env: 'qa', role: 'researcher' },
+            d,
+            twoRoleSuite
+        )
         expect(result.ok).toBe(true)
         // Once for the initial engine login, once for the mid-run switch.
         const login = d.login as ReturnType<typeof vi.fn>
@@ -177,7 +236,7 @@ describe('runEngine', () => {
 
     it('invokes deps.onStep for each step event as it happens', async () => {
         const seen: string[] = []
-        const d = deps({ onStep: (e) => seen.push(`${e.name}:${e.status}`) })
+        const d = deps({ onStep: e => seen.push(`${e.name}:${e.status}`) })
         await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, passingSuite)
         expect(seen).toContain('do thing:running')
         expect(seen).toContain('do thing:passed')
@@ -186,25 +245,37 @@ describe('runEngine', () => {
     it('halts BEFORE a paused step: onPaused fires and waitForResume is awaited before running', async () => {
         const seen: string[] = []
         let resolveResume!: () => void
-        const resumeGate = new Promise<void>((r) => (resolveResume = r))
+        const resumeGate = new Promise<void>(r => (resolveResume = r))
         const twoStep: Suite = {
-            name: 'demo', description: '', roles: ['admin'],
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
             steps: [
-                { name: 'first', run: async (ctx) => { await ctx.step('first', async () => {}) } },
-                { name: 'second', run: async (ctx) => { await ctx.step('second', async () => {}) } },
+                {
+                    name: 'first',
+                    run: async ctx => {
+                        await ctx.step('first', async () => {})
+                    },
+                },
+                {
+                    name: 'second',
+                    run: async ctx => {
+                        await ctx.step('second', async () => {})
+                    },
+                },
             ],
         }
         const d = deps({
-            onStep: (e) => seen.push(`${e.name}:${e.status}`),
-            shouldPause: (name) => name === 'second',
-            onPaused: (name) => seen.push(`paused:${name}`),
+            onStep: e => seen.push(`${e.name}:${e.status}`),
+            shouldPause: name => name === 'second',
+            onPaused: name => seen.push(`paused:${name}`),
             // Resolve on the next tick so the ordering assertion is meaningful:
             // the run must be blocked here until we let it go.
             waitForResume: () => resumeGate,
         })
         const runPromise = runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, twoStep)
         // Let the first step finish and the gate register before resuming.
-        await new Promise((r) => setTimeout(r, 10))
+        await new Promise(r => setTimeout(r, 10))
         expect(seen).toContain('first:passed')
         expect(seen).toContain('paused:second')
         // Crucially, 'second' has NOT started running while paused.
