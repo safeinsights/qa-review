@@ -4,14 +4,25 @@ import { CleanupClient } from '@/engine/cleanup'
 import { resolveEnv } from '@/engine/env'
 import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import { Recorder } from '@/engine/recorder'
+import { buildRunState } from '@/engine/run-state'
 import { mapConsoleLevel } from '@/engine/screencast-codec'
 import { getSuite } from '@/engine/suite-registry'
-import type { ConsoleLine, FailureCategory, RunRequest, RunResult, StepEvent } from '@/engine/types'
+import type {
+    ConsoleLine,
+    FailureCategory,
+    RunRequest,
+    RunResult,
+    RunState,
+    StepEvent,
+} from '@/engine/types'
 import type { RunContext, Suite } from '@/suites/types'
 
 export interface BrowserHandle {
     page: import('@playwright/test').Page
     cookieHeader: string
+    // The Chrome remote-debugging port this browser exposes, if launched with one
+    // (production runs do; test fakes may omit). Lets the run companion attach.
+    cdpPort?: number
     close: () => Promise<void>
     // Stop tracing into <bundleDir>/trace.zip. Called BEFORE close() (tracing must
     // stop while the context is still open). Optional so test fakes can omit it.
@@ -37,6 +48,12 @@ export interface RunDeps {
     // Called once with the live Playwright page just after it's created, so a
     // caller (the CLI --screencast mode) can attach a screencast to it.
     onPage?: (page: import('@playwright/test').Page) => void | Promise<void>
+    // Called ONCE with the run's bundle dir, right after the recorder is created
+    // (before any step) — so a live consumer knows where to write run-state.json.
+    onBundleDir?: (dir: string) => void
+    // Called with the accumulated snapshot after each step event AND once with the
+    // final result. The CLI persists it to <bundleDir>/run-state.json.
+    onRunState?: (state: RunState) => void
     // Pause-before-step control (the CLI wires these to a stdin control channel).
     // Consulted before each step: if shouldPause returns true, onPaused fires and
     // the run blocks on waitForResume until the user resumes. All optional so a
@@ -44,6 +61,14 @@ export interface RunDeps {
     shouldPause?: (stepName: string) => boolean
     waitForResume?: () => Promise<void>
     onPaused?: (stepName: string) => void
+    // Hold-open-on-failure control. When a run FAILS (a step throws / login fails
+    // / the browser won't open) AND this hook is wired, the engine fires
+    // onErrorHold and then blocks on waitForResume — keeping the browser alive so
+    // the run companion (Claude) can attach to the CDP port and drive the frozen
+    // failure state. Teardown (close browser, save trace/video) is deferred until
+    // resume/stop arrives. Optional: without the hook, a failed run tears down
+    // immediately (the existing behavior for CLI-only runs and tests).
+    onErrorHold?: (info: { failureCategory?: FailureCategory; error?: string }) => void
 }
 
 function categorize(error: Error): FailureCategory {
@@ -86,8 +111,12 @@ export async function runEngine(
         e => {
             events.push(e)
             deps.onStep?.(e)
+            deps.onRunState?.(buildRunState(events))
         }
     )
+    // Emit the bundle dir before any step so a live consumer knows where to
+    // write run-state.json (recorder.bundleDir is ready right after construction).
+    deps.onBundleDir?.(recorder.bundleDir)
 
     const cleanup = new CleanupClient(env.baseURL, '')
     const tag = `qa-${suite.name}-${startedAt}`
@@ -229,8 +258,8 @@ export async function runEngine(
                         }
                     })
                     .catch(() => {})
-                // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
                 if (!handle) throw new Error('loginAs called before the browser was opened')
+                // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
                 const newToken = await deps.login(handle, env, role, recorder.bundleDir)
                 // Keep id-based cleanup authorized as the now-current user.
                 ;(cleanup as unknown as { authToken: string }).authToken = newToken
@@ -253,6 +282,16 @@ export async function runEngine(
     } catch (cause) {
         ok = false
         failureCategory = categorize(cause as Error)
+        // Hold the browser open on failure (opt-in via onErrorHold; only the GUI
+        // wires it). We're still inside the try/catch — the browser handle is open
+        // and the finally's teardown has NOT run yet — so blocking here freezes the
+        // failed state with a live, CDP-attachable browser for the run companion.
+        // Release comes via the SAME resume/stop channel as a pause. Without the
+        // hook this is a no-op and the finally tears down immediately, as before.
+        if (deps.onErrorHold) {
+            deps.onErrorHold({ failureCategory, error: (cause as Error).message })
+            await deps.waitForResume?.()
+        }
     } finally {
         // Guaranteed teardown: cleanup runs no matter how we got here.
         cleanupResult = await deps.runCleanup(cleanup).catch((e): RunResult['cleanup'] => ({
@@ -273,7 +312,11 @@ export async function runEngine(
     // (leftover test data may remain) without marking the test itself as failed.
     if (ok && !cleanupResult.ok) failureCategory = 'cleanup'
 
-    return recorder.finish({ ok, failureCategory, cleanup: cleanupResult })
+    const result = recorder.finish({ ok, failureCategory, cleanup: cleanupResult })
+    // Final snapshot carrying the result (running=false) — the last write the
+    // CLI persists to run-state.json.
+    deps.onRunState?.(buildRunState(events, result))
+    return result
 }
 
 // --- Production default deps ---
@@ -284,11 +327,12 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
         vars,
         resultsRoot,
         openBrowser: async env => {
-            const { chromium } = await import('@playwright/test')
-            // channel:'chrome' drives the user's installed Google Chrome instead of
-            // Playwright's bundled Chromium, so the packaged app needs no browser download.
-            const browser = await chromium.launch({ channel: 'chrome' })
-            const context = await browser.newContext({
+            const { launchChromeWithCdp } = await import('@/engine/cdp-launch')
+            // channel:'chrome' + a remote-debugging port: drives the user's installed
+            // Google Chrome (so the packaged app needs no browser download) AND lets
+            // the run companion attach chrome-devtools-mcp to this same browser when
+            // the run is idle.
+            const { browser, context, page, cdpPort } = await launchChromeWithCdp({
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot }, // moved into bundle after finish
             })
@@ -298,7 +342,6 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             await context.tracing
                 .start({ screenshots: true, snapshots: true, sources: true })
                 .catch(() => {})
-            const page = await context.newPage()
             const video = page.video()
             let browserClosed = false
             const closeBrowser = async () => {
@@ -309,6 +352,7 @@ export function defaultDeps(vars: RunDeps['vars'] = process.env): RunDeps {
             return {
                 page,
                 cookieHeader: '',
+                cdpPort,
                 // Stop tracing (writing trace.zip into the bundle) BEFORE the
                 // context closes, then close the context — which finalizes the
                 // video while keeping `video.saveAs()` usable. Browser closes in

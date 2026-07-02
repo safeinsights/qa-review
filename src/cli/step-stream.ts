@@ -1,16 +1,25 @@
-import type { PausedInfo, RunResult, ScreencastInfo, SessionInfo, StepEvent } from '@/engine/types'
+import type {
+    ErrorHoldInfo,
+    PausedInfo,
+    RunResult,
+    ScreencastInfo,
+    SessionInfo,
+    StepEvent,
+} from '@/engine/types'
 
 export type StepEnvelope = { type: 'step' } & StepEvent
 export type ResultEnvelope = { type: 'result' } & RunResult
 export type ScreencastEnvelope = { type: 'screencast' } & ScreencastInfo
 export type SessionEnvelope = { type: 'session' } & SessionInfo
 export type PausedEnvelope = { type: 'paused' } & PausedInfo
+export type ErrorHoldEnvelope = { type: 'error-hold' } & ErrorHoldInfo
 export type Envelope =
     | StepEnvelope
     | ResultEnvelope
     | ScreencastEnvelope
     | SessionEnvelope
     | PausedEnvelope
+    | ErrorHoldEnvelope
 
 export function stepLine(event: StepEvent): string {
     return `${JSON.stringify({ type: 'step', ...event })}\n`
@@ -32,6 +41,13 @@ export function pausedLine(info: PausedInfo): string {
     return `${JSON.stringify({ type: 'paused', ...info })}\n`
 }
 
+// Emitted when a failed run is holding the browser open (see ErrorHoldInfo). The
+// GUI distinguishes this from `paused` (which halts BEFORE a step) — here the run
+// has already failed and the browser is frozen for inspection.
+export function errorHoldLine(info: ErrorHoldInfo): string {
+    return `${JSON.stringify({ type: 'error-hold', ...info })}\n`
+}
+
 // Parse one stdout line into an Envelope, or null if it isn't one of ours
 // (lets consumers ignore stray log output interleaved on stdout).
 export function parseLine(line: string): Envelope | null {
@@ -48,7 +64,8 @@ export function parseLine(line: string): Envelope | null {
             t === 'result' ||
             t === 'screencast' ||
             t === 'session' ||
-            t === 'paused'
+            t === 'paused' ||
+            t === 'error-hold'
         ) {
             return obj as Envelope
         }

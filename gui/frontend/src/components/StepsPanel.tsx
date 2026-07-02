@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { ResultEnvelope, StepEnvelope } from '../lib/stepStream'
+import { CompanionToggle } from './CompanionDrawer'
 import { ResultPanel } from './ResultPanel'
 import { StepChecklist } from './StepChecklist'
 
@@ -16,9 +17,13 @@ export function StepsPanel({
     bundleDir,
     pausedSteps,
     pausedAt,
+    errorHeld,
     onTogglePause,
     selectedIndex,
     onSelect,
+    cdpPort,
+    emphasizeClaude,
+    onOpenCompanion,
 }: {
     stepNames: string[]
     steps: StepEnvelope[]
@@ -30,14 +35,29 @@ export function StepsPanel({
     bundleDir: string | null
     pausedSteps: Set<string>
     pausedAt: string | null
+    // Set when the run failed but the browser is held open for the companion.
+    errorHeld: { failureCategory?: string; error?: string } | null
     onTogglePause: (name: string) => void
     selectedIndex: number | null
     onSelect: (index: number, step: StepEnvelope) => void
+    // The run's CDP port — the companion toggle is disabled until it's known.
+    cdpPort: number | null
+    // Emphasize the toggle when something needs attention (browser live / failed run).
+    emphasizeClaude: boolean
+    onOpenCompanion: () => void
 }) {
     return (
         <section style={styles.card}>
-            <div className="kicker" style={{ marginBottom: 12 }}>
-                Steps
+            <div style={styles.header}>
+                <div className="kicker">Steps</div>
+                {/* Always-present in every run state (live/paused/errored/finished),
+                    so the companion is reachable — especially "Ask Claude about this
+                    failure" on a finished/failed run. */}
+                <CompanionToggle
+                    onOpen={onOpenCompanion}
+                    emphasize={emphasizeClaude}
+                    disabled={!cdpPort}
+                />
             </div>
             <StepChecklist
                 stepNames={stepNames}
@@ -51,6 +71,7 @@ export function StepsPanel({
 
             <Hint
                 pausedAt={pausedAt}
+                errorHeld={errorHeld}
                 running={running}
                 hasResult={!!result}
                 hasSteps={stepNames.length > 0}
@@ -76,6 +97,7 @@ export function StepsPanel({
 // post-run snapshot tip.
 function Hint({
     pausedAt,
+    errorHeld,
     running,
     hasResult,
     hasSteps,
@@ -83,6 +105,7 @@ function Hint({
     stepCount,
 }: {
     pausedAt: string | null
+    errorHeld: { failureCategory?: string; error?: string } | null
     running: boolean
     hasResult: boolean
     hasSteps: boolean
@@ -94,6 +117,27 @@ function Hint({
             <p style={styles.pausedBanner}>
                 ⏸ Paused before <strong>{pausedAt}</strong> — interact with the browser on the
                 right, then press <span style={{ color: 'var(--teal)' }}>Resume</span>.
+            </p>
+        )
+    }
+    if (errorHeld) {
+        return (
+            <p style={styles.errorHeldBanner}>
+                ⚠ Run failed
+                {errorHeld.failureCategory ? (
+                    <>
+                        {' '}
+                        at <strong>{errorHeld.failureCategory}</strong>
+                    </>
+                ) : null}{' '}
+                — the browser is held open. Ask <span style={{ color: 'var(--teal)' }}>Claude</span>{' '}
+                to inspect it, then <span style={{ color: 'var(--teal)' }}>Resume</span> or{' '}
+                <span style={{ color: 'var(--teal)' }}>Stop</span> to finish.
+                {errorHeld.error ? (
+                    <span className="mono st-dim" style={styles.errorHeldDetail}>
+                        {errorHeld.error}
+                    </span>
+                ) : null}
             </p>
         )
     }
@@ -125,6 +169,13 @@ const styles: Record<string, CSSProperties> = {
         position: 'sticky',
         top: 16,
     },
+    header: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        marginBottom: 12,
+    },
     tip: { marginTop: 10, fontSize: 12, fontStyle: 'italic' },
     pausedBanner: {
         marginTop: 12,
@@ -133,6 +184,20 @@ const styles: Record<string, CSSProperties> = {
         padding: '10px 14px',
         color: 'var(--ink)',
         fontSize: 14,
+    },
+    errorHeldBanner: {
+        marginTop: 12,
+        background: 'var(--amber-soft, #fdf3e0)',
+        borderLeft: '3px solid var(--red)',
+        padding: '10px 14px',
+        color: 'var(--ink)',
+        fontSize: 14,
+    },
+    errorHeldDetail: {
+        display: 'block',
+        marginTop: 6,
+        fontSize: 12,
+        overflowWrap: 'anywhere',
     },
     errorBanner: {
         marginTop: 12,

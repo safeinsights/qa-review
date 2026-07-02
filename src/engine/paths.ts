@@ -38,6 +38,11 @@ export function resultsRoot(): string {
     return path.join(repoDir(), 'results')
 }
 
+// The live run-state JSON the run companion reads. One filename, one place.
+export function runStatePath(bundleDir: string): string {
+    return path.join(bundleDir, 'run-state.json')
+}
+
 // Compiled suites the bundled engine imports at runtime. `qar build-suites`
 // writes <name>.mjs here from src/suites/*.ts; the registry globs this dir.
 export function suitesCompiledDir(): string {

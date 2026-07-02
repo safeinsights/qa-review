@@ -24,6 +24,8 @@ export function MonitorPanel({
     stepCount,
     videoUrl,
     playback,
+    currentStepName,
+    paused,
     onPlaybackProgress,
     onUrl,
     onConsoleLine,
@@ -40,6 +42,11 @@ export function MonitorPanel({
     stepCount: number
     videoUrl: string | null
     playback: { time: number; playing: boolean }
+    // The step shown in the live top bar: the step we're paused before, else the
+    // most recent streamed step. Null when there's nothing to show.
+    currentStepName: string | null
+    // Whether the run is paused before currentStepName (shows a ⏸ marker).
+    paused: boolean
     onPlaybackProgress: (time: number, playing: boolean) => void
     onUrl: (url: string) => void
     onConsoleLine: (line: ConsoleLine) => void
@@ -81,6 +88,8 @@ export function MonitorPanel({
                     url={url}
                     running={running}
                     consoleLines={consoleLines}
+                    currentStepName={currentStepName}
+                    paused={paused}
                     onUrl={onUrl}
                     onConsoleLine={onConsoleLine}
                 />
@@ -96,6 +105,8 @@ function LiveBrowser({
     url,
     running,
     consoleLines,
+    currentStepName,
+    paused,
     onUrl,
     onConsoleLine,
 }: {
@@ -103,6 +114,8 @@ function LiveBrowser({
     url: string | null
     running: boolean
     consoleLines: ConsoleLine[]
+    currentStepName: string | null
+    paused: boolean
     onUrl: (url: string) => void
     onConsoleLine: (line: ConsoleLine) => void
 }) {
@@ -115,6 +128,12 @@ function LiveBrowser({
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <UrlBar url={url} />
                 </div>
+                {currentStepName ? (
+                    <span className="mono st-dim" style={styles.stepTitle} title={currentStepName}>
+                        {paused ? '⏸ ' : ''}
+                        {currentStepName}
+                    </span>
+                ) : null}
             </div>
             {port ? (
                 <BrowserPanel port={port} onUrl={onUrl} onConsole={onConsoleLine} />
@@ -148,6 +167,14 @@ const styles: Record<string, CSSProperties> = {
         gap: 10,
         padding: '11px 16px',
         borderBottom: '1px solid var(--line)',
+    },
+    stepTitle: {
+        flex: 'none',
+        fontSize: 12,
+        maxWidth: 200,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
     },
     livePlaceholder: {
         aspectRatio: '16 / 10',
