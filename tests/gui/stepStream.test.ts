@@ -23,6 +23,12 @@ describe('StreamParser', () => {
         const out = p.push('{"type":"paused","name":"Step 2: fill the proposal"}\n')
         expect(out).toEqual([{ type: 'paused', name: 'Step 2: fill the proposal' }])
     })
+
+    it('emits an error-hold envelope', () => {
+        const p = new StreamParser()
+        const out = p.push('{"type":"error-hold","failureCategory":"assertion","error":"expected X"}\n')
+        expect(out).toEqual([{ type: 'error-hold', failureCategory: 'assertion', error: 'expected X' }])
+    })
 })
 
 describe('stepsByIndex', () => {

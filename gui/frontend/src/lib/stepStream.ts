@@ -5,7 +5,12 @@ export type ResultEnvelope = { type: 'result'; ok: boolean; [k: string]: unknown
 export type ScreencastEnvelope = { type: 'screencast'; port: number; cdpPort: number }
 // Emitted when the run halts before a step the user marked "pause before".
 export type PausedEnvelope = { type: 'paused'; name: string }
-export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope | PausedEnvelope
+// Emitted when a run FAILS and the engine holds the browser open (frozen at the
+// failure) so the companion can inspect/drive it. The run stays blocked until a
+// {type:'resume'} control message arrives (same channel as `paused`), then it tears
+// down. Mirrors the engine's ErrorHoldInfo (src/engine/types.ts).
+export type ErrorHoldEnvelope = { type: 'error-hold'; failureCategory?: string; error?: string }
+export type Envelope = StepEnvelope | ResultEnvelope | ScreencastEnvelope | PausedEnvelope | ErrorHoldEnvelope
 
 // Collapse the append-only step-event stream into one event per EXECUTED
 // position, in order. The engine emits each step as a 'running' entry then
@@ -32,7 +37,7 @@ function parse(line: string): Envelope | null {
     }
     if (obj && typeof obj === 'object' && 'type' in obj) {
         const t = (obj as { type: unknown }).type
-        if (t === 'step' || t === 'result' || t === 'screencast' || t === 'paused') return obj as Envelope
+        if (t === 'step' || t === 'result' || t === 'screencast' || t === 'paused' || t === 'error-hold') return obj as Envelope
     }
     return null
 }

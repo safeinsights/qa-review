@@ -226,7 +226,14 @@ var authoringAllowedTools = []string{
 //
 // One session at a time: starting a new one stops the old.
 func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, error) {
-	a.teardownSession() // clean slate, silently (don't flip the UI we're about to show)
+	// Evict any live session (companion or a prior authoring one). If it actually
+	// tore something down, tell the GUI so the OTHER tab (which shares the single
+	// PTY slot) resets to idle instead of showing a live session over a dead PTY.
+	// This is the eviction of the OLD session; the new one we start below immediately
+	// re-announces itself (session-ready / a fresh token), so there's no self-teardown.
+	if a.teardownSession() {
+		runtime.EventsEmit(a.ctx, "session-ended")
+	}
 	// Mint the active token AFTER the eviction above, so any prior session's owner
 	// no longer holds the active token (their later StopSessionIfOwner is a no-op).
 	token := a.newSessionToken("authoring")
@@ -376,8 +383,14 @@ func companionClaudeArgs(mcpPath, repo string) []string {
 // already-running run's browser. cdpPort is the run browser's CDP port (from the
 // screencast envelope, forwarded by the React run screen). One companion at a time.
 func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
-	// Reuse the session teardown so a prior companion/authoring PTY is cleared.
-	a.teardownSession()
+	// Evict any live session (a prior companion or an authoring one) so a single
+	// PTY slot is free. If it tore something down, tell the GUI so the OTHER tab
+	// (Author) resets to idle instead of showing "Session live" over a dead PTY.
+	// This is the eviction of the OLD session; the companion we start below owns the
+	// slot with a fresh token, so emitting session-ended here doesn't kill it.
+	if a.teardownSession() {
+		runtime.EventsEmit(a.ctx, "session-ended")
+	}
 	// Mint the active token AFTER the eviction, so any prior session's owner no
 	// longer holds the active token (their later StopSessionIfOwner is a no-op).
 	token := a.newSessionToken("companion")
