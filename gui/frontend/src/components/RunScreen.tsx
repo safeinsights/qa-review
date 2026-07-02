@@ -17,7 +17,7 @@ export type RunSpec =
 // Pull the suite name out of an engine RunSpec's args (`--suite <name>`), for the
 // companion when there's no result envelope yet (mid-run / paused).
 function deriveSuiteFromSpec(spec: RunSpec | null): string {
-    if (!spec || spec.kind !== 'engine') return ''
+    if (spec?.kind !== 'engine') return ''
     const i = spec.args.indexOf('--suite')
     return i >= 0 ? (spec.args[i + 1] ?? '') : ''
 }

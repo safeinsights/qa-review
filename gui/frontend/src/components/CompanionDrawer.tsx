@@ -1,5 +1,5 @@
 import { Alert, Button, Drawer } from '@mantine/core'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRunCompanion, stopSessionIfOwner } from '../lib/ipc'
 import { Terminal } from './Terminal'
 
@@ -43,10 +43,10 @@ export function CompanionDrawer({
     // PTY dies (Claude quit / evicted) or when the run's browser goes away (cdpPort
     // changes on stop / a new run) — in both cases the current companion is attached
     // to a dead endpoint and must not be reused.
-    const resetSpawn = () => {
+    const resetSpawn = useCallback(() => {
         spawned.current = false
         sessionToken.current = null
-    }
+    }, [])
 
     // The run's CDP port identifies THIS run's browser. When it changes (the run
     // stopped → null, or a NEW run started → new port), any companion we spawned is
@@ -59,7 +59,7 @@ export function CompanionDrawer({
             prevCdpPort.current = cdpPort
             resetSpawn()
         }
-    }, [cdpPort])
+    }, [cdpPort, resetSpawn])
 
     // Lazy spawn on first open. Surface a spawn failure inline (Go returns an
     // error on failure — do NOT silently discard the promise).
