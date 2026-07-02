@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -178,6 +180,56 @@ func TestResolveEditor(t *testing.T) {
 		prog, args := resolveEditor(p, never)
 		if prog != "open" || len(args) != 1 || args[0] != p {
 			t.Fatalf("got prog=%q args=%v", prog, args)
+		}
+	})
+}
+
+// TestGuiResolveFinderPath reproduces the Finder-launch bug: a macOS app launched
+// from Finder inherits a minimal process PATH (/usr/bin:/bin), so exec.Command with
+// a bare name — which resolves via LookPath against the PROCESS PATH, not cmd.Env —
+// fails to find Homebrew tools even when withGuiPath() puts them on the child's env.
+// guiResolve must return the absolute path so the exec succeeds regardless.
+func TestGuiResolveFinderPath(t *testing.T) {
+	// A Homebrew-like dir holding a tool, and a fake tool binary inside it.
+	brewDir := t.TempDir()
+	tool := filepath.Join(brewDir, "faketool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Point guiPathDirs at our brew-like dir (withGuiPath prepends these).
+	orig := guiPathDirs
+	guiPathDirs = []string{brewDir, "/usr/bin", "/bin"}
+	t.Cleanup(func() { guiPathDirs = orig })
+
+	// Simulate the Finder/launchd process PATH: no brew dir at all.
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	t.Run("bare name resolves to absolute path via augmented PATH", func(t *testing.T) {
+		got := guiResolve("faketool")
+		if got != tool {
+			t.Fatalf("guiResolve(faketool) = %q, want %q", got, tool)
+		}
+	})
+
+	t.Run("resolved absolute path actually executes", func(t *testing.T) {
+		// The whole point: exec.Command(bare) would fail here (not on process PATH),
+		// but exec.Command(guiResolve(...)) runs.
+		out, err := exec.Command(guiResolve("faketool")).CombinedOutput()
+		if err != nil {
+			t.Fatalf("exec failed: %v (out=%q)", err, out)
+		}
+	})
+
+	t.Run("already-absolute name passes through unchanged", func(t *testing.T) {
+		if got := guiResolve(tool); got != tool {
+			t.Fatalf("guiResolve(abs) = %q, want %q", got, tool)
+		}
+	})
+
+	t.Run("unresolvable name returned as-is for exec to surface", func(t *testing.T) {
+		if got := guiResolve("definitely-not-a-real-tool"); got != "definitely-not-a-real-tool" {
+			t.Fatalf("got %q", got)
 		}
 	})
 }

@@ -188,7 +188,7 @@ func engineCmd(args ...string) *exec.Cmd {
 		// bin/qar.ts), not repoDir() — repoDir() may be an older clone missing
 		// new commands. QAR_REPO_DIR (in withGuiPath) still points config/suites
 		// at the clone. Fall back to repoDir() if the source tree isn't found.
-		cmd = exec.Command("pnpm", append([]string{"qar"}, args...)...)
+		cmd = exec.Command(guiResolve("pnpm"), append([]string{"qar"}, args...)...)
 		cmd.Env = withGuiPath()
 		if src := devSourceRepo(); src != "" {
 			cmd.Dir = src
@@ -247,13 +247,13 @@ func cloneRepo() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", err
 	}
-	cmd := exec.Command("gh", "repo", "clone", qaReviewSlug, dir)
+	cmd := exec.Command(guiResolve("gh"), "repo", "clone", qaReviewSlug, dir)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Fallback to plain git clone over https.
 		url := fmt.Sprintf("https://github.com/%s.git", qaReviewSlug)
-		cmd = exec.Command("git", "clone", url, dir)
+		cmd = exec.Command(guiResolve("git"), "clone", url, dir)
 		cmd.Env = withGuiPath()
 		out2, err2 := cmd.CombinedOutput()
 		if err2 != nil {
