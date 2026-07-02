@@ -248,6 +248,8 @@ rather than `pnpm qar <args>`.
 - `pnpm qar migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
 - `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
+- `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
+  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`/`QAR_BIN`)
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)
