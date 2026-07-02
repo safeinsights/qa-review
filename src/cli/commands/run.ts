@@ -1,5 +1,7 @@
+import { renameSync, writeFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import {
+    errorHoldLine,
     parseControlLine,
     pausedLine,
     resultLine,
@@ -7,11 +9,12 @@ import {
     stepLine,
 } from '@/cli/step-stream'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
+import { runStatePath } from '@/engine/paths'
 import { defaultDeps, runEngine } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
-import type { Role, StepEvent } from '@/engine/types'
+import type { Role, RunState, StepEvent } from '@/engine/types'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
@@ -26,11 +29,16 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
 
     const onStep = json ? (e: StepEvent) => process.stdout.write(stepLine(e)) : undefined
 
+    // Captured from the run browser's handle so the screencast line can carry the
+    // CDP port. Set by wrappedOpenBrowser (below) before onPage runs — runEngine
+    // awaits openBrowser before calling onPage, so this is populated in time.
+    let runCdpPort = 0
+
     let server: ScreencastServer | undefined
     const onPage = screencast
         ? async (page: Page) => {
               server = await ScreencastServer.start(page)
-              process.stdout.write(screencastLine({ port: server.port }))
+              process.stdout.write(screencastLine({ port: server.port, cdpPort: runCdpPort }))
           }
         : undefined
 
@@ -59,6 +67,15 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             armResume()
             await resumePromise
         },
+        // On a failed run the engine emits this then awaits waitForResume — holding
+        // the browser open so the companion can attach to its CDP port. The GUI's
+        // existing resume/stop path releases the hold (a {type:'resume'} control
+        // message resolves waitForResume; Stop SIGTERMs the process group). Harmless
+        // to always wire — the engine ONLY calls it when a run actually fails.
+        onErrorHold: (info: {
+            failureCategory?: import('@/engine/types').FailureCategory
+            error?: string
+        }) => process.stdout.write(errorHoldLine(info)),
     }
 
     // Read NDJSON control messages from stdin. Only the `run` command opts into
@@ -110,7 +127,51 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // Screencast IS the view, so it doesn't need a headed window. Use headed only
     // if explicitly asked AND not screencasting.
     const base = headed && !screencast ? headedDeps(onStep, vars) : { ...defaultDeps(vars), onStep }
-    const deps = { ...base, onPage, ...controlDeps }
+    // Wrap openBrowser to capture the run browser's CDP port for the screencast line.
+    const baseOpenBrowser = base.openBrowser
+    const wrappedOpenBrowser = async (env: Parameters<typeof baseOpenBrowser>[0]) => {
+        const handle = await baseOpenBrowser(env)
+        // cdpPort 0 = "no CDP port" (test fakes / headed deps omit it; production
+        // always sets a real one). Consumers must treat 0 as "companion unavailable".
+        runCdpPort = handle.cdpPort ?? 0
+        return handle
+    }
+    // Persist the live run-state to <bundleDir>/run-state.json so the run companion
+    // (Claude) can read the run's progress at a pause/error and after it finishes.
+    let bundleDirForState: string | undefined
+    let runStateWriteWarned = false
+    const onBundleDir = (dir: string) => {
+        bundleDirForState = dir
+    }
+    const onRunState = (state: RunState) => {
+        if (!bundleDirForState) return
+        const target = runStatePath(bundleDirForState)
+        try {
+            // Write to a temp file in the SAME directory, then rename over the
+            // target — an atomic swap on the same filesystem — so the run companion
+            // never observes a half-written (truncated) run-state.json.
+            const tmp = `${target}.tmp`
+            writeFileSync(tmp, JSON.stringify(state, null, 2))
+            renameSync(tmp, target)
+        } catch (e) {
+            // best-effort: persisting run-state must never fail the run. Warn ONCE
+            // (to stderr, which the GUI folds into stdout and ignores as non-JSON) so
+            // a persistent failure is debuggable without spamming per step.
+            if (!runStateWriteWarned) {
+                runStateWriteWarned = true
+                process.stderr.write(`[qar] could not write run-state.json: ${String(e)}\n`)
+            }
+        }
+    }
+
+    const deps = {
+        ...base,
+        openBrowser: wrappedOpenBrowser,
+        onBundleDir,
+        onRunState,
+        onPage,
+        ...controlDeps,
+    }
 
     try {
         const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)

@@ -33,6 +33,9 @@ export interface StepEvent {
 // localhost WebSocket port to connect to for the live browser view.
 export interface ScreencastInfo {
     port: number
+    // The run browser's CDP remote-debugging port, so the run companion's
+    // chrome-devtools-mcp can attach to the SAME browser (--browserUrl).
+    cdpPort: number
 }
 
 // Emitted when the run halts before a step the user marked "pause before". The
@@ -40,6 +43,16 @@ export interface ScreencastInfo {
 // blocked until a {type:'resume'} control message arrives on stdin.
 export interface PausedInfo {
     name: string // the step the run is paused before
+}
+
+// Emitted when a run FAILS and the engine is holding the browser open so the run
+// companion can inspect/drive the frozen failure state (via the run's CDP port).
+// The GUI reacts by showing a "run failed — Claude can inspect the browser" banner
+// and flipping Stop→Resume. The run stays blocked (browser alive) until a
+// {type:'resume'} control message arrives on stdin, then teardown proceeds.
+export interface ErrorHoldInfo {
+    failureCategory?: FailureCategory
+    error?: string
 }
 
 // Emitted once by `qar session` when the long-lived authoring browser is ready:
@@ -81,6 +94,17 @@ export interface RunResult {
     suite: string
     startedAt: number
     finishedAt: number
+}
+
+// A JSON snapshot of a run in progress OR finished, persisted to
+// <bundleDir>/run-state.json so the run companion (Claude) can read it.
+export interface RunState {
+    // One entry per executed position, latest status (running collapsed into passed/failed).
+    steps: StepEvent[]
+    // Present once the run has finished.
+    result?: RunResult
+    // True while the run is still going (no result yet).
+    running: boolean
 }
 
 // Resolved, secret-filled environment config handed to a run.

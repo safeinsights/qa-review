@@ -38,11 +38,18 @@ interface WailsApp {
     StopRun(): Promise<void>
     IsRunning(): Promise<boolean>
     SendToRun(line: string): Promise<void>
-    StartAuthoringSession(env: string, pr: string, role: string, instruction: string): Promise<void>
+    StartAuthoringSession(
+        env: string,
+        pr: string,
+        role: string,
+        instruction: string
+    ): Promise<string>
+    StartRunCompanion(cdpPort: number, suite: string): Promise<string>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
     StopSession(): Promise<void>
+    StopSessionIfOwner(token: string): Promise<void>
     Setup(dir: string): Promise<string>
     ChooseDirectory(): Promise<string>
     DefaultRepoDir(): Promise<string>
@@ -142,13 +149,23 @@ export async function resumeRun(): Promise<void> {
 
 // Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.
 // The GUI then receives `session-ready` (screencast port) + `pty-output` events.
+// Returns the session token; pass it to stopSessionIfOwner on unmount so a stale
+// tab can't tear down a session the other tab has since started.
 export async function startAuthoringSession(
     env: string,
     pr: string,
     role: string,
     instruction: string
-): Promise<void> {
-    await app().StartAuthoringSession(env, pr, role, instruction)
+): Promise<string> {
+    return app().StartAuthoringSession(env, pr, role, instruction)
+}
+
+// Start the "Ask Claude" run companion: Go attaches claude in a PTY to the
+// running engine's browser via its CDP port (no new browser is launched). The
+// GUI then receives `pty-output` events, same as the authoring session. Returns
+// the session token (see stopSessionIfOwner).
+export async function startRunCompanion(cdpPort: number, suite: string): Promise<string> {
+    return app().StartRunCompanion(cdpPort, suite)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.
@@ -165,8 +182,17 @@ export async function sendToPty(text: string): Promise<void> {
     await app().SendToPty(text)
 }
 
+// Unconditionally tear down whatever occupies the shared PTY slot. Use for an
+// explicit user "Stop session" action on the active session.
 export async function stopSession(): Promise<void> {
     await app().StopSession()
+}
+
+// Token-scoped teardown for the stale-unmount path: only tears down if `token`
+// still owns the active session. A superseded caller (the other tab started a new
+// session) is a no-op, so neither authoring nor companion can kill the other.
+export async function stopSessionIfOwner(token: string): Promise<void> {
+    await app().StopSessionIfOwner(token)
 }
 
 // Raw PTY output bytes (base64) from claude's terminal.

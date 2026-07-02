@@ -7,6 +7,7 @@ import {
     onSessionReady,
     startAuthoringSession,
     stopSession,
+    stopSessionIfOwner,
 } from '../lib/ipc'
 import { BrowserPanel } from './BrowserPanel'
 import { SaveSuitePanel } from './SaveSuitePanel'
@@ -29,6 +30,9 @@ export function ExploratoryTab() {
     const [screencastPort, setScreencastPort] = useState<number | null>(null)
     const [error, setError] = useState('')
     const logBuf = useRef('')
+    // On unmount we only tear down if we still own the active session (the run
+    // companion may have since taken over the shared PTY slot).
+    const sessionToken = useRef<string | null>(null)
 
     // Session events. Mounted once; listeners persist across the tab's life.
     useEffect(() => {
@@ -39,6 +43,12 @@ export function ExploratoryTab() {
             unReady = await onSessionReady(port => {
                 setScreencastPort(port)
                 setStarting(false)
+                // Our session's browser is genuinely up → we ARE active. Setting this
+                // here (not only in start()) self-heals the case where our own
+                // startAuthoringSession evicted a prior session: Go broadcasts
+                // `session-ended` for that eviction, which our own onSessionEnded
+                // handler would otherwise use to flip us to active=false mid-start.
+                setActive(true)
             })
             unEnded = await onSessionEnded(() => {
                 setActive(false)
@@ -53,8 +63,10 @@ export function ExploratoryTab() {
             unReady?.()
             unEnded?.()
             unLog?.()
-            // Tearing down the tab stops any live session (no orphan browser/claude).
-            void stopSession()
+            // Tearing down the tab stops any live session — but ONLY if we still own
+            // it, so a stale unmount can't kill the run companion's session running
+            // in the other tab.
+            if (sessionToken.current) void stopSessionIfOwner(sessionToken.current)
         }
     }, [])
 
@@ -63,7 +75,7 @@ export function ExploratoryTab() {
         setStarting(true)
         setActive(true)
         try {
-            await startAuthoringSession(env, pr, role, instruction)
+            sessionToken.current = await startAuthoringSession(env, pr, role, instruction)
         } catch (e) {
             setError(String(e) + (logBuf.current ? `\n${logBuf.current}` : ''))
             setActive(false)
@@ -73,6 +85,7 @@ export function ExploratoryTab() {
 
     const stop = async () => {
         await stopSession()
+        sessionToken.current = null
         setActive(false)
         setScreencastPort(null)
     }
