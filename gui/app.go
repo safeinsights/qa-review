@@ -987,16 +987,24 @@ func (a *App) CheckKeyringAccess(cwd string) (KeyringAccess, error) {
 }
 
 // RequestAccess runs the bundled engine's `request-access --name <name>` (generate
-// identity + open a keyring PR) in the cloned repo, returning combined output.
+// identity + open a keyring PR) in the cloned repo, returning combined output. On
+// failure the output is folded into the error — Wails drops the returned string when
+// err is non-nil, so without this the UI would only show a bare "exit status 1".
 func (a *App) RequestAccess(cwd, name string) (string, error) {
 	out, err := engineCmd("request-access", "--name", name).CombinedOutput()
-	return string(out), err
+	if err != nil {
+		return "", fmt.Errorf("request-access failed: %s\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 // Rekey runs the bundled engine's `rekey` (re-encrypt secrets to the keyring).
 func (a *App) Rekey(cwd string) (string, error) {
 	out, err := engineCmd("rekey").CombinedOutput()
-	return string(out), err
+	if err != nil {
+		return "", fmt.Errorf("rekey failed: %s\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 // ResetAndSync discards ONLY uncommitted tracked edits (git restore .) — keeping
