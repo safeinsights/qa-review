@@ -152,6 +152,17 @@ export async function resumeRun(): Promise<void> {
     await sendToRun(JSON.stringify({ type: 'resume' }))
 }
 
+// Retry a step that failed: the engine reloads the (possibly edited) suite and
+// re-runs the failed step against the still-live browser, then continues the suite.
+export async function retryStep(): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'retry-step' }))
+}
+
+// Give up on a failed step: the engine tears down and the run finishes FAILED.
+export async function giveUpStep(): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'give-up' }))
+}
+
 // --- Interactive authoring session (terminal + shared browser) ---
 
 // Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.

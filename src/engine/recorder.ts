@@ -56,6 +56,16 @@ export class Recorder {
         this.listener?.(event)
     }
 
+    // Drop recorded steps from position `index` onward — used by the run loop when a
+    // failed step is retried, so the failed entry is removed and the retried
+    // 'running'→'passed' re-occupies the same position instead of appending a
+    // duplicate. `this.steps` is already one entry per executed position (a
+    // resolution replaces its 'running' in place), so truncating by index maps
+    // directly to executed positions.
+    dropFrom(index: number) {
+        if (index < this.steps.length) this.steps.length = index
+    }
+
     finish(input: FinishInput): RunResult {
         const finishedAt = Date.now()
         const result: RunResult = {

@@ -4,7 +4,7 @@ import { CleanupClient } from '@/engine/cleanup'
 import { resolveEnv } from '@/engine/env'
 import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import { Recorder } from '@/engine/recorder'
-import { buildRunState } from '@/engine/run-state'
+import { buildRunState, truncateEventsToPosition } from '@/engine/run-state'
 import { mapConsoleLevel } from '@/engine/screencast-codec'
 import { getSuite } from '@/engine/suite-registry'
 import type {
@@ -69,6 +69,24 @@ export interface RunDeps {
     // resume/stop arrives. Optional: without the hook, a failed run tears down
     // immediately (the existing behavior for CLI-only runs and tests).
     onErrorHold?: (info: { failureCategory?: FailureCategory; error?: string }) => void
+    // In-process step retry (GUI only). When a STEP throws AND these are wired, the
+    // engine holds the browser open (like onErrorHold) and, instead of tearing down,
+    // waits for the user's decision: 'retry' re-runs the SAME-index step against the
+    // live ctx after reloading the (possibly edited) suite from disk; 'giveUp' fails
+    // the run. This is DISTINCT from onErrorHold, which stays for the non-retryable
+    // failures that happen outside the step loop (login / openBrowser). Wired only
+    // together — without them a step throw rethrows to the outer catch (CLI/tests).
+    onStepFailed?: (info: {
+        index: number
+        stepName: string
+        error: string
+        failureCategory: FailureCategory
+    }) => void
+    waitForResolution?: () => Promise<'retry' | 'giveUp'>
+    // Recompile ONE suite from disk and return the fresh Suite (or throw on a compile
+    // error). Called on retry so an edited suite's new code is picked up. Injected so
+    // tests fake it; production wires esbuild + a cache-busting dynamic import.
+    reloadSuite?: (name: string) => Promise<Suite>
 }
 
 function categorize(error: Error): FailureCategory {
@@ -125,6 +143,11 @@ export async function runEngine(
     let failureCategory: FailureCategory | undefined
     let handle: BrowserHandle | undefined
     let cleanupResult: RunResult['cleanup'] = { ok: true, deleted: [], failed: [] }
+    // Set once a step failure has already been offered to the retry channel (the user
+    // chose 'giveUp'), so the outer catch doesn't hold the browser a SECOND time via
+    // onErrorHold. Non-retryable failures (login / openBrowser) leave this false and
+    // still get the error-hold.
+    let stepFailureResolved = false
 
     try {
         handle = await deps.openBrowser({ name: env.name, baseURL: env.baseURL })
@@ -269,15 +292,81 @@ export async function runEngine(
             state: {},
         }
 
+        // Number of executed step positions so far (a step body may call ctx.step
+        // more than once; each opens a position). Captured before a step runs so a
+        // retry can truncate the recorder/run-state back to exactly this step's rows.
+        const executedPositions = () =>
+            events.reduce((n, e) => n + (e.status === 'running' ? 1 : 0), 0)
+
         // Run the suite's steps in order. The pause gate sits BEFORE each step so
         // the browser idles at the boundary — the user can interact with the live
         // Chrome, then resume — before any of the step's actions fire.
-        for (const step of suite.steps) {
+        //
+        // `liveSuite` may be swapped for a freshly-reloaded copy on retry (below), so
+        // steps AFTER a fixed one also pick up the edit. Indexed (not for-of) so the
+        // retry can re-run the same position after reloading.
+        let liveSuite = suite
+        for (let i = 0; i < liveSuite.steps.length; i++) {
+            let step = liveSuite.steps[i]
             if (deps.shouldPause?.(step.name)) {
                 deps.onPaused?.(step.name)
                 await deps.waitForResume?.()
             }
-            await step.run(ctx)
+            // Recorder position where THIS step begins — the truncation point for a
+            // retry (so the failed step's rows are dropped and the retry re-occupies
+            // them instead of appending duplicates).
+            const positionAtStepStart = executedPositions()
+            // Inner retry loop for this index. Breaks out on success; a 'giveUp' or a
+            // run without the retry deps rethrows to the outer catch (existing behavior).
+            for (;;) {
+                try {
+                    await step.run(ctx)
+                    break
+                } catch (cause) {
+                    // No retry channel wired (CLI runs, engine tests): preserve the
+                    // original behavior — rethrow to the outer catch, which optionally
+                    // holds via onErrorHold then tears down.
+                    if (!deps.waitForResolution || !deps.reloadSuite) throw cause
+                    deps.onStepFailed?.({
+                        index: i,
+                        stepName: step.name,
+                        error: (cause as Error).message,
+                        failureCategory: categorize(cause as Error),
+                    })
+                    // Browser HELD OPEN here — the companion inspects/edits, then the
+                    // user chooses retry or give up.
+                    const decision = await deps.waitForResolution()
+                    if (decision === 'giveUp') {
+                        stepFailureResolved = true
+                        throw cause
+                    }
+                    // Retry: reload the (possibly edited) suite. A compile error keeps
+                    // the browser held so the user can fix the edit and retry again.
+                    try {
+                        liveSuite = await deps.reloadSuite(liveSuite.name)
+                    } catch (compileErr) {
+                        deps.onStepFailed?.({
+                            index: i,
+                            stepName: step.name,
+                            error: `Reload failed: ${(compileErr as Error).message}`,
+                            failureCategory: 'tool-crash',
+                        })
+                        continue
+                    }
+                    // Strict index-only: re-run whatever step is now at this index. If
+                    // the edit removed it, there's nothing to retry — give up.
+                    if (!liveSuite.steps[i]) {
+                        stepFailureResolved = true
+                        throw cause
+                    }
+                    // Drop the failed step's recorded rows so the retry re-occupies its
+                    // position (keeps the GUI's positional step list aligned).
+                    truncateEventsToPosition(events, positionAtStepStart)
+                    recorder.dropFrom(positionAtStepStart)
+                    deps.onRunState?.(buildRunState(events))
+                    step = liveSuite.steps[i]
+                }
+            }
         }
     } catch (cause) {
         ok = false
@@ -288,7 +377,10 @@ export async function runEngine(
         // failed state with a live, CDP-attachable browser for the run companion.
         // Release comes via the SAME resume/stop channel as a pause. Without the
         // hook this is a no-op and the finally tears down immediately, as before.
-        if (deps.onErrorHold) {
+        //
+        // Skip when a step failure already went through the retry channel and the
+        // user chose to give up — it was already held once; don't hold again.
+        if (deps.onErrorHold && !stepFailureResolved) {
             deps.onErrorHold({ failureCategory, error: (cause as Error).message })
             await deps.waitForResume?.()
         }

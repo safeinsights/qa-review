@@ -77,6 +77,31 @@ describe('Recorder', () => {
         expect(result.steps[0].status).toBe('passed')
     })
 
+    it('dropFrom truncates recorded steps so a retried step re-occupies its position', () => {
+        const root = tmpRoot()
+        const rec = new Recorder({
+            root,
+            suite: 's',
+            env: 'qa',
+            role: 'admin',
+            mode: 'suite',
+            startedAt: 1,
+        })
+        rec.step('A', 'running')
+        rec.step('A', 'passed')
+        rec.step('B', 'running')
+        rec.step('B', 'failed', { error: 'boom' })
+        // Retry B: drop from position 1, then re-run B to a pass.
+        rec.dropFrom(1)
+        rec.step('B', 'running')
+        rec.step('B', 'passed')
+        const result = rec.finish({ ok: true, cleanup: { ok: true, deleted: [], failed: [] } })
+        expect(result.steps.map(s => [s.name, s.status])).toEqual([
+            ['A', 'passed'],
+            ['B', 'passed'],
+        ])
+    })
+
     it('escapes app-controlled text in report.html', () => {
         const root = tmpRoot()
         const rec = new Recorder({

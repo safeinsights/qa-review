@@ -25,12 +25,24 @@ export type PausedEnvelope = { type: 'paused'; name: string }
 // {type:'resume'} control message arrives (same channel as `paused`), then it tears
 // down. Mirrors the engine's ErrorHoldInfo (src/engine/types.ts).
 export type ErrorHoldEnvelope = { type: 'error-hold'; failureCategory?: string; error?: string }
+// Emitted when a suite STEP throws and the engine holds the browser open for an
+// in-process retry. Distinct from error-hold: the user can edit the suite (via the
+// companion) then send {type:'retry-step'} to re-run this step against the live
+// browser, or {type:'give-up'} to fail the run. Mirrors StepFailedInfo.
+export type StepFailedEnvelope = {
+    type: 'step-failed'
+    index: number
+    stepName: string
+    error?: string
+    failureCategory?: string
+}
 export type Envelope =
     | StepEnvelope
     | ResultEnvelope
     | ScreencastEnvelope
     | PausedEnvelope
     | ErrorHoldEnvelope
+    | StepFailedEnvelope
 
 // Collapse the append-only step-event stream into one event per EXECUTED
 // position, in order. The engine emits each step as a 'running' entry then
@@ -62,7 +74,8 @@ function parse(line: string): Envelope | null {
             t === 'result' ||
             t === 'screencast' ||
             t === 'paused' ||
-            t === 'error-hold'
+            t === 'error-hold' ||
+            t === 'step-failed'
         )
             return obj as Envelope
     }

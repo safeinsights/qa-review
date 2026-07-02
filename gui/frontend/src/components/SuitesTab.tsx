@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+    giveUpStep,
     onExit,
     onStdoutLine,
     openSuiteInEditor,
     isRunning as queryIsRunning,
     resumeRun,
+    retryStep,
     runEngine,
     setPauses,
     stopRun,
@@ -34,6 +36,9 @@ export function SuitesTab() {
     // halted at one of them.
     const [pausedSteps, setPausedSteps] = useState<Set<string>>(new Set())
     const [paused, setPaused] = useState(false)
+    // A step failed and the browser is held open for an in-process retry — the
+    // controls show Retry step / Give up instead of Resume.
+    const [stepFailed, setStepFailed] = useState(false)
 
     // NOTE: this fetch reuses the global stdout-line/proc-exit events, same as a
     // run. It only runs once on mount before any run is started, so it's safe.
@@ -133,6 +138,20 @@ export function SuitesTab() {
         await resumeRun()
     }
 
+    // Retry a failed step: the engine reloads the (possibly edited) suite and re-runs
+    // the step against the live browser. Flip the flag optimistically; the engine's
+    // next step:running envelope clears stepFailed via useRunStream.
+    const retry = async () => {
+        setStepFailed(false)
+        await retryStep()
+    }
+
+    // Give up on a failed step: the run tears down and finishes FAILED.
+    const giveUp = async () => {
+        setStepFailed(false)
+        await giveUpStep()
+    }
+
     // Toggle a "pause before" marker. During a run, push the full updated set to
     // the engine live (for steps not yet reached); before a run it's sent as the
     // --pause-before launch arg.
@@ -169,6 +188,9 @@ export function SuitesTab() {
                 stopping={stopping}
                 paused={paused}
                 onResume={resume}
+                stepFailed={stepFailed}
+                onRetryStep={retry}
+                onGiveUp={giveUp}
             />
             <RunScreen
                 spec={spec}
@@ -177,6 +199,7 @@ export function SuitesTab() {
                 onTogglePause={onTogglePause}
                 onRunningChange={setRunning}
                 onPausedChange={setPaused}
+                onStepFailedChange={setStepFailed}
             />
         </div>
     )

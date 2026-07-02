@@ -360,15 +360,18 @@ export const studyHappyPathSuite: Suite = {
                     await openResultsPreview(ctx)
                     await verifyResultsModalHasContent(ctx)
                     // Close the preview so it doesn't overlay the Approve button.
-                    await ctx.page
-                        .getByRole('dialog')
-                        .getByRole('button', { name: /close/i })
-                        .first()
-                        .click()
-                    await ctx.page
-                        .getByRole('dialog')
-                        .waitFor({ state: 'hidden' })
-                        .catch(() => {})
+                    // The Mantine modal's close control is an icon-only CloseButton
+                    // with no accessible name (no aria-label/title/text), so a
+                    // name-based role locator can't find it — target the stable
+                    // Mantine class instead, and fall back to Escape.
+                    const dialog = ctx.page.getByRole('dialog')
+                    const closeButton = dialog.locator('.mantine-Modal-close')
+                    if (await closeButton.count()) {
+                        await closeButton.first().click()
+                    } else {
+                        await ctx.page.keyboard.press('Escape')
+                    }
+                    await dialog.waitFor({ state: 'hidden' }).catch(() => {})
                 })
             },
         },

@@ -14,13 +14,17 @@ import { VideoPlayer } from './VideoPlayer'
 // snapshot shows, so local state here would reset the video to 0 and re-fetch
 // the blob on every flip.
 export function RecordingPanel({
+    isVisible,
     bundleDir,
     suite,
     videoUrl,
     playback,
     onPlaybackProgress,
 }: {
-    bundleDir: string
+    // Whether this view is the active one (see MonitorPanel). Returns null when
+    // false — so bundleDir may be null while hidden (it arrives with the result).
+    isVisible: boolean
+    bundleDir: string | null
     suite: string
     videoUrl: string | null
     playback: { time: number; playing: boolean }
@@ -39,6 +43,11 @@ export function RecordingPanel({
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
     }, [expanded])
+
+    // Hooks above run unconditionally (Rules of Hooks); bail out here when hidden.
+    // bundleDir is guaranteed non-null past this point (the recording view only shows
+    // once the result — carrying bundleDir — has arrived).
+    if (!isVisible || !bundleDir) return null
 
     const downloadAll = async () => {
         setZipping(true)

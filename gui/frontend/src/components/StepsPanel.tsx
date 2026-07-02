@@ -67,6 +67,7 @@ export function StepsPanel({
                 onTogglePause={onTogglePause}
                 selectedIndex={selectedIndex}
                 onSelect={onSelect}
+                onAskClaude={onOpenCompanion}
             />
 
             <Hint
@@ -85,7 +86,7 @@ export function StepsPanel({
                 </p>
             ) : null}
 
-            {error ? <p style={styles.errorBanner}>⚠ {error}</p> : null}
+            {error ? <p style={styles.errorBanner}>! {error}</p> : null}
 
             {result ? <ResultPanel result={result} /> : null}
         </section>
@@ -123,7 +124,7 @@ function Hint({
     if (errorHeld) {
         return (
             <p style={styles.errorHeldBanner}>
-                ⚠ Run failed
+                ! Run failed
                 {errorHeld.failureCategory ? (
                     <>
                         {' '}
@@ -166,8 +167,6 @@ const styles: Record<string, CSSProperties> = {
         padding: '18px 20px',
         boxShadow: 'var(--shadow-card)',
         alignSelf: 'start',
-        position: 'sticky',
-        top: 16,
     },
     header: {
         display: 'flex',

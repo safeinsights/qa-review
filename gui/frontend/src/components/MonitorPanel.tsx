@@ -53,13 +53,23 @@ export function MonitorPanel({
     onClearSelected: () => void
 }) {
     const suite = (result?.suite as string | undefined) ?? ''
+    // Exactly one of three views shows, highest priority first. A selected step with
+    // a captured screenshot outranks the finished-run recording, which outranks the
+    // live monitor. Resolve the discriminant + the selected snapshot once here so the
+    // return is a flat list of isVisible-gated panels (no ternary/logic in the JSX).
     const shot = selected && bundleDir ? selected.step.screenshot : null
-    const showSnapshot = selected && bundleDir && shot
-    const showRecording = !showSnapshot && bundleDir
+    const view: 'snapshot' | 'recording' | 'live' = shot
+        ? 'snapshot'
+        : bundleDir
+          ? 'recording'
+          : 'live'
 
     return (
         <section style={styles.card}>
-            {showSnapshot ? (
+            {/* Snapshot needs the narrowed non-null bundleDir/shot + selection, so
+                it's only mounted when selected — isVisible would still force those
+                props. Recording/Live take isVisible and self-hide with null. */}
+            {view === 'snapshot' && selected && bundleDir && shot ? (
                 <SnapshotPanel
                     bundleDir={bundleDir}
                     rel={shot}
@@ -70,37 +80,39 @@ export function MonitorPanel({
                     index={selected.index}
                     total={stepCount}
                     onBack={onClearSelected}
-                    // After a run finishes we return to the recording, not the
-                    // (now-gone) live browser.
-                    backLabel={bundleDir ? '← Back to recording' : '← Back to live'}
+                    // Snapshot is only reachable once a run has finished (bundleDir
+                    // present), so Back always returns to the recording.
+                    backLabel="← Back to recording"
                 />
-            ) : showRecording ? (
-                <RecordingPanel
-                    bundleDir={bundleDir}
-                    suite={suite}
-                    videoUrl={videoUrl}
-                    playback={playback}
-                    onPlaybackProgress={onPlaybackProgress}
-                />
-            ) : (
-                <LiveBrowser
-                    port={port}
-                    url={url}
-                    running={running}
-                    consoleLines={consoleLines}
-                    currentStepName={currentStepName}
-                    paused={paused}
-                    onUrl={onUrl}
-                    onConsoleLine={onConsoleLine}
-                />
-            )}
+            ) : null}
+            <RecordingPanel
+                isVisible={view === 'recording'}
+                bundleDir={bundleDir}
+                suite={suite}
+                videoUrl={videoUrl}
+                playback={playback}
+                onPlaybackProgress={onPlaybackProgress}
+            />
+            <LiveBrowser
+                isVisible={view === 'live'}
+                port={port}
+                url={url}
+                running={running}
+                consoleLines={consoleLines}
+                currentStepName={currentStepName}
+                paused={paused}
+                onUrl={onUrl}
+                onConsoleLine={onConsoleLine}
+            />
         </section>
     )
 }
 
 // The live-browser monitor: a URL header, the streamed browser view (once its
-// screencast port opens), and the page's accumulating console log.
+// screencast port opens), and the page's accumulating console log. Returns null when
+// hidden (isVisible false) so MonitorPanel's return stays a flat list of panels.
 function LiveBrowser({
+    isVisible,
     port,
     url,
     running,
@@ -110,6 +122,7 @@ function LiveBrowser({
     onUrl,
     onConsoleLine,
 }: {
+    isVisible: boolean
     port: number | null
     url: string | null
     running: boolean
@@ -119,6 +132,7 @@ function LiveBrowser({
     onUrl: (url: string) => void
     onConsoleLine: (line: ConsoleLine) => void
 }) {
+    if (!isVisible) return null
     return (
         <>
             <div style={styles.liveHeader}>

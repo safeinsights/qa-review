@@ -52,10 +52,19 @@ suite already exists and the engine is driving the run.
    to switch shared accounts mid-run for multi-role suites. Prefer stable
    selectors: `getByRole`, `getByLabel`, `getByTestId`, `text=`. See
    `src/suites/create-study.ts` as the template and `src/suites/types.ts` for shapes.
-4. **Hand back to Run — do NOT run the suite yourself.** After editing, tell the
-   user: *"Fixed <what> — press Run to re-run and verify."* The QA Runner recompiles
-   (`build-suites`) and re-runs through its run screen. You never call `qar run`;
-   the GUI owns the authoritative run and its live browser.
+4. **Hand back — do NOT run the suite yourself.** How you hand back depends on the
+   idle state:
+   - **Errored on a STEP (browser held open for retry):** after editing, tell the
+     user *"Fixed <what> — press Retry step."* The QA Runner reloads your edited suite
+     and re-runs JUST the failed step against the SAME live browser (no re-login, no
+     re-doing earlier steps), then continues. Because the retry is **strict by step
+     INDEX**, fix the step's selectors/logic — do NOT rename, reorder, or delete the
+     failing step (that breaks the index match). If your edit doesn't compile, the
+     browser stays held and the compile error surfaces — fix it and Retry again.
+   - **Finished / other cases:** tell the user *"Fixed <what> — press Run to re-run
+     and verify."* The QA Runner recompiles (`build-suites`) and re-runs from the top.
+   Either way you never call `qar run`; the GUI owns the authoritative run and its
+   live browser.
 
 ## Keeping the session smooth
 - Never prefix commands with `cd` — you're already in `$QAR_REPO_DIR`. One command

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRunState } from '@/engine/run-state'
+import { buildRunState, truncateEventsToPosition } from '@/engine/run-state'
 import type { RunResult, StepEvent } from '@/engine/types'
 
 const step = (over: Partial<StepEvent>): StepEvent =>
@@ -34,5 +34,29 @@ describe('buildRunState', () => {
         const rs = buildRunState([], result)
         expect(rs.result?.ok).toBe(false)
         expect(rs.running).toBe(false)
+    })
+})
+
+describe('truncateEventsToPosition', () => {
+    it('drops events from the given position onward, keeping earlier positions whole', () => {
+        // Positions: A (0), B (1, failed). Truncating to position 1 keeps A's
+        // running+passed and drops B entirely — so a retry re-opens position 1.
+        const events: StepEvent[] = [
+            step({ name: 'A', status: 'running' }),
+            step({ name: 'A', status: 'passed' }),
+            step({ name: 'B', status: 'running' }),
+            step({ name: 'B', status: 'failed', error: 'boom' }),
+        ]
+        truncateEventsToPosition(events, 1)
+        expect(buildRunState(events).steps.map(s => [s.name, s.status])).toEqual([['A', 'passed']])
+    })
+
+    it('is a no-op when position is at or beyond the executed count', () => {
+        const events: StepEvent[] = [
+            step({ name: 'A', status: 'running' }),
+            step({ name: 'A', status: 'passed' }),
+        ]
+        truncateEventsToPosition(events, 5)
+        expect(events).toHaveLength(2)
     })
 })

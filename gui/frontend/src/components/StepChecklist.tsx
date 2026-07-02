@@ -14,6 +14,7 @@ export function StepChecklist({
     onTogglePause,
     selectedIndex,
     onSelect,
+    onAskClaude,
 }: {
     // Static, ordered step names (from the selected suite). Source of truth for rows.
     stepNames: string[]
@@ -26,6 +27,9 @@ export function StepChecklist({
     onTogglePause: (name: string) => void
     selectedIndex: number | null
     onSelect: (index: number, step: StepEnvelope) => void
+    // Open the Claude companion drawer — offered inline beneath a failed step so the
+    // trigger is right at the failure (the header toggle scrolls off on long suites).
+    onAskClaude?: () => void
 }) {
     // One event per executed position, in order (see stepsByIndex). Positional —
     // NOT keyed by name — so a suite with repeated step names (study-happy-path's
@@ -64,6 +68,9 @@ export function StepChecklist({
                         style={{
                             display: 'flex',
                             alignItems: 'baseline',
+                            // Let the inline "Ask Claude" link (on a failed step) wrap
+                            // onto its own full-width line below the row.
+                            flexWrap: 'wrap',
                             gap: 12,
                             padding: '7px 10px',
                             marginLeft: -10,
@@ -173,6 +180,34 @@ export function StepChecklist({
                             >
                                 ⏸
                             </span>
+                        ) : null}
+                        {/* Failure-side companion trigger: sits on its own line under
+                            a failed step (flexBasis 100% + the row's flexWrap), so the
+                            "Ask Claude" affordance is right at the failure — not only in
+                            the Steps header, which scrolls off on a long suite. */}
+                        {status === 'failed' && onAskClaude ? (
+                            <button
+                                type="button"
+                                onClick={e => {
+                                    e.stopPropagation()
+                                    onAskClaude()
+                                }}
+                                style={{
+                                    flexBasis: '100%',
+                                    appearance: 'none',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    padding: 0,
+                                    margin: 0,
+                                    textAlign: 'left',
+                                    fontSize: 12,
+                                    color: 'var(--teal)',
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline',
+                                }}
+                            >
+                                💬 Ask Claude about this
+                            </button>
                         ) : null}
                     </div>
                 )

@@ -52,6 +52,42 @@ describe('build-suites', () => {
         expect(suites.map(s => s.name)).toEqual(['demo'])
     }, 20000)
 
+    it('recompiling an EDITED suite overwrites its .mjs with the new code (retry reload)', async () => {
+        // The retry-reload path (run.ts reloadSuite) recompiles the suite from its
+        // .ts source, then cache-bust re-imports the emitted .mjs. Assert the compile
+        // half here: editing the source and recompiling to the SAME output path
+        // overwrites it with the new code. (The cache-busting `import(url + '?t=N')`
+        // half is exercised by the real runtime — vitest's loader ignores the query,
+        // so it can't be asserted through import() here.)
+        const repo = makeTempRepo()
+        created.push(repo)
+        process.env.QAR_REPO_DIR = repo
+        const { compileSuite } = await import('@/cli/commands/build-suites')
+        const src = path.join(repo, 'src', 'suites', 'demo.ts')
+        const outDir = path.join(repo, 'suites-compiled')
+
+        const mjs1 = await compileSuite(src, outDir)
+        expect(fs.readFileSync(mjs1, 'utf8')).toContain('"noop"')
+
+        // Edit the source: rename the step (the kind of fix a user makes on retry).
+        fs.writeFileSync(
+            src,
+            [
+                "import type { Suite } from '@/suites/types'",
+                'export const demoSuite: Suite = {',
+                "    name: 'demo', description: 'd', roles: ['admin'],",
+                "    steps: [{ name: 'fixed', run: async () => {} }],",
+                '}',
+                '',
+            ].join('\n')
+        )
+        const mjs2 = await compileSuite(src, outDir)
+        expect(mjs2).toBe(mjs1) // same output path
+        const out = fs.readFileSync(mjs2, 'utf8')
+        expect(out).toContain('"fixed"')
+        expect(out).not.toContain('"noop"')
+    }, 20000)
+
     it('clears stale .mjs outputs for removed source suites', async () => {
         const repo = makeTempRepo()
         created.push(repo)
