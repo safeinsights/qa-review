@@ -174,6 +174,12 @@ func engineCmd(args ...string) *exec.Cmd {
 		// compile step). tsx ships in Resources/engine/node_modules alongside Playwright.
 		nodeArgs := append([]string{"--import", "tsx", bundle}, args...)
 		cmd = exec.Command(node, nodeArgs...)
+		// Suites in the clone import bare deps (@faker-js/faker, @playwright/test).
+		// NODE_PATH does NOT satisfy ESM bare-specifier resolution — Node walks up
+		// node_modules from the importing .ts file — so without a node_modules in the
+		// clone those suites fail to import and silently vanish from the list. Symlink
+		// the clone's node_modules to the bundled one so resolution finds them.
+		ensureSuiteDeps(res)
 		// Playwright is shipped under Resources/engine/node_modules; let the bundle
 		// resolve it. PLAYWRIGHT_SKIP... avoids any download attempt at runtime.
 		env := withGuiPath()
@@ -262,4 +268,55 @@ func cloneRepo() (string, error) {
 		return string(out2), nil
 	}
 	return string(out), nil
+}
+
+// ensureSuiteDeps makes the bundled node_modules (Resources/engine/node_modules —
+// faker, @playwright/test, etc.) resolvable from the clone's suite files by
+// symlinking <clone>/node_modules to it. Required because the suites are ESM .ts
+// imported from the clone, and ESM bare-specifier resolution walks up node_modules
+// from the importing file — it ignores NODE_PATH. Idempotent and best-effort: a
+// failure here just means some suites won't load, which surfaces in the list.
+func ensureSuiteDeps(res string) {
+	bundleModules := filepath.Join(res, "engine", "node_modules")
+	if _, err := os.Stat(bundleModules); err != nil {
+		return // no bundled modules (e.g. odd build) — nothing to link
+	}
+	link := filepath.Join(repoDir(), "node_modules")
+	// If it already points at the bundle, we're done.
+	if target, err := os.Readlink(link); err == nil && target == bundleModules {
+		return
+	}
+	// Replace a stale symlink; leave a real node_modules (dev-style clone) alone.
+	if fi, err := os.Lstat(link); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			os.Remove(link)
+		} else {
+			return
+		}
+	}
+	if os.Symlink(bundleModules, link) == nil {
+		// The repo's .gitignore has "node_modules/" (dir-only); our symlink is a
+		// file entry, so it would show as untracked and make Sync see a dirty tree
+		// and skip. Exclude it locally (per-clone, no commit) to keep sync working.
+		ensureLocalExclude(repoDir(), "node_modules")
+	}
+}
+
+// ensureLocalExclude appends a pattern to .git/info/exclude if not already present
+// — a per-clone gitignore that never touches the committed .gitignore.
+func ensureLocalExclude(repo, pattern string) {
+	exclude := filepath.Join(repo, ".git", "info", "exclude")
+	if data, err := os.ReadFile(exclude); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == pattern {
+				return
+			}
+		}
+	}
+	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(pattern + "\n")
 }

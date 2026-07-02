@@ -31,4 +31,16 @@ describe('discoverSuites', () => {
         const suites = await discoverSuites(['x.ts'], async () => ({ notASuite: { name: 'x' } }))
         expect(suites).toEqual([])
     })
+
+    it('skips a suite that throws on import and still loads the rest', async () => {
+        const files = ['a.ts', 'broken.ts', 'b.ts']
+        const importer = async (f: string) => {
+            if (f.endsWith('broken.ts')) throw new Error("Cannot find package '@faker-js/faker'")
+            if (f.endsWith('a.ts')) return { fakeSuiteA }
+            return { fakeSuiteB }
+        }
+        const suites = await discoverSuites(files, importer)
+        // broken.ts is dropped; a and b still load (no whole-list collapse).
+        expect(suites.map(s => s.name).sort()).toEqual(['a', 'b'])
+    })
 })
