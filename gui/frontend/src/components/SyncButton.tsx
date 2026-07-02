@@ -3,7 +3,13 @@ import { useEffect, useState } from 'react'
 import { isInDrift, rekey, resetAndSync, sync } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
 
-export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } = {}) {
+export function SyncButton({
+    extraActions,
+    onSynced,
+}: {
+    extraActions?: React.ReactNode
+    onSynced?: () => void
+} = {}) {
     const [status, setStatus] = useState('')
     const [syncState, setSyncState] = useState('')
     const [drift, setDrift] = useState(false)
@@ -16,6 +22,7 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
             setSyncState(result)
             if (result === 'synced') {
                 setStatus('Up to date — new suites are ready.')
+                onSynced?.() // refresh the suite list — a pull may have added/removed suites
                 try {
                     setDrift(await isInDrift())
                 } catch {
@@ -48,6 +55,7 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
             setSyncState(result)
             if (result === 'synced') {
                 setStatus('Up to date — new suites are ready.')
+                onSynced?.() // refresh the suite list after a reset+sync too
                 try {
                     setDrift(await isInDrift())
                 } catch {
