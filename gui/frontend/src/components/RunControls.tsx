@@ -1,4 +1,4 @@
-import { Select, TextInput, Button } from '@mantine/core'
+import { Button, Select, TextInput } from '@mantine/core'
 
 const ENVS = ['qa', 'staging']
 const ALL_ROLES = ['admin', 'researcher', 'reviewer']
@@ -20,6 +20,9 @@ export interface RunControlsProps {
     onRun: () => void
     runDisabled?: boolean
     runLabel?: string
+    // Opens the selected suite's source in the user's editor. When provided (and a
+    // suite is selected), a secondary "Edit Suite" button sits left of Run.
+    onEditSuite?: () => void
     // When running, the action button becomes a red Stop that calls onStop.
     running?: boolean
     onStop?: () => void
@@ -41,7 +44,9 @@ export interface RunControlsProps {
 // as), so we show Suite first and adapt the Role field to avoid invalid combos.
 export function RunControls(p: RunControlsProps) {
     const showSuite = p.suite !== undefined && p.setSuite
-    const suiteData = (p.suites && p.suites.length > 0 ? p.suites.map((s) => s.name) : ['signin']).map((name) => ({
+    const suiteData = (
+        p.suites && p.suites.length > 0 ? p.suites.map(s => s.name) : ['signin']
+    ).map(name => ({
         value: name,
         label: name,
     }))
@@ -49,6 +54,42 @@ export function RunControls(p: RunControlsProps) {
     const roleOptions = allowed.length > 0 ? allowed : ALL_ROLES
     const roleFixed = allowed.length === 1
     const fieldsLocked = !!p.running || !!p.paused
+    // The Edit Suite button (when visible) owns marginLeft:auto to right-align the
+    // group; otherwise the action button carries it so it still pins to the right.
+    const editVisible = showSuite && !!p.onEditSuite && !fieldsLocked
+    const actionMargin = editVisible ? {} : { marginLeft: 'auto' as const }
+    // The action button is one of three states — Resume (paused) takes precedence,
+    // then Stop (running), else Run. Resolve its props once so the JSX renders a
+    // single button instead of a 3-way ternary with duplicated Mantine props.
+    const action = p.paused
+        ? {
+              onClick: p.onResume,
+              disabled: undefined as boolean | undefined,
+              loading: false,
+              color: 'teal',
+              shadow: '0 6px 18px rgba(12,107,94,0.22)',
+              icon: <span aria-hidden>▶</span>,
+              label: 'Resume',
+          }
+        : p.running
+          ? {
+                onClick: p.onStop,
+                disabled: p.stopping,
+                loading: !!p.stopping,
+                color: 'red',
+                shadow: '0 6px 18px rgba(176,74,58,0.22)',
+                icon: p.stopping ? undefined : <span aria-hidden>■</span>,
+                label: p.stopping ? 'Stopping…' : 'Stop',
+            }
+          : {
+                onClick: p.onRun,
+                disabled: p.runDisabled,
+                loading: false,
+                color: 'teal',
+                shadow: '0 6px 18px rgba(12,107,94,0.22)',
+                icon: <span aria-hidden>▶</span>,
+                label: p.runLabel ?? 'Run',
+            }
 
     return (
         <div
@@ -68,7 +109,7 @@ export function RunControls(p: RunControlsProps) {
                 <Select
                     data={ENVS}
                     value={p.env}
-                    onChange={(v) => v && p.setEnv(v)}
+                    onChange={v => v && p.setEnv(v)}
                     disabled={!!p.pr || fieldsLocked}
                     allowDeselect={false}
                     w={110}
@@ -78,7 +119,7 @@ export function RunControls(p: RunControlsProps) {
             <Field label="PR #">
                 <TextInput
                     value={p.pr}
-                    onChange={(e) => p.setPr(e.currentTarget.value)}
+                    onChange={e => p.setPr(e.currentTarget.value)}
                     placeholder="optional"
                     disabled={fieldsLocked}
                     w={90}
@@ -89,7 +130,7 @@ export function RunControls(p: RunControlsProps) {
                     <Select
                         data={suiteData}
                         value={p.suite}
-                        onChange={(v) => v && p.setSuite!(v)}
+                        onChange={v => v && p.setSuite?.(v)}
                         disabled={fieldsLocked}
                         allowDeselect={false}
                         w={200}
@@ -119,7 +160,7 @@ export function RunControls(p: RunControlsProps) {
                     <Select
                         data={roleOptions}
                         value={p.role}
-                        onChange={(v) => v && p.setRole(v)}
+                        onChange={v => v && p.setRole(v)}
                         disabled={fieldsLocked}
                         allowDeselect={false}
                         w={150}
@@ -127,43 +168,33 @@ export function RunControls(p: RunControlsProps) {
                     />
                 )}
             </Field>
-            {p.paused ? (
+            {/* Secondary, deliberately quiet: edit the selected suite's source in
+                the user's editor. Sits left of the action button and carries the
+                marginLeft:auto so the whole button group stays right-aligned.
+                Hidden while a run is active — the source shouldn't change mid-run. */}
+            {editVisible ? (
                 <Button
-                    onClick={p.onResume}
-                    color="teal"
+                    onClick={p.onEditSuite}
+                    variant="default"
                     radius="md"
                     size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
-                    leftSection={<span aria-hidden>▶</span>}
+                    style={{ marginLeft: 'auto' }}
                 >
-                    Resume
+                    Edit Suite
                 </Button>
-            ) : p.running ? (
-                <Button
-                    onClick={p.onStop}
-                    disabled={p.stopping}
-                    loading={p.stopping}
-                    color="red"
-                    radius="md"
-                    size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(176,74,58,0.22)' }}
-                    leftSection={p.stopping ? undefined : <span aria-hidden>■</span>}
-                >
-                    {p.stopping ? 'Stopping…' : 'Stop'}
-                </Button>
-            ) : (
-                <Button
-                    onClick={p.onRun}
-                    disabled={p.runDisabled}
-                    color="teal"
-                    radius="md"
-                    size="md"
-                    style={{ marginLeft: 'auto', boxShadow: '0 6px 18px rgba(12,107,94,0.22)' }}
-                    leftSection={<span aria-hidden>▶</span>}
-                >
-                    {p.runLabel ?? 'Run'}
-                </Button>
-            )}
+            ) : null}
+            <Button
+                onClick={action.onClick}
+                disabled={action.disabled}
+                loading={action.loading}
+                color={action.color}
+                radius="md"
+                size="md"
+                style={{ ...actionMargin, boxShadow: action.shadow }}
+                leftSection={action.icon}
+            >
+                {action.label}
+            </Button>
         </div>
     )
 }

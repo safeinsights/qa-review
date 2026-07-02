@@ -1,8 +1,8 @@
 import net from 'node:net'
-import { resolveEnv, resolvePrEnv } from '@/engine/env'
-import { loginAs } from '@/engine/auth'
-import { ScreencastServer } from '@/engine/screencast'
 import { sessionLine } from '@/cli/step-stream'
+import { loginAs } from '@/engine/auth'
+import { resolveEnv, resolvePrEnv } from '@/engine/env'
+import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
 import type { Role } from '@/engine/types'
 
@@ -54,7 +54,8 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
             if (attempt === 1) throw e
         }
     }
-    const { browser, context, page } = launched!
+    if (!launched) throw new Error('Failed to launch browser with CDP')
+    const { browser, context, page } = launched
 
     await loginAs(page, env, role)
 
@@ -67,7 +68,7 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
     // A keepalive timer holds the event loop open; we deliberately do NOT exit on
     // a bare immediate stdin EOF (a backgrounded/redirected process would die at
     // once), so the primary stop signal is SIGTERM.
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
         let stopped = false
         const keepalive = setInterval(() => {}, 1 << 30)
         const stop = () => {

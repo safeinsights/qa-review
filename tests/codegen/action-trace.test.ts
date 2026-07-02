@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { type ActionTrace, parseTrace } from '@/codegen/action-trace'
 
 describe('action-trace', () => {
@@ -17,12 +17,18 @@ describe('action-trace', () => {
         const trace: ActionTrace = parseTrace(raw)
         expect(trace.name).toBe('admin-invites-user')
         expect(trace.actions).toHaveLength(4)
-        expect(trace.actions[1]).toEqual({ step: 'Invite', kind: 'click', selector: 'role=button[name="Invite"]' })
+        expect(trace.actions[1]).toEqual({
+            step: 'Invite',
+            kind: 'click',
+            selector: 'role=button[name="Invite"]',
+        })
     })
 
     it('throws on an unknown action kind', () => {
         const raw = JSON.stringify({
-            name: 'x', description: 'x', role: 'admin',
+            name: 'x',
+            description: 'x',
+            role: 'admin',
             actions: [{ step: 's', kind: 'teleport', selector: 'a' }],
         })
         expect(() => parseTrace(raw)).toThrow(/unknown action kind "teleport"/i)

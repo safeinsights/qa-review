@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest'
-import { frameBytes, parseInput, toCdpMouse, toCdpKey, cursorMessage, urlMessage, clipboardMessage, consoleMessage, mapConsoleLevel, type InputEvent } from '@/engine/screencast-codec'
+import { describe, expect, it } from 'vitest'
+import {
+    clipboardMessage,
+    consoleMessage,
+    cursorMessage,
+    frameBytes,
+    type InputEvent,
+    mapConsoleLevel,
+    parseInput,
+    toCdpKey,
+    toCdpMouse,
+    urlMessage,
+} from '@/engine/screencast-codec'
 
 describe('screencast-codec', () => {
     it('decodes a CDP base64 frame into the raw JPEG bytes to send as a binary message', () => {
@@ -30,7 +41,9 @@ describe('screencast-codec', () => {
     })
 
     it('maps a mouseup and a mousemove correctly', () => {
-        expect(toCdpMouse({ kind: 'mouse', action: 'up', x: 1, y: 2, button: 'left' }).type).toBe('mouseReleased')
+        expect(toCdpMouse({ kind: 'mouse', action: 'up', x: 1, y: 2, button: 'left' }).type).toBe(
+            'mouseReleased'
+        )
         const move = toCdpMouse({ kind: 'mouse', action: 'move', x: 3, y: 4, button: 'none' })
         expect(move.type).toBe('mouseMoved')
         expect(move.button).toBe('none')
@@ -38,7 +51,15 @@ describe('screencast-codec', () => {
     })
 
     it('maps a wheel event with deltas', () => {
-        const w = toCdpMouse({ kind: 'mouse', action: 'wheel', x: 5, y: 6, button: 'none', deltaX: 0, deltaY: 120 })
+        const w = toCdpMouse({
+            kind: 'mouse',
+            action: 'wheel',
+            x: 5,
+            y: 6,
+            button: 'none',
+            deltaX: 0,
+            deltaY: 120,
+        })
         expect(w.type).toBe('mouseWheel')
         expect(w.deltaY).toBe(120)
     })
@@ -61,14 +82,28 @@ describe('screencast-codec', () => {
     it('forwards modifiers and suppresses text for a non-shift-modified shortcut', () => {
         // Cmd+C (Meta=4): modifier forwarded, but no `text` — it's a shortcut,
         // not a typed character, so it must not insert a "c".
-        const out = toCdpKey({ kind: 'key', action: 'down', key: 'c', code: 'KeyC', text: 'c', modifiers: 4 })
+        const out = toCdpKey({
+            kind: 'key',
+            action: 'down',
+            key: 'c',
+            code: 'KeyC',
+            text: 'c',
+            modifiers: 4,
+        })
         expect(out.modifiers).toBe(4)
         expect(out.text).toBeUndefined()
     })
 
     it('keeps text for a Shift-only modified key (uppercase letter)', () => {
         // Shift (8) alone is text entry, not a shortcut → keep the text.
-        const out = toCdpKey({ kind: 'key', action: 'down', key: 'A', code: 'KeyA', text: 'A', modifiers: 8 })
+        const out = toCdpKey({
+            kind: 'key',
+            action: 'down',
+            key: 'A',
+            code: 'KeyA',
+            text: 'A',
+            modifiers: 8,
+        })
         expect(out.modifiers).toBe(8)
         expect(out.text).toBe('A')
     })
@@ -85,25 +120,35 @@ describe('screencast-codec', () => {
     })
 
     it('serializes a url update message', () => {
-        expect(urlMessage('https://qa.safeinsights.org/study/42')).toBe('{"type":"url","value":"https://qa.safeinsights.org/study/42"}')
+        expect(urlMessage('https://qa.safeinsights.org/study/42')).toBe(
+            '{"type":"url","value":"https://qa.safeinsights.org/study/42"}'
+        )
         expect(JSON.parse(urlMessage('about:blank'))).toEqual({ type: 'url', value: 'about:blank' })
     })
 
     it('serializes a clipboard update message', () => {
-        expect(JSON.parse(clipboardMessage('hello world'))).toEqual({ type: 'clipboard', value: 'hello world' })
+        expect(JSON.parse(clipboardMessage('hello world'))).toEqual({
+            type: 'clipboard',
+            value: 'hello world',
+        })
         expect(JSON.parse(clipboardMessage(''))).toEqual({ type: 'clipboard', value: '' })
     })
 
     it('parses clipboard input events (read has no value; write requires a string value)', () => {
         expect(parseInput('{"kind":"clipboard-read"}')).toEqual({ kind: 'clipboard-read' })
-        expect(parseInput('{"kind":"clipboard-write","value":"pasted"}')).toEqual({ kind: 'clipboard-write', value: 'pasted' })
+        expect(parseInput('{"kind":"clipboard-write","value":"pasted"}')).toEqual({
+            kind: 'clipboard-write',
+            value: 'pasted',
+        })
         // clipboard-write without a string value is rejected as malformed.
         expect(parseInput('{"kind":"clipboard-write"}')).toBeNull()
         expect(parseInput('{"kind":"clipboard-write","value":42}')).toBeNull()
     })
 
     it('serializes a console line message', () => {
-        expect(JSON.parse(consoleMessage({ level: 'error', text: 'boom', at: 5, url: 'x.js' }))).toEqual({
+        expect(
+            JSON.parse(consoleMessage({ level: 'error', text: 'boom', at: 5, url: 'x.js' }))
+        ).toEqual({
             type: 'console',
             line: { level: 'error', text: 'boom', at: 5, url: 'x.js' },
         })

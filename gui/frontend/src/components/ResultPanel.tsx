@@ -6,11 +6,14 @@ import type { ResultEnvelope } from '../lib/stepStream'
 // browser on the right once the run finishes.
 export function ResultPanel({ result }: { result: ResultEnvelope }) {
     const ok = result.ok
-    const category = (result.failureCategory as string | undefined) ?? undefined
-    const cleanup = result.cleanup as { ok: boolean; failed: string[] } | undefined
+    const category = result.failureCategory
+    const cleanup = result.cleanup
 
     return (
-        <div className="fade-up" style={{ marginTop: 18, paddingTop: 16, borderTop: '2px solid var(--line-strong)' }}>
+        <div
+            className="fade-up"
+            style={{ marginTop: 18, paddingTop: 16, borderTop: '2px solid var(--line-strong)' }}
+        >
             <div
                 style={{
                     fontFamily: '"Fraunces", serif',
@@ -33,7 +36,14 @@ export function ResultPanel({ result }: { result: ResultEnvelope }) {
                 />
                 {ok ? 'Passed' : 'Failed'}
                 {!ok && category ? (
-                    <span className="mono" style={{ fontSize: 13, color: 'var(--ink-dim)', fontFamily: '"IBM Plex Mono", monospace' }}>
+                    <span
+                        className="mono"
+                        style={{
+                            fontSize: 13,
+                            color: 'var(--ink-dim)',
+                            fontFamily: '"IBM Plex Mono", monospace',
+                        }}
+                    >
                         · {category}
                     </span>
                 ) : null}
@@ -50,8 +60,8 @@ export function ResultPanel({ result }: { result: ResultEnvelope }) {
                         fontSize: 14,
                     }}
                 >
-                    ⚠ Cleanup failed: <span className="mono">{cleanup.failed.join(', ')}</span> — leftover data may need
-                    manual removal.
+                    ⚠ Cleanup failed: <span className="mono">{cleanup.failed?.join(', ')}</span> —
+                    leftover data may need manual removal.
                 </p>
             ) : null}
         </div>

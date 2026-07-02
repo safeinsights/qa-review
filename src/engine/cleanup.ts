@@ -22,7 +22,7 @@ export class CleanupClient {
     constructor(
         private baseURL: string,
         private authToken: string,
-        private fetchImpl: FetchImpl = fetch,
+        private fetchImpl: FetchImpl = fetch
     ) {}
 
     trackStudy(id: string) {

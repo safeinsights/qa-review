@@ -1,7 +1,8 @@
+import { Anchor, Button, Modal, Text, Textarea, TextInput } from '@mantine/core'
 import { useState } from 'react'
-import { Button, Modal, TextInput, Textarea, Text, Anchor } from '@mantine/core'
 import { reportIssue } from '../lib/ipc'
 import { runStateSummary } from '../lib/runState'
+import { useAsyncAction } from '../lib/useAsyncAction'
 
 // Header "Report Issue" action: opens a GitHub issue on the qa-review repo with
 // debug context auto-attached — the current Suites run state, or (on the Author
@@ -11,36 +12,33 @@ export function ReportIssueButton({ tab }: { tab: string | null }) {
     const [opened, setOpened] = useState(false)
     const [title, setTitle] = useState('')
     const [note, setNote] = useState('')
-    const [busy, setBusy] = useState(false)
-    const [error, setError] = useState('')
-    const [createdUrl, setCreatedUrl] = useState('')
 
     const isAuthoring = tab === 'exploratory'
     const contextLabel = isAuthoring
         ? 'the full Claude authoring transcript'
         : 'the current Suites run state'
 
+    const {
+        run,
+        busy,
+        error,
+        result: createdUrl,
+        reset,
+    } = useAsyncAction(async () => {
+        // Build the Suites run summary on the JS side; Go owns the transcript.
+        const runState = isAuthoring ? '' : runStateSummary()
+        return await reportIssue(title, note, tab ?? 'suites', runState)
+    })
+
     const open = () => {
         setTitle(isAuthoring ? 'Authoring issue: ' : 'Suite run issue: ')
         setNote('')
-        setError('')
-        setCreatedUrl('')
+        reset()
         setOpened(true)
     }
 
-    const submit = async () => {
-        setBusy(true)
-        setError('')
-        try {
-            // Build the Suites run summary on the JS side; Go owns the transcript.
-            const runState = isAuthoring ? '' : runStateSummary()
-            const url = await reportIssue(title, note, tab ?? 'suites', runState)
-            setCreatedUrl(url)
-        } catch (e) {
-            setError(String(e))
-        } finally {
-            setBusy(false)
-        }
+    const submit = () => {
+        void run()
     }
 
     return (
@@ -57,13 +55,24 @@ export function ReportIssueButton({ tab }: { tab: string | null }) {
                 report issue
             </Button>
 
-            <Modal opened={opened} onClose={() => setOpened(false)} title="Report an issue" centered size="lg">
+            <Modal
+                opened={opened}
+                onClose={() => setOpened(false)}
+                title="Report an issue"
+                centered
+                size="lg"
+            >
                 {createdUrl ? (
                     <div>
                         <Text size="sm" mb={8}>
                             Issue created:
                         </Text>
-                        <Anchor href={createdUrl} target="_blank" className="mono" style={{ fontSize: 13 }}>
+                        <Anchor
+                            href={createdUrl}
+                            target="_blank"
+                            className="mono"
+                            style={{ fontSize: 13 }}
+                        >
                             {createdUrl}
                         </Anchor>
                         <div style={{ marginTop: 16, textAlign: 'right' }}>
@@ -75,20 +84,21 @@ export function ReportIssueButton({ tab }: { tab: string | null }) {
                 ) : (
                     <div>
                         <Text size="sm" c="dimmed" mb={10}>
-                            This files a GitHub issue on <span className="mono">safeinsights/qa-review</span> with{' '}
-                            {contextLabel} and system/repo debug info attached automatically.
+                            This files a GitHub issue on{' '}
+                            <span className="mono">safeinsights/qa-review</span> with {contextLabel}{' '}
+                            and system/repo debug info attached automatically.
                         </Text>
                         <TextInput
                             label="Title"
                             value={title}
-                            onChange={(e) => setTitle(e.currentTarget.value)}
+                            onChange={e => setTitle(e.currentTarget.value)}
                             mb={10}
                         />
                         <Textarea
                             label="What happened? (optional)"
                             placeholder="Describe what you expected vs. what occurred…"
                             value={note}
-                            onChange={(e) => setNote(e.currentTarget.value)}
+                            onChange={e => setNote(e.currentTarget.value)}
                             autosize
                             minRows={3}
                             maxRows={8}
@@ -103,7 +113,13 @@ export function ReportIssueButton({ tab }: { tab: string | null }) {
                             <Button onClick={() => setOpened(false)} size="sm" variant="default">
                                 Cancel
                             </Button>
-                            <Button onClick={submit} loading={busy} size="sm" color="teal" disabled={!title.trim()}>
+                            <Button
+                                onClick={submit}
+                                loading={busy}
+                                size="sm"
+                                color="teal"
+                                disabled={!title.trim()}
+                            >
                                 Create issue
                             </Button>
                         </div>

@@ -1,9 +1,20 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { Encrypter, Decrypter, armor, generateIdentity as ageGenerateIdentity, identityToRecipient } from 'age-encryption'
-import { SHARED_ACCOUNTS, ENVIRONMENTS, PRIVATE_KEY_ENVS, privateKeyVar } from '../../config/environments'
+import {
+    generateIdentity as ageGenerateIdentity,
+    armor,
+    Decrypter,
+    Encrypter,
+    identityToRecipient,
+} from 'age-encryption'
 import { readIdentity } from '@/engine/identity'
 import { configDir } from '@/engine/paths'
+import {
+    ENVIRONMENTS,
+    PRIVATE_KEY_ENVS,
+    privateKeyVar,
+    SHARED_ACCOUNTS,
+} from '../../config/environments'
 
 // Flat var map the engine consumes (same shape `process.env` had). Keys are the
 // committed var names declared in config/environments.ts (ADMIN_EMAIL,
@@ -35,10 +46,10 @@ export function isEncryptedValue(value: string): boolean {
 // encrypted when committed to the project tier. Derived from config/environments.ts
 // so the list can't drift from the declared accounts.
 export function secretVarNames(): string[] {
-    return Object.values(SHARED_ACCOUNTS).flatMap((a) => [
+    return Object.values(SHARED_ACCOUNTS).flatMap(a => [
         a.passwordVar,
         a.mfaVar,
-        ...PRIVATE_KEY_ENVS.map((env) => privateKeyVar(a, env)),
+        ...PRIVATE_KEY_ENVS.map(env => privateKeyVar(a, env)),
     ])
 }
 
@@ -49,12 +60,12 @@ export function isSecretVar(key: string): boolean {
 // Every var name the settings system knows about, in a stable display order:
 // per-env base URLs, then each account's email + password + MFA code.
 export function knownVarNames(): string[] {
-    const baseUrls = ENVIRONMENTS.map((e) => e.baseUrlVar)
-    const accounts = Object.values(SHARED_ACCOUNTS).flatMap((a) => [
+    const baseUrls = ENVIRONMENTS.map(e => e.baseUrlVar)
+    const accounts = Object.values(SHARED_ACCOUNTS).flatMap(a => [
         a.emailVar,
         a.passwordVar,
         a.mfaVar,
-        ...PRIVATE_KEY_ENVS.map((env) => privateKeyVar(a, env)),
+        ...PRIVATE_KEY_ENVS.map(env => privateKeyVar(a, env)),
     ])
     return [...baseUrls, ...accounts]
 }
@@ -94,7 +105,8 @@ export async function publicKeyFromIdentity(identity: string): Promise<string> {
 
 // Encrypt a value to one or more X25519 recipients ("age1…"). Returns an armored blob.
 export async function encryptToRecipients(plain: string, recipients: string[]): Promise<string> {
-    if (recipients.length === 0) throw new Error('encryptToRecipients: no recipients (keyring is empty)')
+    if (recipients.length === 0)
+        throw new Error('encryptToRecipients: no recipients (keyring is empty)')
     const e = new Encrypter()
     for (const r of recipients) e.addRecipient(r)
     const binary = await e.encrypt(plain)
@@ -140,7 +152,9 @@ export async function loadSettings(opts: LoadOptions = {}): Promise<Vars> {
         try {
             decryptedSecrets[key] = await decryptWithIdentity(value, identity)
         } catch (e) {
-            throw new Error(`Cannot decrypt ${key}: your key may not be a recipient yet — ask a teammate to rekey (${(e as Error).message})`)
+            throw new Error(
+                `Cannot decrypt ${key}: your key may not be a recipient yet — ask a teammate to rekey (${(e as Error).message})`
+            )
         }
     }
 

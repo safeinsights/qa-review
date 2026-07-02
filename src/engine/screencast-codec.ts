@@ -107,10 +107,25 @@ export function consoleMessage(line: ConsoleLine): string {
 export type MouseButton = 'left' | 'right' | 'middle' | 'none'
 
 export type InputEvent =
-    | { kind: 'mouse'; action: 'down' | 'up' | 'move' | 'wheel'; x: number; y: number; button: MouseButton; deltaX?: number; deltaY?: number }
+    | {
+          kind: 'mouse'
+          action: 'down' | 'up' | 'move' | 'wheel'
+          x: number
+          y: number
+          button: MouseButton
+          deltaX?: number
+          deltaY?: number
+      }
     // `modifiers` is the CDP bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8) so
     // shortcuts (Cmd/Ctrl+A, +C, …) reach the page as real modified keystrokes.
-    | { kind: 'key'; action: 'down' | 'up'; key: string; code: string; text?: string; modifiers?: number }
+    | {
+          kind: 'key'
+          action: 'down' | 'up'
+          key: string
+          code: string
+          text?: string
+          modifiers?: number
+      }
     // Clipboard sync (GUI→page): the webview pasted `value` into the page.
     | { kind: 'clipboard-write'; value: string }
     // Clipboard sync (page→GUI): the webview asks for the page's current copy
@@ -128,8 +143,10 @@ export function parseInput(raw: string): InputEvent | null {
     }
     if (obj && typeof obj === 'object') {
         const kind = (obj as { kind?: unknown }).kind
-        if (kind === 'mouse' || kind === 'key' || kind === 'clipboard-read') return obj as InputEvent
-        if (kind === 'clipboard-write' && typeof (obj as { value?: unknown }).value === 'string') return obj as InputEvent
+        if (kind === 'mouse' || kind === 'key' || kind === 'clipboard-read')
+            return obj as InputEvent
+        if (kind === 'clipboard-write' && typeof (obj as { value?: unknown }).value === 'string')
+            return obj as InputEvent
     }
     return null
 }

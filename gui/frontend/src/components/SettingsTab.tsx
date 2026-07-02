@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react'
-import { Button, PasswordInput, SegmentedControl, Tabs, Textarea, TextInput, Alert } from '@mantine/core'
-import { readSettings, writeSetting, type SettingField } from '../lib/ipc'
+import {
+    Alert,
+    Button,
+    PasswordInput,
+    SegmentedControl,
+    Tabs,
+    Textarea,
+    TextInput,
+} from '@mantine/core'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { readSettings, type SettingField, writeSetting } from '../lib/ipc'
 import { RequestAccessButton } from './RequestAccessButton'
 import { SetupDoctorButton } from './SetupDoctorButton'
 
@@ -17,7 +25,7 @@ export function SettingsTab() {
     const [error, setError] = useState('')
     const [savedKey, setSavedKey] = useState('')
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             const view = await readSettings()
             setFields(view.fields)
@@ -32,14 +40,14 @@ export function SettingsTab() {
         } catch (e) {
             setError((e as Error).message)
         }
-    }
+    }, [])
 
     useEffect(() => {
         void load()
-    }, [])
+    }, [load])
 
     const setDraft = (key: string, patch: Partial<Draft>) =>
-        setDrafts((d) => ({ ...d, [key]: { ...d[key], ...patch } }))
+        setDrafts(d => ({ ...d, [key]: { ...d[key], ...patch } }))
 
     const save = async (f: SettingField) => {
         setError('')
@@ -57,13 +65,38 @@ export function SettingsTab() {
     const rowProps = { drafts, setDraft, save, savedKey, hasIdentity }
 
     // Ungrouped fields (base URLs) render first; the rest group into account cards.
-    const ungrouped = fields.filter((f) => !f.group)
-    const groups = [...new Set(fields.filter((f) => f.group).map((f) => f.group))]
+    const ungrouped = fields.filter(f => !f.group)
+    // Prepare each account card up front: its group name, the plain (non-env)
+    // fields, and — for the env-tagged results private keys that share a label —
+    // one deduped entry per label carrying just that label's env-tagged fields.
+    const groupCards = useMemo(() => {
+        const groups = [...new Set(fields.filter(f => f.group).map(f => f.group))]
+        return groups.map(group => {
+            const groupFields = fields.filter(f => f.group === group)
+            const plain = groupFields.filter(f => !f.env)
+            const envLabels = [...new Set(groupFields.filter(f => f.env).map(f => f.label))]
+            return {
+                group,
+                plain,
+                envGroups: envLabels.map(label => ({
+                    label,
+                    fields: groupFields.filter(f => f.env && f.label === label),
+                })),
+            }
+        })
+    }, [fields])
 
     return (
         <div style={{ maxWidth: 760 }}>
             <Card>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 12,
+                    }}
+                >
                     <div>
                         <div style={{ fontWeight: 600 }}>Setup Doctor</div>
                         <div className="kicker" style={{ marginTop: 2 }}>
@@ -81,41 +114,40 @@ export function SettingsTab() {
             ) : null}
 
             {error ? (
-                <Alert color="red" mt="md" title="Settings error" onClose={() => setError('')} withCloseButton>
+                <Alert
+                    color="red"
+                    mt="md"
+                    title="Settings error"
+                    onClose={() => setError('')}
+                    withCloseButton
+                >
                     {error}
                 </Alert>
             ) : null}
 
             {ungrouped.length ? (
                 <Section title="Environment">
-                    {ungrouped.map((f) => (
+                    {ungrouped.map(f => (
                         <FieldRow key={f.key} field={f} {...rowProps} />
                     ))}
                 </Section>
             ) : null}
 
-            {groups.map((group) => {
-                const groupFields = fields.filter((f) => f.group === group)
-                const plain = groupFields.filter((f) => !f.env)
-                // Env-tagged fields (results private keys) share a label but differ
-                // by env; group them by label so each renders as one tabbed block.
-                const envLabels = [...new Set(groupFields.filter((f) => f.env).map((f) => f.label))]
-                return (
-                    <Section key={group} title={group} subtitle="account">
-                        {plain.map((f) => (
-                            <FieldRow key={f.key} field={f} {...rowProps} />
-                        ))}
-                        {envLabels.map((label) => (
-                            <EnvTabbedField
-                                key={`${group}:${label}`}
-                                label={label}
-                                fields={groupFields.filter((f) => f.env && f.label === label)}
-                                {...rowProps}
-                            />
-                        ))}
-                    </Section>
-                )
-            })}
+            {groupCards.map(card => (
+                <Section key={card.group} title={card.group} subtitle="account">
+                    {card.plain.map(f => (
+                        <FieldRow key={f.key} field={f} {...rowProps} />
+                    ))}
+                    {card.envGroups.map(eg => (
+                        <EnvTabbedField
+                            key={`${card.group}:${eg.label}`}
+                            label={eg.label}
+                            fields={eg.fields}
+                            {...rowProps}
+                        />
+                    ))}
+                </Section>
+            ))}
         </div>
     )
 }
@@ -134,21 +166,25 @@ interface RowProps {
 
 // One account's per-env private key: a single label with a tab per env, each tab
 // holding a normal (label-less) FieldRow so qa and staging are entered separately.
-function EnvTabbedField({ label, fields, ...rowProps }: { label: string; fields: SettingField[] } & Omit<RowProps, 'field'>) {
+function EnvTabbedField({
+    label,
+    fields,
+    ...rowProps
+}: { label: string; fields: SettingField[] } & Omit<RowProps, 'field'>) {
     const [tab, setTab] = useState(fields[0]?.env ?? 'qa')
     return (
         <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
-            <label style={{ fontWeight: 600 }}>{label}</label>
-            <Tabs value={tab} onChange={(v) => setTab(v ?? fields[0]?.env ?? 'qa')} mt={6}>
+            <span style={{ fontWeight: 600 }}>{label}</span>
+            <Tabs value={tab} onChange={v => setTab(v ?? fields[0]?.env ?? 'qa')} mt={6}>
                 <Tabs.List>
-                    {fields.map((f) => (
+                    {fields.map(f => (
                         <Tabs.Tab key={f.key} value={f.env}>
                             {f.env}
                             {f.set ? ' ✓' : ''}
                         </Tabs.Tab>
                     ))}
                 </Tabs.List>
-                {fields.map((f) => (
+                {fields.map(f => (
                     <Tabs.Panel key={f.key} value={f.env} pt={10}>
                         <FieldRow field={f} {...rowProps} hideLabel />
                     </Tabs.Panel>
@@ -158,7 +194,15 @@ function EnvTabbedField({ label, fields, ...rowProps }: { label: string; fields:
     )
 }
 
-function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hideLabel }: RowProps) {
+function FieldRow({
+    field: f,
+    drafts,
+    setDraft,
+    save,
+    savedKey,
+    hasIdentity,
+    hideLabel,
+}: RowProps) {
     const draft = drafts[f.key] ?? { value: '', tier: 'project' as const }
     const blocked = f.secret && draft.tier === 'project' && !hasIdentity
     // The per-env results private keys are the only env-tagged secrets, and they
@@ -167,7 +211,7 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hid
     const tierControl = (
         <SegmentedControl
             value={draft.tier}
-            onChange={(v) => setDraft(f.key, { tier: v as Draft['tier'] })}
+            onChange={v => setDraft(f.key, { tier: v as Draft['tier'] })}
             data={[
                 { label: f.secret ? 'Project (encrypted)' : 'Project', value: 'project' },
                 { label: 'Local', value: 'local' },
@@ -186,9 +230,21 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hid
         </Button>
     )
     return (
-        <div style={hideLabel ? undefined : { borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: hideLabel ? 'flex-end' : 'space-between', alignItems: 'baseline' }}>
-                {hideLabel ? null : <label style={{ fontWeight: 600 }}>{f.label}</label>}
+        <div
+            style={
+                hideLabel
+                    ? undefined
+                    : { borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }
+            }
+        >
+            <div
+                style={{
+                    display: 'flex',
+                    justifyContent: hideLabel ? 'flex-end' : 'space-between',
+                    alignItems: 'baseline',
+                }}
+            >
+                {hideLabel ? null : <span style={{ fontWeight: 600 }}>{f.label}</span>}
                 <span className="kicker">
                     {f.set ? `current: ${tierLabel(f.tier)}` : 'not set'}
                     {f.secret ? ' · secret' : ''}
@@ -201,14 +257,26 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hid
                 <div style={{ marginTop: 8 }}>
                     <Textarea
                         value={draft.value}
-                        onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
-                        placeholder={f.set ? 'set — paste a new PEM to replace' : '-----BEGIN PRIVATE KEY-----\n…'}
+                        onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
+                        placeholder={
+                            f.set
+                                ? 'set — paste a new PEM to replace'
+                                : '-----BEGIN PRIVATE KEY-----\n…'
+                        }
                         autosize
                         minRows={4}
                         maxRows={12}
                         styles={{ input: { fontFamily: 'var(--mono, monospace)', fontSize: 12 } }}
                     />
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
+                    <div
+                        style={{
+                            display: 'flex',
+                            gap: 12,
+                            alignItems: 'center',
+                            justifyContent: 'flex-end',
+                            marginTop: 8,
+                        }}
+                    >
                         {tierControl}
                         {saveButton}
                     </div>
@@ -219,14 +287,14 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hid
                         <PasswordInput
                             style={{ flex: 1 }}
                             value={draft.value}
-                            onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
+                            onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
                             placeholder={f.set ? '•••••• (set — type to replace)' : 'enter a value'}
                         />
                     ) : (
                         <TextInput
                             style={{ flex: 1 }}
                             value={draft.value}
-                            onChange={(e) => setDraft(f.key, { value: e.currentTarget.value })}
+                            onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
                             placeholder="enter a value"
                         />
                     )}
@@ -236,18 +304,36 @@ function FieldRow({ field: f, drafts, setDraft, save, savedKey, hasIdentity, hid
             )}
             {blocked ? (
                 <div className="kicker" style={{ marginTop: 6, color: '#b04a3a' }}>
-                    request access (Settings ▸ Request access) to get an identity before committing project secrets
+                    request access (Settings ▸ Request access) to get an identity before committing
+                    project secrets
                 </div>
             ) : null}
         </div>
     )
 }
 
-function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Section({
+    title,
+    subtitle,
+    children,
+}: {
+    title: string
+    subtitle?: string
+    children: React.ReactNode
+}) {
     return (
         <Card mt="md">
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                <h3 style={{ margin: 0, fontFamily: '"Fraunces", serif', fontWeight: 600, fontSize: 18 }}>{title}</h3>
+                <h3
+                    style={{
+                        margin: 0,
+                        fontFamily: '"Fraunces", serif',
+                        fontWeight: 600,
+                        fontSize: 18,
+                    }}
+                >
+                    {title}
+                </h3>
                 {subtitle ? <span className="kicker">{subtitle}</span> : null}
             </div>
             {children}

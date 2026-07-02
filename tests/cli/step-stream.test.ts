@@ -1,6 +1,14 @@
-import { describe, it, expect } from 'vitest'
-import { stepLine, resultLine, parseLine, pausedLine, pauseSetLine, resumeLine, parseControlLine } from '@/cli/step-stream'
-import type { StepEvent, RunResult } from '@/engine/types'
+import { describe, expect, it } from 'vitest'
+import {
+    parseControlLine,
+    parseLine,
+    pausedLine,
+    pauseSetLine,
+    resultLine,
+    resumeLine,
+    stepLine,
+} from '@/cli/step-stream'
+import type { RunResult, StepEvent } from '@/engine/types'
 
 const step: StepEvent = { name: 'Open dashboard', status: 'passed', at: 123 }
 
@@ -46,7 +54,10 @@ describe('step-stream control channel (inbound)', () => {
     })
 
     it('parses a pause-set message with a step list', () => {
-        expect(parseControlLine(pauseSetLine(['A', 'B']))).toEqual({ type: 'pause-set', steps: ['A', 'B'] })
+        expect(parseControlLine(pauseSetLine(['A', 'B']))).toEqual({
+            type: 'pause-set',
+            steps: ['A', 'B'],
+        })
     })
 
     it('parses an empty pause-set (all pauses cleared)', () => {

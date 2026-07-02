@@ -1,15 +1,14 @@
-import { useEffect, useState } from 'react'
 import { Button } from '@mantine/core'
-import { sync, resetAndSync, rekey, isInDrift } from '../lib/ipc'
+import { useEffect, useState } from 'react'
+import { isInDrift, rekey, resetAndSync, sync } from '../lib/ipc'
+import { useAsyncAction } from '../lib/useAsyncAction'
 
 export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } = {}) {
     const [status, setStatus] = useState('')
-    const [busy, setBusy] = useState(false)
     const [syncState, setSyncState] = useState('')
     const [drift, setDrift] = useState(false)
 
-    const runSync = async () => {
-        setBusy(true)
+    const syncAction = useAsyncAction(async () => {
         setStatus('Syncing…')
         setDrift(false)
         try {
@@ -31,26 +30,18 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
             }
         } catch (e) {
             setSyncState('')
-            setStatus('Sync failed: ' + String(e))
-        } finally {
-            setBusy(false)
+            setStatus(`Sync failed: ${String(e)}`)
         }
-    }
+    })
 
-    // Sync once on startup.
+    // Sync once on startup. `run` is stable, so this fires exactly once.
+    const runSync = syncAction.run
     useEffect(() => {
         void runSync()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [runSync])
 
-    const reset = async () => {
-        if (
-            !window.confirm(
-                'Discard uncommitted edits (local commits are kept) and sync?',
-            )
-        )
-            return
-        setBusy(true)
+    const resetAction = useAsyncAction(async () => {
+        if (!window.confirm('Discard uncommitted edits (local commits are kept) and sync?')) return
         setStatus('Resetting & syncing…')
         try {
             const result = await resetAndSync()
@@ -66,24 +57,41 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
                 setStatus(result)
             }
         } catch (e) {
-            setStatus('Reset failed: ' + String(e))
-        } finally {
-            setBusy(false)
+            setStatus(`Reset failed: ${String(e)}`)
         }
-    }
+    })
 
+    const rekeyAction = useAsyncAction(async () => {
+        setStatus('Rekeying…')
+        try {
+            await rekey()
+            setStatus('Rekeyed.')
+            setDrift(await isInDrift())
+        } catch (e) {
+            setStatus(`Rekey failed: ${String(e)}`)
+        }
+    })
+
+    const busy = syncAction.busy || resetAction.busy || rekeyAction.busy
     const needsReset = syncState === 'skipped-dirty' || syncState === 'skipped-diverged'
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }}>
+            <div
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 12,
+                }}
+            >
                 {status ? (
                     <span className="mono st-dim" style={{ fontSize: 12 }}>
                         {status}
                     </span>
                 ) : null}
                 <Button
-                    onClick={runSync}
+                    onClick={() => void syncAction.run()}
                     loading={busy}
                     variant="outline"
                     color="dark"
@@ -100,7 +108,7 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
                 <Banner
                     text="Sync skipped — working copy has uncommitted edits or diverged."
                     actionLabel="Reset to clean & sync"
-                    onClick={reset}
+                    onClick={() => void resetAction.run()}
                     busy={busy}
                 />
             ) : null}
@@ -108,19 +116,7 @@ export function SyncButton({ extraActions }: { extraActions?: React.ReactNode } 
                 <Banner
                     text="Secrets out of sync with the keyring."
                     actionLabel="Rekey"
-                    onClick={async () => {
-                        setBusy(true)
-                        setStatus('Rekeying…')
-                        try {
-                            await rekey()
-                            setStatus('Rekeyed.')
-                            setDrift(await isInDrift())
-                        } catch (e) {
-                            setStatus('Rekey failed: ' + String(e))
-                        } finally {
-                            setBusy(false)
-                        }
-                    }}
+                    onClick={() => void rekeyAction.run()}
                     busy={busy}
                 />
             ) : null}

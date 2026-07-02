@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { resultsRoot as resultsRootDir } from '@/engine/paths'
-import { defaultDeps } from '@/engine/run'
 import type { RunDeps } from '@/engine/run'
+import { defaultDeps } from '@/engine/run'
 import type { StepEvent } from '@/engine/types'
 
 // Like defaultDeps(), but launches a VISIBLE Chromium so a QA tester can watch
@@ -13,7 +13,7 @@ export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars
     return {
         ...base,
         onStep,
-        openBrowser: async (env) => {
+        openBrowser: async env => {
             const { chromium } = await import('@playwright/test')
             // Visible browser, but still the user's installed Chrome (channel:'chrome').
             const browser = await chromium.launch({ headless: false, channel: 'chrome' })
@@ -21,7 +21,9 @@ export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot },
             })
-            await context.tracing.start({ screenshots: true, snapshots: true, sources: true }).catch(() => {})
+            await context.tracing
+                .start({ screenshots: true, snapshots: true, sources: true })
+                .catch(() => {})
             const page = await context.newPage()
             const video = page.video()
             let browserClosed = false
@@ -37,7 +39,9 @@ export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars
                     await context.close().catch(() => {})
                 },
                 saveTraceTo: async (bundleDir: string) => {
-                    await context.tracing.stop({ path: path.join(bundleDir, 'trace.zip') }).catch(() => {})
+                    await context.tracing
+                        .stop({ path: path.join(bundleDir, 'trace.zip') })
+                        .catch(() => {})
                 },
                 saveVideoTo: async (bundleDir: string) => {
                     try {

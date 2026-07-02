@@ -1,11 +1,11 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "qa-runner",
-  "outputfilename": "qa-runner",
-  "frontend:dir": "frontend",
-  "frontend:install": "pnpm install",
-  "frontend:build": "pnpm build",
-  "frontend:dev:watcher": "pnpm dev",
-  "frontend:dev:serverUrl": "http://localhost:1420",
-  "wailsjsdir": "./frontend/src/lib"
+    "$schema": "https://wails.io/schemas/config.v2.json",
+    "name": "qa-runner",
+    "outputfilename": "qa-runner",
+    "frontend:dir": "frontend",
+    "frontend:install": "pnpm install",
+    "frontend:build": "pnpm build",
+    "frontend:dev:watcher": "pnpm dev",
+    "frontend:dev:serverUrl": "http://localhost:1420",
+    "wailsjsdir": "./frontend/src/lib"
 }

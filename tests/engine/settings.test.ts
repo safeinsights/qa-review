@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-    loadSettings,
-    isSecretVar,
-    secretVarNames,
-    PROJECT_FILE,
-    SECRETS_FILE,
-    LOCAL_FILE,
-    generateIdentity,
-    publicKeyFromIdentity,
-    encryptToRecipients,
     decryptWithIdentity,
+    encryptToRecipients,
+    generateIdentity,
+    isSecretVar,
+    LOCAL_FILE,
+    loadSettings,
+    PROJECT_FILE,
+    publicKeyFromIdentity,
+    SECRETS_FILE,
+    secretVarNames,
 } from '@/engine/settings'
 
 let dir: string
@@ -119,8 +119,10 @@ describe('loadSettings with identities', () => {
         const id = await generateIdentity()
         const pub = await publicKeyFromIdentity(id)
         fs.writeFileSync(path.join(dir, 'age-identity.txt'), `${id}\n`)
-        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
-            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) }))
+        fs.writeFileSync(
+            path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) })
+        )
         const vars = await loadSettings({ dir, env: {} })
         expect(vars.ADMIN_PASSWORD).toBe('pw')
     })
@@ -129,8 +131,10 @@ describe('loadSettings with identities', () => {
         const dir = settingsDir()
         const id = await generateIdentity()
         const pub = await publicKeyFromIdentity(id)
-        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
-            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) }))
+        fs.writeFileSync(
+            path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('pw', [pub]) })
+        )
         // No identity file written. process.env override supplies the value instead.
         const vars = await loadSettings({ dir, env: { ADMIN_PASSWORD: 'from-env' } })
         expect(vars.ADMIN_PASSWORD).toBe('from-env')
@@ -138,7 +142,10 @@ describe('loadSettings with identities', () => {
 
     it('passes plaintext secrets through unchanged', async () => {
         const dir = settingsDir()
-        fs.writeFileSync(path.join(dir, 'settings.secrets.json'), JSON.stringify({ ADMIN_EMAIL: 'a@x.com' }))
+        fs.writeFileSync(
+            path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_EMAIL: 'a@x.com' })
+        )
         const vars = await loadSettings({ dir, env: {} })
         expect(vars.ADMIN_EMAIL).toBe('a@x.com')
     })
@@ -148,10 +155,14 @@ describe('loadSettings with identities', () => {
         const id = await generateIdentity()
         const pub = await publicKeyFromIdentity(id)
         fs.writeFileSync(path.join(dir, 'age-identity.txt'), `${id}\n`)
-        fs.writeFileSync(path.join(dir, 'settings.secrets.json'),
-            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('committed', [pub]) }))
-        fs.writeFileSync(path.join(dir, 'settings.local.json'),
-            JSON.stringify({ ADMIN_PASSWORD: 'local-wins' }))
+        fs.writeFileSync(
+            path.join(dir, 'settings.secrets.json'),
+            JSON.stringify({ ADMIN_PASSWORD: await encryptToRecipients('committed', [pub]) })
+        )
+        fs.writeFileSync(
+            path.join(dir, 'settings.local.json'),
+            JSON.stringify({ ADMIN_PASSWORD: 'local-wins' })
+        )
         const vars = await loadSettings({ dir, env: {} })
         expect(vars.ADMIN_PASSWORD).toBe('local-wins')
     })

@@ -1,4 +1,4 @@
-import { stepsByIndex, type StepEnvelope } from '../lib/stepStream'
+import { type StepEnvelope, stepsByIndex } from '../lib/stepStream'
 
 // Render the ordered step list. Rows come from the suite's STATIC step names, so
 // the list appears before a run — click a not-yet-run row to toggle a "pause
@@ -37,7 +37,7 @@ export function StepChecklist({
     const rows: { name: string; ev?: StepEnvelope }[] =
         stepNames.length > 0
             ? stepNames.map((name, i) => ({ name, ev: byIndex[i] }))
-            : byIndex.map((ev) => ({ name: ev.name, ev }))
+            : byIndex.map(ev => ({ name: ev.name, ev }))
 
     if (rows.length === 0) return null
 
@@ -55,12 +55,12 @@ export function StepChecklist({
                 const canToggle = !alreadyRan
                 return (
                     <div
-                        key={`${i}:${row.name}`}
+                        // Rows are intentionally positional — a suite may repeat a step
+                        // name (e.g. study-happy-path's account switches), so the index is
+                        // the only stable identity for a row.
+                        // biome-ignore lint/suspicious/noArrayIndexKey: positional rows, see above
+                        key={`${row.name}:${i}`}
                         className="fade-up"
-                        onClick={() => {
-                            if (canToggle) onTogglePause(row.name)
-                        }}
-                        title={canToggle ? 'Click to pause before this step' : undefined}
                         style={{
                             display: 'flex',
                             alignItems: 'baseline',
@@ -84,43 +84,88 @@ export function StepChecklist({
                             transition: 'background 0.12s',
                         }}
                     >
-                        <span className="mono" style={{ color: 'var(--ink-faint)', fontSize: 11 }}>
-                            {String(i + 1).padStart(2, '0')}
-                        </span>
-                        <Mark status={status} />
-                        <span style={{ flex: 1, minWidth: 0, color: status === 'failed' ? 'var(--red)' : 'var(--ink)' }}>
-                            {row.name}
-                            {s?.error ? (
-                                <span
-                                    className="mono st-fail"
-                                    style={{
-                                        display: 'block',
-                                        fontSize: 12,
-                                        marginTop: 2,
-                                        // Playwright errors contain long unbroken runs (=== separators,
-                                        // URLs) that otherwise overflow the fixed-width steps panel.
-                                        whiteSpace: 'pre-wrap',
-                                        overflowWrap: 'anywhere',
-                                        wordBreak: 'break-word',
-                                    }}
-                                >
-                                    ↳ {s.error}
-                                </span>
-                            ) : null}
-                        </span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (canToggle) onTogglePause(row.name)
+                            }}
+                            title={canToggle ? 'Click to pause before this step' : undefined}
+                            style={{
+                                // Reset the native button chrome so the row looks
+                                // identical to the former clickable <div>.
+                                appearance: 'none',
+                                border: 'none',
+                                background: 'transparent',
+                                font: 'inherit',
+                                textAlign: 'left',
+                                padding: 0,
+                                margin: 0,
+                                color: 'inherit',
+                                flex: 1,
+                                minWidth: 0,
+                                display: 'flex',
+                                alignItems: 'baseline',
+                                gap: 12,
+                                cursor: canToggle ? 'pointer' : 'default',
+                            }}
+                        >
+                            <span
+                                className="mono"
+                                style={{ color: 'var(--ink-faint)', fontSize: 11 }}
+                            >
+                                {String(i + 1).padStart(2, '0')}
+                            </span>
+                            <Mark status={status} />
+                            <span
+                                style={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    color: status === 'failed' ? 'var(--red)' : 'var(--ink)',
+                                }}
+                            >
+                                {row.name}
+                                {s?.error ? (
+                                    <span
+                                        className="mono st-fail"
+                                        style={{
+                                            display: 'block',
+                                            fontSize: 12,
+                                            marginTop: 2,
+                                            // Playwright errors contain long unbroken runs (=== separators,
+                                            // URLs) that otherwise overflow the fixed-width steps panel.
+                                            whiteSpace: 'pre-wrap',
+                                            overflowWrap: 'anywhere',
+                                            wordBreak: 'break-word',
+                                        }}
+                                    >
+                                        ↳ {s.error}
+                                    </span>
+                                ) : null}
+                            </span>
+                        </button>
                         {/* Right slot: a captured snapshot (click to view) takes
                             precedence once a step has run; otherwise a ⏸ marker. */}
-                        {hasShot ? (
-                            <span
+                        {hasShot && s ? (
+                            <button
+                                type="button"
                                 title="View snapshot at this step"
-                                onClick={(e) => {
+                                onClick={e => {
                                     e.stopPropagation()
-                                    onSelect(i, s!)
+                                    onSelect(i, s)
                                 }}
-                                style={{ fontSize: 13, cursor: 'pointer', opacity: selected ? 1 : 0.6 }}
+                                style={{
+                                    appearance: 'none',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    padding: 0,
+                                    margin: 0,
+                                    fontSize: 13,
+                                    cursor: 'pointer',
+                                    opacity: selected ? 1 : 0.6,
+                                }}
                             >
                                 📷
-                            </span>
+                            </button>
                         ) : isPaused ? (
                             <span
                                 title={isHaltedHere ? 'Paused here' : 'Will pause before this step'}
@@ -137,9 +182,28 @@ export function StepChecklist({
 }
 
 function Mark({ status }: { status: string }) {
-    if (status === 'passed') return <span className="st-pass mono" style={{ fontWeight: 600 }}>✓</span>
-    if (status === 'failed') return <span className="st-fail mono" style={{ fontWeight: 600 }}>✗</span>
-    if (status === 'running') return <span className="st-warn mono" style={{ fontWeight: 600 }}>▸</span>
+    if (status === 'passed')
+        return (
+            <span className="st-pass mono" style={{ fontWeight: 600 }}>
+                ✓
+            </span>
+        )
+    if (status === 'failed')
+        return (
+            <span className="st-fail mono" style={{ fontWeight: 600 }}>
+                ✗
+            </span>
+        )
+    if (status === 'running')
+        return (
+            <span className="st-warn mono" style={{ fontWeight: 600 }}>
+                ▸
+            </span>
+        )
     // Not yet reached.
-    return <span className="mono" style={{ fontWeight: 600, color: 'var(--ink-faint)' }}>○</span>
+    return (
+        <span className="mono" style={{ fontWeight: 600, color: 'var(--ink-faint)' }}>
+            ○
+        </span>
+    )
 }

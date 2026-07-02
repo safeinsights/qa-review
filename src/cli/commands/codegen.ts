@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { compileSuite } from '@/cli/commands/build-suites'
 import { parseTrace } from '@/codegen/action-trace'
 import { generateSuite } from '@/codegen/generate-suite'
 import { repoDir, suitesCompiledDir } from '@/engine/paths'
-import { compileSuite } from '@/cli/commands/build-suites'
 
 // Repo root for writing the generated suite into src/suites. In the packaged app
 // this is the cloned repo (QAR_REPO_DIR); for `pnpm qar` it's this checkout.
@@ -37,7 +37,7 @@ export async function codegenCommand(opts: Record<string, string>): Promise<void
         await compileSuite(outPath, suitesCompiledDir())
     } catch (e) {
         fs.rmSync(outPath, { force: true })
-        console.error('Generated suite failed to compile; removed it.\n' + (e as Error).message)
+        console.error(`Generated suite failed to compile; removed it.\n${(e as Error).message}`)
         process.exit(1)
     }
     console.log(`ok: ${outPath} compiled`)
