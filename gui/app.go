@@ -52,6 +52,38 @@ func withGuiPath() []string {
 	return append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
 }
 
+// guiPath extracts the PATH value from a withGuiPath() env slice.
+func guiPath(env []string) string {
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			return strings.TrimPrefix(e, "PATH=")
+		}
+	}
+	return os.Getenv("PATH")
+}
+
+// guiResolve turns a bare command name into an absolute path resolved against the
+// GUI-augmented PATH. This is REQUIRED for any tool that lives only in Homebrew
+// (/opt/homebrew/bin): exec.Command("gh") resolves the binary via exec.LookPath
+// against the *parent process* PATH at Command()-time — NOT against cmd.Env — and a
+// Finder-launched app's process PATH is just /usr/bin:/bin. So setting cmd.Env alone
+// leaves the lookup broken and the command fails "not found" even though the child
+// env's PATH is correct. Passing the absolute path sidesteps LookPath entirely.
+// Returns the name unchanged if it can't be resolved (already absolute, or missing —
+// let exec surface the real error).
+func guiResolve(name string) string {
+	if strings.ContainsRune(name, '/') {
+		return name
+	}
+	for _, d := range filepath.SplitList(guiPath(withGuiPath())) {
+		full := filepath.Join(d, name)
+		if info, err := os.Stat(full); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return full
+		}
+	}
+	return name
+}
+
 // appVersion is reported in issue reports. Override at build time with
 // -ldflags "-X main.appVersion=<v>"; defaults to "dev" for local/wails-dev runs.
 var appVersion = "dev"
@@ -864,7 +896,7 @@ func copyFile(src, dest string) error {
 
 // GitPull runs `git pull` in the cloned repo and returns combined output.
 func (a *App) GitPull(cwd string) (string, error) {
-	cmd := exec.Command("git", "pull")
+	cmd := exec.Command(guiResolve("git"), "pull")
 	cmd.Dir = repoDir()
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
@@ -1003,7 +1035,7 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 }
 
 func (a *App) git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command(guiResolve("git"), args...)
 	cmd.Dir = dir
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
@@ -1199,7 +1231,7 @@ func (a *App) PromoteSuite(name string) (string, error) {
 		if step[0] == "qar" {
 			cmd = engineCmd(step[1:]...) // bundled engine; sets Dir + env itself
 		} else {
-			cmd = exec.Command(step[0], step[1:]...)
+			cmd = exec.Command(guiResolve(step[0]), step[1:]...)
 			cmd.Dir = repo
 			cmd.Env = withGuiPath()
 		}
@@ -1267,7 +1299,7 @@ func (a *App) ReportIssue(title, note, tab, runState string) (string, error) {
 	}
 	bodyFile.Close()
 
-	cmd := exec.Command("gh", "issue", "create",
+	cmd := exec.Command(guiResolve("gh"), "issue", "create",
 		"--repo", qaReviewSlug,
 		"--title", title,
 		"--body-file", bodyFile.Name(),
@@ -1352,13 +1384,19 @@ type DoctorCheck struct {
 }
 
 // runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
-// finds Homebrew tools) and returns the trimmed first line of combined output.
+// finds Homebrew tools). On success it returns the trimmed first line of output (the
+// version string); on FAILURE it returns the full combined output so the doctor can
+// show the real reason — a truncated first line hides errors that print on stderr or
+// later lines, which is exactly what made the Finder-PATH bug undiagnosable.
 func runTool(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(guiResolve(name), args...)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	return line, err
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil {
+		return trimmed, err
+	}
+	return strings.SplitN(trimmed, "\n", 2)[0], nil
 }
 
 // RunDoctor checks every prerequisite app/state and validates it (not just "on
