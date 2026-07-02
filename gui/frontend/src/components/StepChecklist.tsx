@@ -247,7 +247,7 @@ function StepRow({
                         background: 'transparent',
                         padding: 0,
                         margin: 0,
-                        textAlign: 'left',
+                        textAlign: 'right',
                         fontSize: 12,
                         color: 'var(--teal)',
                         cursor: 'pointer',
