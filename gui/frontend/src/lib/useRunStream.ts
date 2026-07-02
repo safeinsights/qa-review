@@ -30,6 +30,11 @@ export interface RunState {
     // the failure) so the companion can inspect/drive it. Analogous to pausedAt: the
     // run is blocked with a live browser until a resume/stop tears it down.
     errorHeld: { failureCategory?: string; error?: string } | null
+    // Set when a STEP threw and the engine is holding the browser open for an
+    // in-process RETRY: the companion can edit the suite, then the user retries the
+    // step (re-run against the live browser) or gives up. Like errorHeld it blocks
+    // the run with a live browser, but the exit is retry-step / give-up, not resume.
+    stepFailed: { index: number; stepName: string; error?: string; failureCategory?: string } | null
 }
 
 const EMPTY: RunState = {
@@ -43,6 +48,7 @@ const EMPTY: RunState = {
     consoleLines: [],
     pausedAt: null,
     errorHeld: null,
+    stepFailed: null,
 }
 
 type Action =
@@ -52,6 +58,13 @@ type Action =
     | { type: 'port'; port: number; cdpPort: number }
     | { type: 'paused'; name: string }
     | { type: 'error-hold'; failureCategory?: string; error?: string }
+    | {
+          type: 'step-failed'
+          index: number
+          stepName: string
+          error?: string
+          failureCategory?: string
+      }
     | { type: 'result'; env: ResultEnvelope }
     | { type: 'url'; url: string }
     | { type: 'console'; line: ConsoleLine }
@@ -66,11 +79,15 @@ function reducer(state: RunState, action: Action): RunState {
             return { ...EMPTY, running: true }
         case 'step':
             // The first 'running' event after a pause means the run resumed —
-            // clearing pausedAt here keeps the banner in sync with the stream.
+            // clearing pausedAt here keeps the banner in sync with the stream. A
+            // 'running' also means a retried step is re-executing, so clear
+            // stepFailed (the failed row was truncated engine-side; the fresh
+            // running/passed re-occupies its position).
             return {
                 ...state,
                 steps: [...state.steps, action.env],
                 pausedAt: action.env.status === 'running' ? null : state.pausedAt,
+                stepFailed: action.env.status === 'running' ? null : state.stepFailed,
             }
         case 'port':
             return { ...state, port: action.port, cdpPort: action.cdpPort }
@@ -85,19 +102,39 @@ function reducer(state: RunState, action: Action): RunState {
                 ...state,
                 errorHeld: { failureCategory: action.failureCategory, error: action.error },
             }
+        case 'step-failed':
+            // A step threw and the browser is held open for a retry. Blocks the run
+            // like errorHeld, but the exit is retry-step / give-up. The failed step's
+            // row is already in `steps` (status 'failed'); we just record the hold so
+            // the controls show Retry/Give up.
+            return {
+                ...state,
+                stepFailed: {
+                    index: action.index,
+                    stepName: action.stepName,
+                    error: action.error,
+                    failureCategory: action.failureCategory,
+                },
+            }
         case 'result':
             // The final result: the run is finishing (post error-hold resume, or a
             // normal end). Clear the blocked/held state so the banner + Resume
             // control give way to the verdict + recording.
-            return { ...state, result: action.env, pausedAt: null, errorHeld: null }
+            return {
+                ...state,
+                result: action.env,
+                pausedAt: null,
+                errorHeld: null,
+                stepFailed: null,
+            }
         case 'url':
             return { ...state, url: action.url }
         case 'console':
             return { ...state, consoleLines: [...state.consoleLines, action.line] }
         case 'exit':
-            // A hard stop while paused / error-held must return the UI to idle, not
-            // stick on Resume.
-            return { ...state, running: false, pausedAt: null, errorHeld: null }
+            // A hard stop while paused / error-held / step-failed must return the UI
+            // to idle, not stick on Resume/Retry.
+            return { ...state, running: false, pausedAt: null, errorHeld: null, stepFailed: null }
         case 'error':
             return { ...state, error: action.message, running: action.running }
     }
@@ -110,6 +147,10 @@ export interface RunStreamCallbacks {
     onDone?: (r: ResultEnvelope) => void
     onRunningChange?: (running: boolean) => void
     onPausedChange?: (paused: boolean) => void
+    // Fires when a step failure is held open for retry (browser alive). Reported
+    // separately from onPausedChange so the controls show Retry/Give up rather than
+    // Resume, while still locking the run fields (the run is blocked).
+    onStepFailedChange?: (stepFailed: boolean) => void
     // Fires with the fresh state each time a new run starts, so the caller can
     // reset sibling state (e.g. selected snapshot, video playback).
     onReset?: () => void
@@ -122,8 +163,9 @@ export interface RunStream extends RunState {
     setUrl: (url: string) => void
     addConsoleLine: (line: ConsoleLine) => void
     // The TRUE "browser is attachable/drivable by the companion" signal: the run is
-    // BLOCKED holding a live browser open — paused before a step, OR held open after
-    // a failure. NOT after a finished/normal teardown, NOT mid-step.
+    // BLOCKED holding a live browser open — paused before a step, held open after a
+    // failure (error-hold), OR held open for a step retry. NOT after a
+    // finished/normal teardown, NOT mid-step.
     browserLive: boolean
 }
 
@@ -156,6 +198,12 @@ export function useRunStream(
     useEffect(() => {
         cbRef.current.onPausedChange?.(blocked)
     }, [blocked])
+    // A held step failure is reported on its own channel so the controls can show
+    // Retry/Give up (distinct from the Resume shown for pause / error-hold).
+    const isStepFailed = state.stepFailed !== null
+    useEffect(() => {
+        cbRef.current.onStepFailedChange?.(isStepFailed)
+    }, [isStepFailed])
 
     // Switching suites (which changes stepNames) must clear the prior run's output —
     // otherwise the new suite's step list renders against the old run's steps/result
@@ -190,6 +238,14 @@ export function useRunStream(
                             type: 'error-hold',
                             failureCategory: env.failureCategory,
                             error: env.error,
+                        })
+                    else if (env.type === 'step-failed')
+                        dispatch({
+                            type: 'step-failed',
+                            index: env.index,
+                            stepName: env.stepName,
+                            error: env.error,
+                            failureCategory: env.failureCategory,
                         })
                     else {
                         dispatch({ type: 'result', env })
@@ -237,7 +293,8 @@ export function useRunStream(
         []
     )
 
-    const browserLive = state.pausedAt !== null || state.errorHeld !== null
+    const browserLive =
+        state.pausedAt !== null || state.errorHeld !== null || state.stepFailed !== null
     return { ...state, setUrl, addConsoleLine, browserLive }
 }
 

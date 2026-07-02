@@ -1,8 +1,8 @@
 import path from 'node:path'
 import { faker } from '@faker-js/faker'
 import type { Locator } from '@playwright/test'
-import { repoDir } from '@/engine/paths'
-import type { RunContext, Suite } from '@/suites/types'
+import { repoDir } from '../engine/paths'
+import type { RunContext, Suite } from './types'
 
 // Traces the FULL study lifecycle end-to-end in one continuous run, switching
 // between the researcher and reviewer accounts (via ctx.loginAs) at each gate:
@@ -360,15 +360,18 @@ export const studyHappyPathSuite: Suite = {
                     await openResultsPreview(ctx)
                     await verifyResultsModalHasContent(ctx)
                     // Close the preview so it doesn't overlay the Approve button.
-                    await ctx.page
-                        .getByRole('dialog')
-                        .getByRole('button', { name: /close/i })
-                        .first()
-                        .click()
-                    await ctx.page
-                        .getByRole('dialog')
-                        .waitFor({ state: 'hidden' })
-                        .catch(() => {})
+                    // The Mantine modal's close control is an icon-only CloseButton
+                    // with no accessible name (no aria-label/title/text), so a
+                    // name-based role locator can't find it — target the stable
+                    // Mantine class instead, and fall back to Escape.
+                    const dialog = ctx.page.getByRole('dialog')
+                    const closeButton = dialog.locator('.mantine-Modal-close')
+                    if (await closeButton.count()) {
+                        await closeButton.first().click()
+                    } else {
+                        await ctx.page.keyboard.press('Escape')
+                    }
+                    await dialog.waitFor({ state: 'hidden' }).catch(() => {})
                 })
             },
         },
@@ -470,8 +473,8 @@ function generateStudyContent(tag: string): StudyContent {
 }
 
 // The two code files the app accepts, resolved against the cloned repo (NOT the
-// bundle) — build-suites bundles this suite into suites-compiled/, so module-
-// relative paths would break; repoDir() honors QAR_REPO_DIR at runtime.
+// engine bundle location) via repoDir(), which honors QAR_REPO_DIR at runtime.
+// (import.meta.url-relative paths would point at the bundle, not the clone.)
 function fixtureFiles(): string[] {
     const dir = path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]

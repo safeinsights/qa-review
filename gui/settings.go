@@ -157,6 +157,60 @@ func readKeyringRecipients(dir string) ([]string, error) {
 	return keys, nil
 }
 
+// identityPublicKey reads config/age-identity.txt (dir is the config dir), parses
+// the age X25519 secret key, and returns its public recipient string (age1...).
+// The second return is false with no error when the identity file is absent —
+// the caller distinguishes "no identity" from "identity present but not a
+// recipient". Mirrors publicKeyFromIdentity() in src/engine/settings.ts.
+func identityPublicKey(dir string) (string, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "age-identity.txt"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	// Standard age identity format: skip comment (#) and blank lines; the secret
+	// key is the first remaining line.
+	var secret string
+	for _, line := range strings.Split(string(data), "\n") {
+		s := strings.TrimSpace(line)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		secret = s
+		break
+	}
+	if secret == "" {
+		return "", false, fmt.Errorf("age-identity.txt has no key line")
+	}
+	id, err := age.ParseX25519Identity(secret)
+	if err != nil {
+		return "", false, err
+	}
+	return id.Recipient().String(), true, nil
+}
+
+// identityInKeyring reports whether the local identity exists and whether its
+// public key is a recipient in config/keyring.json (dir is the config dir). A
+// missing keyring yields isRecipient=false (not an error).
+func identityInKeyring(dir string) (hasIdentity, isRecipient bool, err error) {
+	pub, has, err := identityPublicKey(dir)
+	if err != nil || !has {
+		return false, false, err
+	}
+	recipients, err := readKeyringRecipients(dir)
+	if err != nil {
+		return true, false, err
+	}
+	for _, r := range recipients {
+		if r == pub {
+			return true, true, nil
+		}
+	}
+	return true, false, nil
+}
+
 // writeLock writes config/keyring.lock with a stable fingerprint of the recipient
 // set: sha256 hex of the recipient keys, sorted ascending, joined with "\n". Must
 // match src/engine/keyring.ts fingerprint() byte-for-byte.

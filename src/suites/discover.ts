@@ -1,4 +1,4 @@
-import type { Suite } from '@/suites/types'
+import type { Suite } from './types'
 
 type Importer = (file: string) => Promise<Record<string, unknown>>
 

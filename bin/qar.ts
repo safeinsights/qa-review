@@ -1,5 +1,4 @@
 import { parseArgs } from '@/cli/args'
-import { buildSuitesCommand } from '@/cli/commands/build-suites'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { listCommand } from '@/cli/commands/list'
@@ -41,13 +40,11 @@ async function main() {
             return setSecretCommand(opts)
         case 'sync':
             return syncCommand()
-        case 'build-suites':
-            return buildSuitesCommand()
         case 'session':
             return sessionCommand(opts, await loadSettings())
         default:
             console.error(
-                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | build-suites | session`
+                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session`
             )
             process.exit(1)
     }

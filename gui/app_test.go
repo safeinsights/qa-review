@@ -81,9 +81,8 @@ func TestIsTrackedRun(t *testing.T) {
 func TestPromoteArgsSequence(t *testing.T) {
 	got := promoteSteps("admin-invites")
 	want := [][]string{
-		{"qar", "build-suites"},
-		{"git", "add", "--", "src/suites/admin-invites.ts", "suites-compiled/admin-invites.mjs"},
-		{"git", "commit", "-m", "test: add admin-invites suite (authored interactively, review selectors)", "--", "src/suites/admin-invites.ts", "suites-compiled/admin-invites.mjs"},
+		{"git", "add", "--", "src/suites/admin-invites.ts"},
+		{"git", "commit", "-m", "test: add admin-invites suite (authored interactively, review selectors)", "--", "src/suites/admin-invites.ts"},
 		{"git", "push", "-u", "origin", "qa/admin-invites"},
 		{"gh", "pr", "create", "--fill"},
 	}

@@ -1,4 +1,6 @@
 import { renameSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Page } from '@playwright/test'
 import {
     errorHoldLine,
@@ -6,15 +8,18 @@ import {
     pausedLine,
     resultLine,
     screencastLine,
+    stepFailedLine,
     stepLine,
 } from '@/cli/step-stream'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
-import { runStatePath } from '@/engine/paths'
+import { runStatePath, suitesSrcDir } from '@/engine/paths'
 import { defaultDeps, runEngine } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
 import { ScreencastServer } from '@/engine/screencast'
 import type { Vars } from '@/engine/settings'
 import type { Role, RunState, StepEvent } from '@/engine/types'
+import { discoverSuites } from '@/suites/discover'
+import type { Suite } from '@/suites/types'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
@@ -60,6 +65,28 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     const armResume = () => {
         resumePromise = new Promise<void>(r => (resumeResolve = r))
     }
+    // A re-armable "step-failure resolution" deferred, parallel to resume but carrying
+    // the user's choice: waitForResolution awaits it; {type:'retry-step'} resolves
+    // 'retry' and {type:'give-up'} resolves 'giveUp'. Re-armed after each hold so
+    // multiple retries work.
+    let resolutionResolve: ((d: 'retry' | 'giveUp') => void) | undefined
+    let resolutionPromise: Promise<'retry' | 'giveUp'> | undefined
+    const armResolution = () => {
+        resolutionPromise = new Promise<'retry' | 'giveUp'>(r => (resolutionResolve = r))
+    }
+    // Cache-bust import ONE suite's .ts source so an edited suite's new code is picked
+    // up on retry (tsx transpiles it on import — no compile step). A monotonic counter
+    // (not Date.now) busts Node's ESM URL cache. Reuses discoverSuites for import +
+    // Suite-shape validation.
+    let reloadCounter = 0
+    const reloadSuite = async (name: string): Promise<Suite> => {
+        const src = path.join(suitesSrcDir(), `${name}.ts`)
+        const bust = `${pathToFileURL(src).href}?t=${++reloadCounter}`
+        const found = await discoverSuites([bust], f => import(f))
+        const fresh = found.find(s => s.name === name) ?? found[0]
+        if (!fresh) throw new Error(`Reloaded ${name} but found no Suite export`)
+        return fresh
+    }
     const controlDeps = {
         shouldPause: (name: string) => pausedSet.has(name),
         onPaused: (name: string) => process.stdout.write(pausedLine({ name })),
@@ -76,11 +103,22 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             failureCategory?: import('@/engine/types').FailureCategory
             error?: string
         }) => process.stdout.write(errorHoldLine(info)),
+        // In-process step retry. On a step throw the engine emits step-failed (holding
+        // the browser open), then awaits waitForResolution. The companion edits the
+        // suite; the user sends retry-step or give-up. reloadSuite picks up the edit.
+        onStepFailed: (info: import('@/engine/types').StepFailedInfo) =>
+            process.stdout.write(stepFailedLine(info)),
+        waitForResolution: async () => {
+            armResolution()
+            const d = await resolutionPromise
+            return d ?? 'giveUp'
+        },
+        reloadSuite,
     }
 
     // Read NDJSON control messages from stdin. Only the `run` command opts into
-    // reading stdin, so `list`/`build-suites` (which share the Go spawn path) are
-    // unaffected — an unread stdin pipe is inert.
+    // reading stdin, so other commands like `list` (which share the Go spawn path)
+    // are unaffected — an unread stdin pipe is inert.
     let stdinBuf = ''
     const onStdin = (chunk: Buffer) => {
         stdinBuf += chunk.toString('utf8')
@@ -96,6 +134,10 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
                 } else if (msg.type === 'resume') {
                     // Tolerate a resume with nothing pending (no-op).
                     resumeResolve?.()
+                } else if (msg.type === 'retry-step') {
+                    resolutionResolve?.('retry')
+                } else if (msg.type === 'give-up') {
+                    resolutionResolve?.('giveUp')
                 }
             }
             nl = stdinBuf.indexOf('\n')

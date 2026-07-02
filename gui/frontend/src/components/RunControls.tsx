@@ -33,6 +33,12 @@ export interface RunControlsProps {
     // calls onResume (takes precedence over the Stop state).
     paused?: boolean
     onResume?: () => void
+    // When a step failed and the browser is held open for retry, the controls show
+    // Retry step (re-run the failed step against the live browser, picking up any
+    // suite edit) + a quiet Give up. Takes precedence over paused/running/run.
+    stepFailed?: boolean
+    onRetryStep?: () => void
+    onGiveUp?: () => void
 }
 
 // Env/PR/Suite/Role describe WHAT to run — editing them mid-run would desync the
@@ -53,43 +59,55 @@ export function RunControls(p: RunControlsProps) {
     const allowed = p.allowedRoles ?? []
     const roleOptions = allowed.length > 0 ? allowed : ALL_ROLES
     const roleFixed = allowed.length === 1
-    const fieldsLocked = !!p.running || !!p.paused
+    const fieldsLocked = !!p.running || !!p.paused || !!p.stepFailed
     // The Edit Suite button (when visible) owns marginLeft:auto to right-align the
     // group; otherwise the action button carries it so it still pins to the right.
     const editVisible = showSuite && !!p.onEditSuite && !fieldsLocked
     const actionMargin = editVisible ? {} : { marginLeft: 'auto' as const }
-    // The action button is one of three states — Resume (paused) takes precedence,
-    // then Stop (running), else Run. Resolve its props once so the JSX renders a
-    // single button instead of a 3-way ternary with duplicated Mantine props.
-    const action = p.paused
+    // The action button's state — Retry step (a step failed, held for retry) takes
+    // precedence, then Resume (paused / error-hold), then Stop (running), else Run.
+    // Resolved once so the JSX renders a single button instead of a nested ternary
+    // with duplicated Mantine props. A step-failed hold also renders a quiet Give up
+    // beside it (below).
+    const action = p.stepFailed
         ? {
-              onClick: p.onResume,
+              onClick: p.onRetryStep,
               disabled: undefined as boolean | undefined,
               loading: false,
               color: 'teal',
               shadow: '0 6px 18px rgba(12,107,94,0.22)',
               icon: <span aria-hidden>▶</span>,
-              label: 'Resume',
+              label: 'Retry step',
           }
-        : p.running
+        : p.paused
           ? {
-                onClick: p.onStop,
-                disabled: p.stopping,
-                loading: !!p.stopping,
-                color: 'red',
-                shadow: '0 6px 18px rgba(176,74,58,0.22)',
-                icon: p.stopping ? undefined : <span aria-hidden>■</span>,
-                label: p.stopping ? 'Stopping…' : 'Stop',
-            }
-          : {
-                onClick: p.onRun,
-                disabled: p.runDisabled,
+                onClick: p.onResume,
+                disabled: undefined as boolean | undefined,
                 loading: false,
                 color: 'teal',
                 shadow: '0 6px 18px rgba(12,107,94,0.22)',
                 icon: <span aria-hidden>▶</span>,
-                label: p.runLabel ?? 'Run',
+                label: 'Resume',
             }
+          : p.running
+            ? {
+                  onClick: p.onStop,
+                  disabled: p.stopping,
+                  loading: !!p.stopping,
+                  color: 'red',
+                  shadow: '0 6px 18px rgba(176,74,58,0.22)',
+                  icon: p.stopping ? undefined : <span aria-hidden>■</span>,
+                  label: p.stopping ? 'Stopping…' : 'Stop',
+              }
+            : {
+                  onClick: p.onRun,
+                  disabled: p.runDisabled,
+                  loading: false,
+                  color: 'teal',
+                  shadow: '0 6px 18px rgba(12,107,94,0.22)',
+                  icon: <span aria-hidden>▶</span>,
+                  label: p.runLabel ?? 'Run',
+              }
 
     return (
         <div
@@ -183,6 +201,20 @@ export function RunControls(p: RunControlsProps) {
                     Edit Suite
                 </Button>
             ) : null}
+            {/* On a step-failed hold, a quiet Give up sits left of Retry step and
+                carries the marginLeft:auto so the pair stays right-aligned. */}
+            {p.stepFailed ? (
+                <Button
+                    onClick={p.onGiveUp}
+                    variant="default"
+                    color="red"
+                    radius="md"
+                    size="md"
+                    style={{ marginLeft: 'auto' }}
+                >
+                    Give up
+                </Button>
+            ) : null}
             <Button
                 onClick={action.onClick}
                 disabled={action.disabled}
@@ -190,7 +222,7 @@ export function RunControls(p: RunControlsProps) {
                 color={action.color}
                 radius="md"
                 size="md"
-                style={{ ...actionMargin, boxShadow: action.shadow }}
+                style={{ ...(p.stepFailed ? {} : actionMargin), boxShadow: action.shadow }}
                 leftSection={action.icon}
             >
                 {action.label}

@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import type { Role, StepStatus } from '@/engine/types'
+import type { Role, StepStatus } from '../engine/types'
 
 export interface RunContext {
     page: Page

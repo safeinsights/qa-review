@@ -12,3 +12,24 @@ export function buildRunState(events: StepEvent[], result?: RunResult): RunState
     }
     return { steps, result, running: result === undefined }
 }
+
+// Truncate the append-only event stream to the first `position` executed positions,
+// mutating `events` in place. Used by the run loop when a failed step is retried:
+// dropping the failed position's events lets the retried step's re-emitted
+// 'running'→'passed' re-occupy that position instead of appending a duplicate (which
+// would misalign the GUI's positional step list). Mirrors buildRunState's collapse
+// rule: a 'running' opens a position; its resolution stays within the same one.
+export function truncateEventsToPosition(events: StepEvent[], position: number): void {
+    let seen = 0
+    let cut = events.length
+    for (let i = 0; i < events.length; i++) {
+        if (events[i].status === 'running') {
+            if (seen === position) {
+                cut = i
+                break
+            }
+            seen++
+        }
+    }
+    events.length = cut
+}

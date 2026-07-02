@@ -56,7 +56,13 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   A `Suite` is a plain object with an ordered **`steps: Step[]`** array (each
   `{ name, run(ctx) }`), so step names are statically enumerable — the GUI shows a
   suite's steps before running it. Shared state between steps threads through
-  `ctx.state`. (There is no `suite.run()`; the engine loops over `steps`.)
+  `ctx.state`. (There is no `suite.run()`; the engine loops over `steps`.) The
+  registry (`suite-registry.ts`) discovers suites by globbing `src/suites/*.ts` and
+  importing each directly — the engine runs under **tsx** (both `pnpm qar` and the
+  packaged app run node with `--import tsx`), so the `.ts` IS the runtime artifact:
+  there is NO compile step and no `suites-compiled/` dir. **Suites must use RELATIVE
+  imports** (`./types`, `../engine/paths`), not the `@/` alias — the alias is not
+  resolved at suite-load time.
 - `config/environments.ts` — declares STABLE envs (`qa`, `staging`) and derives PR
   preview URLs. **A PR run is identical to a QA run except for the base URL** —
   same accounts, same MFA. There is NO code that gates a suite to PR-only or
@@ -65,7 +71,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | build-suites`.
+  request-access | rekey | set-secret | sync | session`.
 - `gui/` — Wails app. `gui/app.go` `RunEngine()` spawns the bundled engine
   (`<Resources>/runtime/node <Resources>/engine/qar.bundle.mjs run ...`, or
   `pnpm qar run ...` under `wails dev`) and streams JSON step lines to the React UI.
@@ -77,7 +83,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/paths.ts` — single source of truth for where the repo lives:
   `repoDir()` reads `QAR_REPO_DIR` (set by the packaged app to the user-writable
   clone) and falls back to this checkout for `pnpm qar`. `configDir`/`resultsRoot`/
-  `suitesCompiledDir` all derive from it. The Go `repoDir()` reads the SAME var.
+  `suitesSrcDir` all derive from it. The Go `repoDir()` reads the SAME var.
 - `src/engine/keyring.ts` / `src/engine/identity.ts` — the multi-user encryption
   core: the committed recipient list (`config/keyring.json`) and the local age
   identity (`config/age-identity.txt`, gitignored). See "Settings" below.
@@ -196,23 +202,25 @@ where each lives). Settings-specific failure modes:
 ## Packaging a standalone Mac app (`.dmg` for staff)
 
 The desktop app ships as a self-contained, Developer-ID-notarized `.app`/`.dmg` so
-staff can download and run it with **no Node/pnpm/tsx/checkout**. How it works:
+staff can download and run it with **no Node/pnpm/checkout**. How it works:
 
 - **The engine is bundled.** `esbuild.config.mjs` bundles `bin/qar.ts` →
   `gui/build/engine/qar.bundle.mjs`. The `.app` ships a pinned `node` +
-  `qar.bundle.mjs` + a self-contained Playwright `node_modules` in
+  `qar.bundle.mjs` + a self-contained Playwright + **tsx** `node_modules` in
   `Contents/Resources/`. `gui/app.go` `RunEngine()`/`engineCmd()` runs
-  `<Resources>/runtime/node <Resources>/engine/qar.bundle.mjs ...`; under `wails dev`
-  (no Resources) it falls back to `pnpm qar`.
+  `<Resources>/runtime/node --import tsx <Resources>/engine/qar.bundle.mjs ...`;
+  under `wails dev` (no Resources) it falls back to `pnpm qar` (which is `tsx bin/qar.ts`).
 - **The app clones the repo on first launch.** `SetupGate` (React) prompts for a
   location and shells `gh repo clone <qaReviewSlug>` (set in `gui/paths.go`) into a
   user-writable dir, persisted in `~/Library/Application Support/qa-runner/repo-location.txt`.
   Suites + `config/` live in that clone. `repoDir()` is the single source of truth,
   shared by Go and the engine via the **`QAR_REPO_DIR`** env var.
-- **Suites are `.ts` but the bundle has no tsx**, so `qar build-suites` esbuild-compiles
-  `<repo>/src/suites/*.ts` → `<repo>/suites-compiled/*.mjs`; the registry loads the
-  `.mjs`. `Setup` and `Sync` run `build-suites` after clone/pull. (esbuild anchors its
-  tsconfig/`@/*` alias to `repoDir()` — the clone — NOT the bundle's location.)
+- **Suites are `.ts` and load directly.** The bundle runs under `--import tsx`, so
+  the registry imports `<repo>/src/suites/*.ts` straight from the clone — no compile
+  step, no `suites-compiled/` dir. This is why suites must use RELATIVE imports (the
+  `@/` alias isn't resolved at suite-load time). Editing a suite and re-running picks
+  up the change immediately (the retry path cache-busts the `.ts` import), so there
+  is no stale-artifact class of bug.
 - **Required tools** (Chrome, git, gh, claude) are used from the user's machine.
   `Preflight()` checks them and shows a blocking banner if any are missing. Playwright
   launches the user's Chrome via `channel:'chrome'` (no bundled Chromium).
@@ -237,10 +245,9 @@ rather than `pnpm qar <args>`.
 - `pnpm qar list` — list suites and their roles
 - `pnpm qar run --suite create-study --role researcher --env qa`
 - `pnpm qar run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`
-- `pnpm qar build-suites` — compile `src/suites/*.ts` → `suites-compiled/*.mjs`
 - `pnpm qar migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
 - `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
-- `pnpm qar sync` — fast-forward pull (suites + keyring + secrets) + recompile suites
+- `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

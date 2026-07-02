@@ -1,4 +1,4 @@
-import type { Suite } from '@/suites/types'
+import type { Suite } from './types'
 
 // Smallest meaningful suite: confirms an authenticated session reaches the
 // dashboard. Creates no data, so cleanup is a no-op for this suite.

@@ -32,6 +32,12 @@ export interface DoctorCheck {
     docURL: string
 }
 
+export interface KeyringAccess {
+    hasIdentity: boolean
+    isRecipient: boolean
+    note: string
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
@@ -73,6 +79,7 @@ interface WailsApp {
     RequestAccess(cwd: string, name: string): Promise<string>
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
+    CheckKeyringAccess(cwd: string): Promise<KeyringAccess>
 }
 
 interface WailsRuntime {
@@ -143,6 +150,17 @@ export async function setPauses(steps: string[]): Promise<void> {
 // Resume a run that's halted at a paused step.
 export async function resumeRun(): Promise<void> {
     await sendToRun(JSON.stringify({ type: 'resume' }))
+}
+
+// Retry a step that failed: the engine reloads the (possibly edited) suite and
+// re-runs the failed step against the still-live browser, then continues the suite.
+export async function retryStep(): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'retry-step' }))
+}
+
+// Give up on a failed step: the engine tears down and the run finishes FAILED.
+export async function giveUpStep(): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'give-up' }))
 }
 
 // --- Interactive authoring session (terminal + shared browser) ---
@@ -358,4 +376,10 @@ export async function rekey(): Promise<string> {
 // True if secrets are out of sync with the keyring (rekey needed).
 export async function isInDrift(): Promise<boolean> {
     return app().IsInDrift('')
+}
+
+// Pull the latest keyring + secrets and report whether the local identity can
+// decrypt shared secrets (is a recipient). Backs the first-launch access gate.
+export async function checkKeyringAccess(): Promise<KeyringAccess> {
+    return app().CheckKeyringAccess('')
 }

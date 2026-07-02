@@ -1,25 +1,22 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { suitesCompiledDir } from '@/engine/paths'
-import { createStudySuite } from '@/suites/create-study'
+import { suitesSrcDir } from '@/engine/paths'
 import { discoverSuites } from '@/suites/discover'
-import { signinSuite } from '@/suites/signin'
 import type { Suite } from '@/suites/types'
 
-const STATIC_SUITES: Suite[] = [signinSuite, createStudySuite]
+// Not suites — shared helpers that happen to live alongside the suites.
+const NON_SUITE = new Set(['types.ts', 'discover.ts'])
 
-// Discover any additional suites (e.g. AI-generated, pulled from git) by globbing
-// the compiled-suites dir. `qar build-suites` writes <name>.mjs there from
-// src/suites/*.ts — the bundled engine has no TS loader, so it imports the .mjs.
-// The two built-in suites are statically imported above and excluded here.
+// Discover all suites by globbing src/suites/*.ts and importing each directly.
+// The engine runs under tsx (`--import tsx` in both dev and the packaged app), so
+// there is no compile step — the .ts is the runtime artifact.
 async function discovered(): Promise<Suite[]> {
-    const dir = suitesCompiledDir()
+    const dir = suitesSrcDir()
     if (!fs.existsSync(dir)) return []
-    const exclude = new Set(['signin.mjs', 'create-study.mjs'])
     const files = fs
         .readdirSync(dir)
-        .filter(f => f.endsWith('.mjs') && !exclude.has(f))
+        .filter(f => f.endsWith('.ts') && !NON_SUITE.has(f))
         .map(f => path.join(dir, f))
     // pathToFileURL so dynamic import works for absolute paths on all platforms.
     return discoverSuites(files, f => import(pathToFileURL(f).href))
@@ -28,7 +25,7 @@ async function discovered(): Promise<Suite[]> {
 let cache: Suite[] | null = null
 async function allSuites(): Promise<Suite[]> {
     if (cache) return cache
-    cache = [...STATIC_SUITES, ...(await discovered())]
+    cache = await discovered()
     return cache
 }
 

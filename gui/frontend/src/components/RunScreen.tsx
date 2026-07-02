@@ -30,6 +30,7 @@ export function RunScreen({
     onDone,
     onRunningChange,
     onPausedChange,
+    onStepFailedChange,
 }: {
     spec: RunSpec | null
     // Static step names for the selected suite — shown before/independent of a run.
@@ -39,6 +40,7 @@ export function RunScreen({
     onDone?: (r: ResultEnvelope) => void
     onRunningChange?: (running: boolean) => void
     onPausedChange?: (paused: boolean) => void
+    onStepFailedChange?: (stepFailed: boolean) => void
 }) {
     // Whether the "Ask Claude" companion drawer is open. Lifted here (from the
     // drawer) so the drawer mounts ONCE at this screen's top level, independent of
@@ -55,6 +57,7 @@ export function RunScreen({
         onDone,
         onRunningChange,
         onPausedChange,
+        onStepFailedChange,
         onReset: snap.reset,
     })
 
@@ -77,6 +80,7 @@ export function RunScreen({
     // ("Ask Claude about this failure").
     const emphasizeClaude =
         run.browserLive ||
+        Boolean(run.stepFailed) ||
         (Boolean(run.error) && !run.running) ||
         Boolean(run.result && !run.result.ok)
     // Step title for the live top bar: the step we're paused before, else the most
@@ -157,8 +161,7 @@ const layout = {
     gridTemplateColumns: 'minmax(340px, 400px) 1fr',
     gap: 22,
     marginTop: 22,
-    maxHeight: 'calc(100vh - 32px)',
-    overflowY: 'auto',
+    height: 'calc(100vh - 32px)',
 } as const
 
 const idlePlaceholder = {

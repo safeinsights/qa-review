@@ -9,24 +9,38 @@
 # notarytool, stapler), and (for signing) a Developer ID Application cert in the
 # keychain + a notarytool credential profile.
 #
-# Fill in the SIGNING placeholders below (or export them in your environment).
+# Signing vars are loaded from .env at the repo root (gitignored).
+# Add DEVELOPER_ID and NOTARY_PROFILE there, or export them in your shell.
 set -euo pipefail
 
-# ---- Config / placeholders -------------------------------------------------
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ---- Load .env (signing + optional overrides) -----------------------------
+ENV_FILE="$ROOT/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck source=/dev/null
+    set -o allexport; source "$ENV_FILE"; set +o allexport
+fi
+
+# ---- Config ----------------------------------------------------------------
 NODE_VERSION="${NODE_VERSION:-22.14.0}"          # pinned bundled node (LTS)
 NODE_ARCH="${NODE_ARCH:-arm64}"                  # darwin-arm64 build
 APP_NAME="qa-runner"
 
-# SIGNING — fill these in (or export before running):
+# SIGNING — set in .env or export before running:
 #   DEVELOPER_ID:    "Developer ID Application: Your Org (TEAMID)"
 #   NOTARY_PROFILE:  a notarytool keychain profile name created via
 #                    `xcrun notarytool store-credentials`
-DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application: REPLACE_ME (TEAMID)}"
-NOTARY_PROFILE="${NOTARY_PROFILE:-REPLACE_ME_NOTARY_PROFILE}"
+DEVELOPER_ID="${DEVELOPER_ID:-}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SIGN="${SIGN:-1}"                                 # set SIGN=0 to skip sign+notarize
 
+if [[ "$SIGN" == "1" ]]; then
+    [[ -n "$DEVELOPER_ID" ]]   || { echo "error: DEVELOPER_ID is not set (add it to .env)"; exit 1; }
+    [[ -n "$NOTARY_PROFILE" ]] || { echo "error: NOTARY_PROFILE is not set (add it to .env)"; exit 1; }
+fi
+
 # ---- Paths -----------------------------------------------------------------
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUI="$ROOT/gui"
 ENGINE_OUT="$GUI/build/engine"
 STAGE="$GUI/build/stage"                          # Resources payload staged here
@@ -34,6 +48,8 @@ APP="$GUI/build/bin/$APP_NAME.app"
 RES="$APP/Contents/Resources"
 ENTITLEMENTS="$GUI/build/darwin/entitlements.plist"
 DMG="$GUI/build/$APP_NAME.dmg"
+# Downloaded node binaries are cached here so repeat builds don't re-download.
+NODE_CACHE="$GUI/build/node-cache"
 
 echo "==> 1/7 install deps"
 cd "$ROOT"
@@ -48,25 +64,40 @@ mkdir -p "$STAGE/runtime" "$STAGE/engine"
 # 3a. engine bundle (the browser MCP config is generated per-session at runtime
 #     by writeSessionMcpConfig, so nothing static to ship here).
 cp "$ENGINE_OUT/qar.bundle.mjs" "$STAGE/engine/qar.bundle.mjs"
-# 3b. pinned node runtime (downloaded for reproducibility)
+# 3b. pinned node runtime — cached in gui/build/node-cache to avoid re-downloading
+#     on every build. Delete the cache entry to force a fresh download.
 NODE_PKG="node-v$NODE_VERSION-darwin-$NODE_ARCH"
 NODE_URL="https://nodejs.org/dist/v$NODE_VERSION/$NODE_PKG.tar.gz"
-TMP="$(mktemp -d)"
-echo "    downloading $NODE_URL"
-curl -fsSL "$NODE_URL" -o "$TMP/node.tar.gz"
-tar -xzf "$TMP/node.tar.gz" -C "$TMP"
-cp "$TMP/$NODE_PKG/bin/node" "$STAGE/runtime/node"
+NODE_CACHED="$NODE_CACHE/$NODE_PKG/bin/node"
+if [[ -x "$NODE_CACHED" ]]; then
+    echo "    using cached node $NODE_VERSION ($NODE_CACHED)"
+else
+    echo "    downloading $NODE_URL"
+    mkdir -p "$NODE_CACHE"
+    TMP_NODE="$(mktemp -d)"
+    curl -fsSL "$NODE_URL" -o "$TMP_NODE/node.tar.gz"
+    tar -xzf "$TMP_NODE/node.tar.gz" -C "$NODE_CACHE"
+    rm -rf "$TMP_NODE"
+fi
+cp "$NODE_CACHED" "$STAGE/runtime/node"
 chmod +x "$STAGE/runtime/node"
+TMP="$(mktemp -d)"
 # 3c. Playwright node_modules (NON-symlinked, self-contained). pnpm's store is
 #     symlinked, so do a throwaway npm install of just the pinned versions into a
 #     temp dir and copy the resolved tree. channel:'chrome' needs the driver, not
 #     the bundled browsers, so skip the browser download.
 PW_VERSION="$(node -e "console.log(require('@playwright/test/package.json').version)")"
-echo "    staging @playwright/test@$PW_VERSION (no browser download)"
+# tsx ships alongside Playwright so the packaged node can `--import tsx` and load
+# the clone's .ts suites directly (no compile step). Suites load as raw .ts at
+# runtime (not bundled), so their non-relative imports — @faker-js/faker — must be
+# resolvable from this shipped node_modules via NODE_PATH too.
+TSX_VERSION="$(node -e "console.log(require('tsx/package.json').version)")"
+FAKER_VERSION="$(node -e "console.log(require('@faker-js/faker/package.json').version)")"
+echo "    staging @playwright/test@$PW_VERSION + tsx@$TSX_VERSION + @faker-js/faker@$FAKER_VERSION (no browser download)"
 mkdir -p "$TMP/pw" && cd "$TMP/pw"
 npm init -y >/dev/null 2>&1
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
-    "@playwright/test@$PW_VERSION" >/dev/null 2>&1
+    "@playwright/test@$PW_VERSION" "tsx@$TSX_VERSION" "@faker-js/faker@$FAKER_VERSION" >/dev/null 2>&1
 mkdir -p "$STAGE/engine/node_modules"
 cp -R "$TMP/pw/node_modules/." "$STAGE/engine/node_modules/"
 cd "$ROOT"

@@ -421,4 +421,208 @@ describe('runEngine', () => {
         expect(result.ok).toBe(true)
         expect(onPaused).not.toHaveBeenCalled()
     })
+
+    it('retries a failed step against the live ctx, then continues the suite', async () => {
+        // A 3-step suite whose MIDDLE step throws on its first attempt and passes on
+        // the retry. On retry the engine reloads the suite; the reloaded copy has the
+        // middle step fixed. State threaded through ctx.state proves the SAME ctx is
+        // reused across the retry (step 3 reads what step 1 wrote).
+        const seen: string[] = []
+        let attempted = false
+        const step1 = {
+            name: 'seed',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('seed', async () => {
+                    ctx.state.seeded = 'yes'
+                })
+            },
+        }
+        const step3 = {
+            name: 'read seed',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('read seed', async () => {
+                    if (ctx.state.seeded !== 'yes') throw new Error('ctx.state lost across retry')
+                })
+            },
+        }
+        const flakyMiddle = {
+            name: 'middle',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('middle', async () => {
+                    if (!attempted) {
+                        attempted = true
+                        throw new Error('expected X to be visible')
+                    }
+                })
+            },
+        }
+        const fixedMiddle = {
+            name: 'middle',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('middle', async () => {})
+            },
+        }
+        const original: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [step1, flakyMiddle, step3],
+        }
+        const reloaded: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [step1, fixedMiddle, step3],
+        }
+        const d = deps({
+            onStep: e => seen.push(`${e.name}:${e.status}`),
+            onStepFailed: info => seen.push(`failed:${info.index}:${info.stepName}`),
+            waitForResolution: async () => 'retry',
+            reloadSuite: vi.fn(async () => reloaded),
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, original)
+        expect(result.ok).toBe(true)
+        // The failure was reported for the middle step (index 1), then it re-ran.
+        expect(seen).toContain('failed:1:middle')
+        // The suite continued past the retried step.
+        expect(seen).toContain('read seed:passed')
+        expect(d.reloadSuite).toHaveBeenCalledOnce()
+    })
+
+    it('run-state shows the retried step ONCE (failed row truncated before retry)', async () => {
+        let attempted = false
+        let lastState: import('@/engine/types').RunState | undefined
+        const flaky = {
+            name: 'middle',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('middle', async () => {
+                    if (!attempted) {
+                        attempted = true
+                        throw new Error('expected X to be visible')
+                    }
+                })
+            },
+        }
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [flaky],
+        }
+        const d = deps({
+            onRunState: s => {
+                lastState = s
+            },
+            waitForResolution: async () => 'retry',
+            reloadSuite: async () => suite,
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        // Exactly one entry for the single step — the failed row was dropped, the
+        // retried running/passed re-occupied its position.
+        expect(lastState?.steps.filter(s => s.name === 'middle')).toHaveLength(1)
+        expect(result.steps.filter(s => s.name === 'middle')).toHaveLength(1)
+    })
+
+    it('give-up ends the run FAILED without a second hold', async () => {
+        const onErrorHold = vi.fn()
+        const failingSuite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'boom',
+                    run: async ctx => {
+                        await ctx.step('boom', async () => {
+                            throw new Error('expected X to be visible')
+                        })
+                    },
+                },
+            ],
+        }
+        const d = deps({
+            onErrorHold,
+            onStepFailed: vi.fn(),
+            waitForResolution: async () => 'giveUp',
+            reloadSuite: vi.fn(),
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
+        expect(result.ok).toBe(false)
+        expect(result.failureCategory).toBe('app-assertion')
+        // A step failure that was given up must NOT re-hold via onErrorHold.
+        expect(onErrorHold).not.toHaveBeenCalled()
+    })
+
+    it('a reload compile error keeps holding and re-reports the failure', async () => {
+        // First retry: reload throws (bad edit) — the run stays held and re-runs the
+        // still-broken original step (fails again). Second retry: reload succeeds with
+        // a fixed step that passes. So the run must survive the compile error rather
+        // than tearing down.
+        let reloadCalls = 0
+        // The ORIGINAL step always throws — only the reloaded (fixed) step passes, so
+        // a compile-failed reload can't accidentally pass by re-running the old code.
+        const brokenStep = {
+            name: 'middle',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('middle', async () => {
+                    throw new Error('expected X to be visible')
+                })
+            },
+        }
+        const fixedStep = {
+            name: 'middle',
+            run: async (ctx: import('@/suites/types').RunContext) => {
+                await ctx.step('middle', async () => {})
+            },
+        }
+        const original: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [brokenStep],
+        }
+        const fixed: Suite = { name: 'demo', description: '', roles: ['admin'], steps: [fixedStep] }
+        const failures: string[] = []
+        const d = deps({
+            onStepFailed: info => failures.push(info.error),
+            waitForResolution: async () => 'retry',
+            reloadSuite: vi.fn(async () => {
+                reloadCalls++
+                if (reloadCalls === 1) throw new Error('Transform failed: unexpected token')
+                return fixed
+            }),
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, original)
+        expect(result.ok).toBe(true)
+        // The original failure, then the reload/compile failure, were both reported.
+        expect(failures.some(e => e.includes('expected X to be visible'))).toBe(true)
+        expect(failures.some(e => e.startsWith('Reload failed:'))).toBe(true)
+        expect(reloadCalls).toBe(2)
+    })
+
+    it('a step failure WITHOUT the retry deps rethrows to the error-hold path', async () => {
+        // Only onErrorHold + waitForResume wired (the pre-retry GUI behavior): a step
+        // throw must hold via onErrorHold, not enter the retry loop.
+        const onErrorHold = vi.fn()
+        const failingSuite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'boom',
+                    run: async ctx => {
+                        await ctx.step('boom', async () => {
+                            throw new Error('expected X to be visible')
+                        })
+                    },
+                },
+            ],
+        }
+        const d = deps({ onErrorHold, waitForResume: async () => {} })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, failingSuite)
+        expect(result.ok).toBe(false)
+        expect(onErrorHold).toHaveBeenCalledOnce()
+    })
 })

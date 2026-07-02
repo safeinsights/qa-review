@@ -55,6 +55,18 @@ export interface ErrorHoldInfo {
     error?: string
 }
 
+// Emitted when a suite STEP throws and the engine is holding the browser open for
+// an in-process retry (GUI only). Distinct from ErrorHoldInfo: this failure is
+// retryable — the companion edits the suite, then the user sends {type:'retry-step'}
+// (re-run this step against the live browser) or {type:'give-up'} (fail the run).
+// `index` is the step's position in the suite (the retry re-runs by index).
+export interface StepFailedInfo {
+    index: number
+    stepName: string
+    error?: string
+    failureCategory?: FailureCategory
+}
+
 // Emitted once by `qar session` when the long-lived authoring browser is ready:
 // the CDP remote-debugging port (so chrome-devtools-mcp can attach via
 // --browserUrl) and the screencast ws port (so the GUI shows the live view).

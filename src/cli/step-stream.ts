@@ -5,6 +5,7 @@ import type {
     ScreencastInfo,
     SessionInfo,
     StepEvent,
+    StepFailedInfo,
 } from '@/engine/types'
 
 export type StepEnvelope = { type: 'step' } & StepEvent
@@ -13,6 +14,7 @@ export type ScreencastEnvelope = { type: 'screencast' } & ScreencastInfo
 export type SessionEnvelope = { type: 'session' } & SessionInfo
 export type PausedEnvelope = { type: 'paused' } & PausedInfo
 export type ErrorHoldEnvelope = { type: 'error-hold' } & ErrorHoldInfo
+export type StepFailedEnvelope = { type: 'step-failed' } & StepFailedInfo
 export type Envelope =
     | StepEnvelope
     | ResultEnvelope
@@ -20,6 +22,7 @@ export type Envelope =
     | SessionEnvelope
     | PausedEnvelope
     | ErrorHoldEnvelope
+    | StepFailedEnvelope
 
 export function stepLine(event: StepEvent): string {
     return `${JSON.stringify({ type: 'step', ...event })}\n`
@@ -48,6 +51,13 @@ export function errorHoldLine(info: ErrorHoldInfo): string {
     return `${JSON.stringify({ type: 'error-hold', ...info })}\n`
 }
 
+// Emitted when a suite step throws and the browser is held open for an in-process
+// retry (see StepFailedInfo). Distinct from error-hold: the GUI shows Retry step /
+// Give up and lets the companion edit the suite before the user retries by index.
+export function stepFailedLine(info: StepFailedInfo): string {
+    return `${JSON.stringify({ type: 'step-failed', ...info })}\n`
+}
+
 // Parse one stdout line into an Envelope, or null if it isn't one of ours
 // (lets consumers ignore stray log output interleaved on stdout).
 export function parseLine(line: string): Envelope | null {
@@ -65,7 +75,8 @@ export function parseLine(line: string): Envelope | null {
             t === 'screencast' ||
             t === 'session' ||
             t === 'paused' ||
-            t === 'error-hold'
+            t === 'error-hold' ||
+            t === 'step-failed'
         ) {
             return obj as Envelope
         }
@@ -78,9 +89,16 @@ export function parseLine(line: string): Envelope | null {
 // The GUI writes these NDJSON lines to the engine's stdin to drive pausing:
 //   { "type": "pause-set", "steps": ["Step A", "Step B"] }  — replace the paused set
 //   { "type": "resume" }                                    — continue a halted run
+//   { "type": "retry-step" }                                — re-run the failed step
+//   { "type": "give-up" }                                   — fail a step-failed run
 // pause-set carries the FULL current set (idempotent, race-free): each live toggle
-// sends the whole set, so engine and GUI never drift.
-export type ControlMessage = { type: 'pause-set'; steps: string[] } | { type: 'resume' }
+// sends the whole set, so engine and GUI never drift. retry-step / give-up resolve a
+// step-failed hold (see stepFailedLine); resume resolves a pause / error-hold.
+export type ControlMessage =
+    | { type: 'pause-set'; steps: string[] }
+    | { type: 'resume' }
+    | { type: 'retry-step' }
+    | { type: 'give-up' }
 
 export function pauseSetLine(steps: string[]): string {
     return `${JSON.stringify({ type: 'pause-set', steps })}\n`
@@ -88,6 +106,14 @@ export function pauseSetLine(steps: string[]): string {
 
 export function resumeLine(): string {
     return `${JSON.stringify({ type: 'resume' })}\n`
+}
+
+export function retryStepLine(): string {
+    return `${JSON.stringify({ type: 'retry-step' })}\n`
+}
+
+export function giveUpLine(): string {
+    return `${JSON.stringify({ type: 'give-up' })}\n`
 }
 
 // Parse one inbound control line, or null if it isn't a valid control message.
@@ -101,6 +127,8 @@ export function parseControlLine(line: string): ControlMessage | null {
     if (!obj || typeof obj !== 'object' || !('type' in obj)) return null
     const t = (obj as { type: unknown }).type
     if (t === 'resume') return { type: 'resume' }
+    if (t === 'retry-step') return { type: 'retry-step' }
+    if (t === 'give-up') return { type: 'give-up' }
     if (t === 'pause-set') {
         const steps = (obj as Record<string, unknown>).steps
         if (Array.isArray(steps) && steps.every(s => typeof s === 'string')) {
