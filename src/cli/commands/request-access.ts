@@ -74,12 +74,18 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
     )
 
     try {
+        // Pass --head explicitly: requestAccess() has already switched back to the
+        // user's prior branch, so `gh pr create` without --head would target the
+        // wrong branch and fail with "no commits between origin/main and <branch>".
         await execFileAsync(
             'gh',
             [
                 'pr',
                 'create',
-                '--fill',
+                '--base',
+                'main',
+                '--head',
+                branch,
                 '--title',
                 `Add ${name} to keyring`,
                 '--body',
@@ -88,8 +94,11 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
             { cwd: repoDir() }
         )
         console.log('Opened a pull request. A teammate will approve + rekey, then merge.')
-    } catch {
-        console.log('Could not open a PR automatically (is `gh` installed and authed?).')
+    } catch (e) {
+        // Surface the real reason (gh prints it to stderr) instead of guessing.
+        const detail =
+            e instanceof Error ? (e as { stderr?: string }).stderr || e.message : String(e)
+        console.log(`Could not open a PR automatically:\n${detail.trim()}`)
         console.log(
             `Open it manually: push branch "${branch}" and create a PR titled "Add ${name} to keyring".`
         )
