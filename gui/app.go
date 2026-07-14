@@ -31,12 +31,27 @@ import (
 // when launched from a terminal (already on PATH).
 var guiPathDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"}
 
+// guiPathDirsWithHome prepends the user-local install dirs (~/.local/bin, ~/bin)
+// to guiPathDirs. Tools like claude are commonly installed there (e.g. the native
+// installer drops it in ~/.local/bin), which a Finder-launched app would otherwise
+// never search. Home-relative so it can't be a package-level literal.
+func guiPathDirsWithHome() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return guiPathDirs
+	}
+	return append([]string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, "bin"),
+	}, guiPathDirs...)
+}
+
 // withGuiPath returns a copy of the current environment with guiPathDirs ensured
 // on PATH, so exec.Command can find dev tools regardless of how the app launched.
 func withGuiPath() []string {
 	env := os.Environ()
 	path := os.Getenv("PATH")
-	for _, d := range guiPathDirs {
+	for _, d := range guiPathDirsWithHome() {
 		if !strings.Contains(path, d) {
 			path = d + ":" + path
 		}
