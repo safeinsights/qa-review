@@ -205,19 +205,19 @@ func engineCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-// preflightMissing returns the list of required external tools/apps that are NOT
-// available, so the UI can show a blocking banner. Staff must have these installed.
+// preflightMissing returns the tools the FIRST-LAUNCH SETUP step needs but that
+// are NOT available, so the setup gate can show a blocking banner. Setup only
+// clones the repo (via `gh`, falling back to `git clone`), so only those two are
+// required here — `claude` and Chrome are needed later (authoring/running suites)
+// and are validated by the Setup Doctor, not gated at setup.
 func preflightMissing() []string {
 	// Non-nil so Wails marshals it to a JSON array ([]), not null — the frontend
 	// relies on .length being defined even when nothing is missing.
 	missing := []string{}
-	for _, tool := range []string{"git", "gh", "claude"} {
+	for _, tool := range []string{"gh", "git"} {
 		if !toolOnPath(tool) {
 			missing = append(missing, tool)
 		}
-	}
-	if !chromeInstalled() {
-		missing = append(missing, "Google Chrome")
 	}
 	return missing
 }

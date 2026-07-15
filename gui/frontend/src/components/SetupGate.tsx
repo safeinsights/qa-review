@@ -55,8 +55,9 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         missing.length > 0 ? (
             <>
                 <Alert color="red" title="Missing required tools" mb="md">
-                    Install and relaunch: <strong>{missing.join(', ')}</strong>. The QA Runner uses
-                    your machine's Google Chrome, git, gh, and claude.
+                    Install and relaunch: <strong>{missing.join(', ')}</strong>. Setup clones the
+                    test repository using your GitHub access (gh + git). Chrome and claude are
+                    checked later by the Setup Doctor.
                 </Alert>
                 <DebugDetails />
             </>

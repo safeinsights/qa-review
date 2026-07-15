@@ -235,6 +235,34 @@ func TestGuiResolveFinderPath(t *testing.T) {
 	})
 }
 
+func TestPreflightScopedToClone(t *testing.T) {
+	// Setup only clones the repo (gh + git), so preflight must NOT gate on claude
+	// or Chrome — those are validated later by the Setup Doctor. A dir with just gh
+	// and git present should yield an empty missing-list even with no claude.
+	binDir := t.TempDir()
+	for _, tool := range []string{"gh", "git"} {
+		if err := os.WriteFile(filepath.Join(binDir, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := guiPathDirs
+	guiPathDirs = []string{binDir}
+	t.Cleanup(func() { guiPathDirs = orig })
+	t.Setenv("PATH", binDir)
+
+	if missing := preflightMissing(); len(missing) != 0 {
+		t.Fatalf("preflightMissing() = %v, want empty (gh+git present, claude/Chrome not gated)", missing)
+	}
+
+	// Removing gh must surface it — proving the gate still works for its real deps.
+	if err := os.Remove(filepath.Join(binDir, "gh")); err != nil {
+		t.Fatal(err)
+	}
+	if missing := preflightMissing(); len(missing) != 1 || missing[0] != "gh" {
+		t.Fatalf("preflightMissing() = %v, want [gh]", missing)
+	}
+}
+
 func TestDebugReportProbesTools(t *testing.T) {
 	// A brew-like dir with a fake `claude` that prints a version, exactly the
 	// Finder-PATH bug shape: present only in an augmented dir, not on process PATH.
