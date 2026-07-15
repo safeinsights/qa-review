@@ -110,6 +110,11 @@ rm -rf "$TMP"
 
 echo "==> 4/7 wails build"
 cd "$GUI"
+# Force a clean frontend rebuild. `frontend/dist` is gitignored, so it survives the
+# release tool's `git checkout <branch>` untouched — a stale dist left by a prior
+# build would otherwise be embedded via `//go:embed all:frontend/dist` if wails did
+# not overwrite every file. Deleting it guarantees the embed reflects THIS build.
+rm -rf "$GUI/frontend/dist"
 wails build -platform "darwin/$NODE_ARCH" -clean
 # Rename the built bundle to the user-facing display name before staging/signing,
 # so every downstream path ($APP/$RES) — payload copy, codesign, DMG — uses it.
