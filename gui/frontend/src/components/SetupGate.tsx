@@ -2,6 +2,7 @@ import { Alert, Button, Group, Text } from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
 import { chooseDirectory, defaultRepoDir, isRepoReady, preflight, setup } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
+import { DebugDetails } from './DebugDetails'
 
 // Gates the app on first launch: (1) a blocking banner if required tools
 // (git/gh/claude/Chrome) are missing, and (2) a one-time consent + clone of the
@@ -52,10 +53,14 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
 
     const toolBanner =
         missing.length > 0 ? (
-            <Alert color="red" title="Missing required tools" mb="md">
-                Install and relaunch: <strong>{missing.join(', ')}</strong>. The QA Runner uses your
-                machine's Google Chrome, git, gh, and claude.
-            </Alert>
+            <>
+                <Alert color="red" title="Missing required tools" mb="md">
+                    Install and relaunch: <strong>{missing.join(', ')}</strong>. Setup clones the
+                    test repository using your GitHub access (gh + git). Chrome and claude are
+                    checked later by the Setup Doctor.
+                </Alert>
+                <DebugDetails />
+            </>
         ) : null
 
     if (!ready) {

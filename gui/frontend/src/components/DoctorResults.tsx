@@ -1,5 +1,6 @@
 import { Anchor, Loader, Text } from '@mantine/core'
 import type { DoctorCheck } from '../lib/ipc'
+import { DebugDetails } from './DebugDetails'
 
 // Shared rendering for Setup Doctor results — the loading state, an error, and a
 // ✓/✗ row per check (with hint + install link). Used by both the manual "Run
@@ -43,6 +44,7 @@ export function DoctorResults({
             {checks.map(c => (
                 <CheckRow key={c.name} check={c} />
             ))}
+            <DebugDetails />
         </div>
     )
 }

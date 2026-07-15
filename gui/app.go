@@ -1370,8 +1370,25 @@ func (a *App) debugInfo() string {
 	}
 	row("Working tree", dirty)
 
-	// Tool presence/versions, gh auth, Chrome, and identity are reported in detail by
-	// the "Setup Doctor" section above, so we don't duplicate them here.
+	// gh auth and identity are reported by the "Setup Doctor" section of the issue,
+	// so we don't duplicate them. Tool presence/versions ARE included here (via the
+	// debug report) because the searched dirs + effective PATH are what diagnose the
+	// Finder-PATH "installed but not found" bug.
+	report := a.DebugReport()
+	row("Searched dirs", strings.Join(report.SearchDirs, ", "))
+	row("Effective PATH", report.EffectivePATH)
+	for _, t := range report.Tools {
+		if !t.Found {
+			row("Tool "+t.Name, "not found")
+			continue
+		}
+		detail := t.Version
+		if t.Error != "" {
+			detail = "version check failed: " + t.Error
+		}
+		row("Tool "+t.Name, fmt.Sprintf("%s (%s)", t.ResolvedAt, strings.TrimSpace(detail)))
+	}
+
 	drift, _ := a.IsInDrift("")
 	row("Keyring drift", fmt.Sprintf("%t", drift))
 	row("Authoring session live", fmt.Sprintf("%t", a.pty.running()))
@@ -1487,4 +1504,100 @@ func (a *App) RunDoctor() []DoctorCheck {
 	}
 
 	return checks
+}
+
+// ToolProbe is one tool's resolution result for the debug report: whether it was
+// found on the GUI-augmented PATH, the absolute path it resolved to, and its
+// version output (or the error if the version call failed).
+type ToolProbe struct {
+	Name       string `json:"name"`
+	Found      bool   `json:"found"`
+	ResolvedAt string `json:"resolvedAt"` // absolute path, or "" if not found
+	Version    string `json:"version"`    // `<bin> --version` first line, or ""
+	Error      string `json:"error"`      // combined output if the version call failed
+}
+
+// DebugReport is the environment + tool-resolution detail the "Debug details"
+// accordion shows (and that ReportIssue embeds). It exists to make the
+// Finder-PATH class of "tool installed but not found" bug diagnosable: it names
+// exactly which dirs were searched, the effective PATH, and where each tool
+// resolved (or didn't).
+type DebugReport struct {
+	AppVersion    string      `json:"appVersion"`
+	OSArch        string      `json:"osArch"`
+	RepoDir       string      `json:"repoDir"`
+	SearchDirs    []string    `json:"searchDirs"`    // guiPathDirsWithHome()
+	EffectivePATH string      `json:"effectivePATH"` // the PATH used for every spawn
+	Tools         []ToolProbe `json:"tools"`
+	Markdown      string      `json:"markdown"` // debugMarkdown(self) — for copy-to-clipboard
+}
+
+// probeTool resolves one PATH-based tool (git/gh/claude/node) and runs its
+// version flag, returning the same detail the doctor uses but structured.
+func probeTool(name, versionFlag string) ToolProbe {
+	if !toolOnPath(name) {
+		return ToolProbe{Name: name, Found: false}
+	}
+	p := ToolProbe{Name: name, Found: true, ResolvedAt: guiResolve(name)}
+	ver, err := runTool(name, versionFlag)
+	if err != nil {
+		p.Error = ver // runTool returns the full combined output on failure
+	} else {
+		p.Version = ver
+	}
+	return p
+}
+
+// DebugReport gathers PATH + per-tool resolution detail for the "Debug details"
+// accordion. Every tool it checks is the same set the doctor validates, plus
+// Chrome (a bundle, not a PATH tool).
+func (a *App) DebugReport() DebugReport {
+	r := DebugReport{
+		AppVersion:    appVersion,
+		OSArch:        goruntime.GOOS + " / " + goruntime.GOARCH,
+		RepoDir:       repoDir(),
+		SearchDirs:    guiPathDirsWithHome(),
+		EffectivePATH: guiPath(withGuiPath()),
+	}
+	for _, t := range []struct{ name, flag string }{
+		{"git", "--version"},
+		{"gh", "--version"},
+		{"claude", "--version"},
+		{"node", "--version"},
+	} {
+		r.Tools = append(r.Tools, probeTool(t.name, t.flag))
+	}
+	// Chrome resolves by .app bundle, not PATH.
+	if p := chromePath(); p != "" {
+		r.Tools = append(r.Tools, ToolProbe{Name: "Google Chrome", Found: true, ResolvedAt: p})
+	} else {
+		r.Tools = append(r.Tools, ToolProbe{Name: "Google Chrome", Found: false})
+	}
+	r.Markdown = debugMarkdown(r)
+	return r
+}
+
+// debugMarkdown renders a DebugReport as a markdown block — used both for the
+// accordion's copy-to-clipboard and (via debugInfo) the GitHub issue body, so a
+// pasted debug log is byte-identical to what a filed issue contains.
+func debugMarkdown(r DebugReport) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("- **App version:** %s\n", r.AppVersion))
+	b.WriteString(fmt.Sprintf("- **OS / arch:** %s\n", r.OSArch))
+	b.WriteString(fmt.Sprintf("- **Repo dir:** %s\n", r.RepoDir))
+	b.WriteString(fmt.Sprintf("- **Searched dirs:** %s\n", strings.Join(r.SearchDirs, ", ")))
+	b.WriteString(fmt.Sprintf("- **Effective PATH:** %s\n", r.EffectivePATH))
+	b.WriteString("- **Tools:**\n")
+	for _, t := range r.Tools {
+		if !t.Found {
+			b.WriteString(fmt.Sprintf("  - ✗ %s — not found\n", t.Name))
+			continue
+		}
+		detail := t.Version
+		if t.Error != "" {
+			detail = "version check failed: " + t.Error
+		}
+		b.WriteString(fmt.Sprintf("  - ✓ %s — %s (%s)\n", t.Name, t.ResolvedAt, strings.TrimSpace(detail)))
+	}
+	return b.String()
 }

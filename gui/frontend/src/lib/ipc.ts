@@ -38,6 +38,29 @@ export interface KeyringAccess {
     note: string
 }
 
+// One tool's resolution result in the debug report: whether it was found on the
+// GUI-augmented PATH, where it resolved, and its version output (or error).
+export interface ToolProbe {
+    name: string
+    found: boolean
+    resolvedAt: string
+    version: string
+    error: string
+}
+
+// Environment + tool-resolution detail shown in the "Debug details" accordion.
+// Makes the Finder-PATH "installed but not found" bug diagnosable: the searched
+// dirs, the effective PATH, and where each tool resolved (or didn't).
+export interface DebugReport {
+    appVersion: string
+    osArch: string
+    repoDir: string
+    searchDirs: string[]
+    effectivePATH: string
+    tools: ToolProbe[]
+    markdown: string
+}
+
 // One rendered help page for the Help drawer, read from <repo>/docs/help/*.md.
 export interface HelpDoc {
     slug: string
@@ -74,6 +97,7 @@ interface WailsApp {
     OpenSuiteInEditor(name: string): Promise<void>
     ReportIssue(title: string, note: string, tab: string, runState: string): Promise<string>
     RunDoctor(): Promise<DoctorCheck[]>
+    DebugReport(): Promise<DebugReport>
     ReadScreenshot(bundleDir: string, rel: string): Promise<string>
     ReadVideo(bundleDir: string): Promise<string>
     SaveScreenshotAs(bundleDir: string, rel: string, suite: string): Promise<string>
@@ -313,6 +337,11 @@ export async function reportIssue(
 // Check + validate every prerequisite app/state for the Setup Doctor.
 export async function runDoctor(): Promise<DoctorCheck[]> {
     return app().RunDoctor()
+}
+
+// Environment + per-tool PATH resolution detail for the "Debug details" accordion.
+export async function debugReport(): Promise<DebugReport> {
+    return app().DebugReport()
 }
 
 // Read a per-step screenshot as a base64 data URI (webviews block file://).

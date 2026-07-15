@@ -205,19 +205,19 @@ func engineCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-// preflightMissing returns the list of required external tools/apps that are NOT
-// available, so the UI can show a blocking banner. Staff must have these installed.
+// preflightMissing returns the tools the FIRST-LAUNCH SETUP step needs but that
+// are NOT available, so the setup gate can show a blocking banner. Setup only
+// clones the repo (via `gh`, falling back to `git clone`), so only those two are
+// required here — `claude` and Chrome are needed later (authoring/running suites)
+// and are validated by the Setup Doctor, not gated at setup.
 func preflightMissing() []string {
 	// Non-nil so Wails marshals it to a JSON array ([]), not null — the frontend
 	// relies on .length being defined even when nothing is missing.
 	missing := []string{}
-	for _, tool := range []string{"git", "gh", "claude"} {
+	for _, tool := range []string{"gh", "git"} {
 		if !toolOnPath(tool) {
 			missing = append(missing, tool)
 		}
-	}
-	if !chromeInstalled() {
-		missing = append(missing, "Google Chrome")
 	}
 	return missing
 }
@@ -231,15 +231,22 @@ func toolOnPath(tool string) bool {
 }
 
 func chromeInstalled() bool {
+	return chromePath() != ""
+}
+
+// chromePath returns the path to the installed Google Chrome .app bundle, or ""
+// if it isn't in either standard location. Chrome is found by its bundle, not on
+// PATH — the debug report surfaces the matched path so a "not found" is obvious.
+func chromePath() string {
 	for _, p := range []string{
 		"/Applications/Google Chrome.app",
 		filepath.Join(os.Getenv("HOME"), "Applications", "Google Chrome.app"),
 	} {
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return true
+			return p
 		}
 	}
-	return false
+	return ""
 }
 
 // cloneRepo clones the qa-review repo into repoDir() via `gh repo clone` (falling
