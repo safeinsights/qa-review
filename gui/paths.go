@@ -231,15 +231,22 @@ func toolOnPath(tool string) bool {
 }
 
 func chromeInstalled() bool {
+	return chromePath() != ""
+}
+
+// chromePath returns the path to the installed Google Chrome .app bundle, or ""
+// if it isn't in either standard location. Chrome is found by its bundle, not on
+// PATH — the debug report surfaces the matched path so a "not found" is obvious.
+func chromePath() string {
 	for _, p := range []string{
 		"/Applications/Google Chrome.app",
 		filepath.Join(os.Getenv("HOME"), "Applications", "Google Chrome.app"),
 	} {
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return true
+			return p
 		}
 	}
-	return false
+	return ""
 }
 
 // cloneRepo clones the qa-review repo into repoDir() via `gh repo clone` (falling
