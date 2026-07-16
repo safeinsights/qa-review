@@ -987,18 +987,31 @@ type KeyringAccess struct {
 }
 
 // CheckKeyringAccess pulls the latest keyring + secrets (only those files) and
-// reports whether the local identity can decrypt shared secrets. The frontend
-// gates the app on IsRecipient — a false value means "walk the user through
-// requesting access" — and re-calls this (the Retry button) to detect when a
-// teammate's rekey PR has merged.
+// reports whether the local identity can ACTUALLY DECRYPT shared secrets. The
+// frontend gates the app on IsRecipient — a false value means "walk the user
+// through requesting access" — and re-calls this (the Retry button) to detect when
+// a teammate's rekey PR has merged.
+//
+// The authoritative test is a real decrypt, not keyring.json membership:
+// `request-access` writes the key into the local keyring before the access PR is
+// opened/merged, so membership alone reads true for a key that never landed on main
+// and thus can't decrypt anything. When there are no encrypted secrets to test
+// against, fall back to keyring membership so a fresh/empty repo isn't wrongly gated.
 func (a *App) CheckKeyringAccess(cwd string) (KeyringAccess, error) {
 	dir := repoDir()
 	note := a.syncKeyringFiles(dir)
-	has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+	configDir := filepath.Join(dir, "config")
+	has, canDecrypt, checkable, err := identityDecryptsSecrets(configDir)
 	if err != nil {
 		return KeyringAccess{}, err
 	}
-	return KeyringAccess{HasIdentity: has, IsRecipient: isRecipient, Note: note}, nil
+	if has && !checkable {
+		// Nothing encrypted to verify against — defer to keyring membership.
+		if _, isRecipient, kerr := identityInKeyring(configDir); kerr == nil {
+			canDecrypt = isRecipient
+		}
+	}
+	return KeyringAccess{HasIdentity: has, IsRecipient: canDecrypt, Note: note}, nil
 }
 
 // RequestAccess runs the bundled engine's `request-access --name <name>` (generate
@@ -1423,20 +1436,49 @@ type DoctorCheck struct {
 	DocURL string `json:"docURL"` // download/install page for the tool, shown as a link when !OK
 }
 
-// runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
-// finds Homebrew tools). On success it returns the trimmed first line of output (the
-// version string); on FAILURE it returns the full combined output so the doctor can
-// show the real reason — a truncated first line hides errors that print on stderr or
-// later lines, which is exactly what made the Finder-PATH bug undiagnosable.
-func runTool(name string, args ...string) (string, error) {
+// runToolFull runs a command against the GUI-augmented PATH (so a Finder-launched
+// app finds Homebrew tools) and returns the trimmed FULL combined output. Use this
+// when the caller needs every line (e.g. parsing multi-line JSON).
+func runToolFull(name string, args ...string) (string, error) {
 	cmd := exec.Command(guiResolve(name), args...)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
-	trimmed := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), err
+}
+
+// runTool is runToolFull narrowed to a single line: on success it returns the
+// trimmed FIRST line of output (the version string); on FAILURE it returns the full
+// combined output so the doctor can show the real reason — a truncated first line
+// hides errors that print on stderr or later lines, which is exactly what made the
+// Finder-PATH bug undiagnosable.
+func runTool(name string, args ...string) (string, error) {
+	out, err := runToolFull(name, args...)
 	if err != nil {
-		return trimmed, err
+		return out, err
 	}
-	return strings.SplitN(trimmed, "\n", 2)[0], nil
+	return strings.SplitN(out, "\n", 2)[0], nil
+}
+
+// accessPROpen reports whether an access PR opened BY THIS USER (head branch
+// "access/*") is already open on GitHub, so the Doctor can say "your PR is open — a
+// teammate needs to rekey & merge it" instead of prompting for a duplicate. Scoping
+// to --author "@me" (gh is authenticated as the user) is what makes this the user's
+// OWN PR and not some other teammate's onboarding PR. Any error (offline, gh
+// unauthenticated) yields false — the caller falls back to the plain "open an access
+// PR" hint rather than blocking on the network.
+func (a *App) accessPROpen() bool {
+	out, err := runToolFull("gh", "pr", "list", "--repo", qaReviewSlug,
+		"--state", "open", "--author", "@me", "--search", "head:access/", "--json", "number")
+	if err != nil {
+		return false
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return false
+	}
+	return len(prs) > 0
 }
 
 // RunDoctor checks every prerequisite app/state and validates it (not just "on
@@ -1490,17 +1532,30 @@ func (a *App) RunDoctor() []DoctorCheck {
 	}
 
 	// Keyring identity — needed to decrypt shared secrets. Presence of the identity
-	// file isn't enough: the key must be a RECIPIENT in the keyring, else decryption
-	// fails at runtime ("your key may not be a recipient yet"). Check both.
-	switch has, isRecipient, err := identityInKeyring(filepath.Join(repoDir(), "config")); {
+	// file (and even membership in the working-tree keyring.json) isn't enough: the
+	// authoritative test is whether the key can ACTUALLY DECRYPT a committed secret.
+	// `request-access` writes your key into the local keyring before the access PR is
+	// opened/merged, so a key that never landed on main still looks present — but it
+	// was never rekeyed into the committed secrets and can't decrypt them. When that's
+	// the case, tailor the hint by whether an access PR is already open.
+	configDir := filepath.Join(repoDir(), "config")
+	switch has, canDecrypt, checkable, err := identityDecryptsSecrets(configDir); {
 	case err != nil:
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "check failed: " + err.Error(), Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
 	case !has:
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "no config/age-identity.txt", Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
-	case !isRecipient:
-		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "your key isn't in the keyring yet", Hint: "Ask a teammate to review & rekey your access PR, then sync."})
+	case !checkable:
+		// Identity present but nothing encrypted to test against — treat as OK; a
+		// missing-secret failure would surface at run time with a clearer message.
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present (no encrypted secrets to verify against)"})
+	case !canDecrypt:
+		if a.accessPROpen() {
+			checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "can't decrypt shared secrets — access PR is open, awaiting rekey & merge", Hint: "A teammate needs to review, rekey & merge your open access PR. Then run Sync."})
+		} else {
+			checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "can't decrypt shared secrets — your key isn't in the committed keyring", Hint: "Open an access PR (Settings ▸ Request access); a teammate reviews, rekeys & merges it."})
+		}
 	default:
-		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and in keyring"})
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and can decrypt secrets"})
 	}
 
 	return checks

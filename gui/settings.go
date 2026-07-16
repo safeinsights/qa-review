@@ -23,6 +23,17 @@ const (
 	localFile   = "settings.local.json"
 )
 
+// ageArmorHeader is the PEM header of an armored age blob — used to tell an
+// encrypted value from a plaintext one. Must match AGE_ARMOR_HEADER /
+// isEncryptedValue() in src/engine/settings.ts.
+const ageArmorHeader = "-----BEGIN AGE ENCRYPTED FILE-----"
+
+// isEncryptedValue reports whether a settings value is an armored age blob.
+// Mirrors isEncryptedValue() in src/engine/settings.ts.
+func isEncryptedValue(v string) bool {
+	return strings.HasPrefix(strings.TrimSpace(v), ageArmorHeader)
+}
+
 // secretVars are the var names whose values must be encrypted when committed to
 // the project tier. Kept in sync with secretVarNames() in src/engine/settings.ts
 // (each account's password + MFA code + results private key).
@@ -134,15 +145,11 @@ func writeSettingsFile(path string, m map[string]string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// readKeyringRecipients reads the recipient public keys from config/keyring.json.
-// A missing file yields no recipients (not an error).
-func readKeyringRecipients(dir string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "keyring.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+// parseKeyringRecipients extracts the recipient public keys from a keyring.json
+// byte blob. Empty input yields no recipients (not an error).
+func parseKeyringRecipients(data []byte) ([]string, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
 	}
 	var members []struct {
 		PublicKey string `json:"publicKey"`
@@ -157,18 +164,29 @@ func readKeyringRecipients(dir string) ([]string, error) {
 	return keys, nil
 }
 
-// identityPublicKey reads config/age-identity.txt (dir is the config dir), parses
-// the age X25519 secret key, and returns its public recipient string (age1...).
-// The second return is false with no error when the identity file is absent —
-// the caller distinguishes "no identity" from "identity present but not a
-// recipient". Mirrors publicKeyFromIdentity() in src/engine/settings.ts.
-func identityPublicKey(dir string) (string, bool, error) {
+// readKeyringRecipients reads the recipient public keys from config/keyring.json.
+// A missing file yields no recipients (not an error).
+func readKeyringRecipients(dir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "keyring.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return parseKeyringRecipients(data)
+}
+
+// loadIdentity reads config/age-identity.txt (dir is the config dir) and parses the
+// age X25519 secret key. The bool is false with no error when the file is absent, so
+// callers can distinguish "no identity" from a malformed/unusable one.
+func loadIdentity(dir string) (*age.X25519Identity, bool, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "age-identity.txt"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", false, nil
+			return nil, false, nil
 		}
-		return "", false, err
+		return nil, false, err
 	}
 	// Standard age identity format: skip comment (#) and blank lines; the secret
 	// key is the first remaining line.
@@ -182,11 +200,22 @@ func identityPublicKey(dir string) (string, bool, error) {
 		break
 	}
 	if secret == "" {
-		return "", false, fmt.Errorf("age-identity.txt has no key line")
+		return nil, false, fmt.Errorf("age-identity.txt has no key line")
 	}
 	id, err := age.ParseX25519Identity(secret)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
+	}
+	return id, true, nil
+}
+
+// identityPublicKey returns the local identity's public recipient string (age1...).
+// The second return is false with no error when the identity file is absent.
+// Mirrors publicKeyFromIdentity() in src/engine/settings.ts.
+func identityPublicKey(dir string) (string, bool, error) {
+	id, has, err := loadIdentity(dir)
+	if err != nil || !has {
+		return "", has, err
 	}
 	return id.Recipient().String(), true, nil
 }
@@ -209,6 +238,65 @@ func identityInKeyring(dir string) (hasIdentity, isRecipient bool, err error) {
 		}
 	}
 	return true, false, nil
+}
+
+// identityDecryptsSecrets is the AUTHORITATIVE access check: it tries to actually
+// decrypt a committed secret with the local identity. Membership in the working-tree
+// keyring.json is not enough — `request-access` writes your key there locally before
+// the access PR is opened/merged, so a key that never landed on main (and thus was
+// never rekeyed into the committed secrets) still "looks" present. A real decrypt
+// only succeeds when your key is a recipient of the secrets as committed.
+//
+// hasIdentity mirrors identityInKeyring. canDecrypt is true only when EVERY
+// encrypted secret decrypts — matching the engine's loadSettings(), which throws on
+// the first secret it can't decrypt. A single undecryptable secret (e.g. one rotated
+// via `set-secret` from a checkout whose keyring predated this user) fails a real
+// run, so reporting "can decrypt" off just one success would be a false green.
+// checkable is false when there's nothing to test against (no secrets file / no
+// encrypted values yet) — the caller then treats it as "can't tell" rather than a
+// failure.
+func identityDecryptsSecrets(configDir string) (hasIdentity, canDecrypt, checkable bool, err error) {
+	id, has, err := loadIdentity(configDir)
+	if err != nil || !has {
+		return false, false, true, err
+	}
+	secrets, err := readSettingsFile(filepath.Join(configDir, secretsFile))
+	if err != nil {
+		return true, false, false, err
+	}
+	tried := false
+	for _, val := range secrets {
+		// Match loadSettings(): it decrypts EVERY encrypted value in the secrets
+		// tier, not just known secretVars — so an encrypted value under an unknown
+		// key still fails a real run. Test the same set here.
+		if !isEncryptedValue(val) {
+			continue
+		}
+		tried = true
+		if _, decErr := decryptWithIdentity(val, id); decErr != nil {
+			// Any secret we can't decrypt means a real run would fail here.
+			return true, false, true, nil
+		}
+	}
+	if !tried {
+		// No encrypted secrets to test against — can't confirm or deny access.
+		return true, false, false, nil
+	}
+	return true, true, true, nil
+}
+
+// decryptWithIdentity decrypts an armored age blob with a single X25519 identity.
+func decryptWithIdentity(armored string, id *age.X25519Identity) (string, error) {
+	ar := armor.NewReader(strings.NewReader(armored))
+	r, err := age.Decrypt(ar, id)
+	if err != nil {
+		return "", err
+	}
+	buf := &bytes.Buffer{}
+	if _, err := io.Copy(buf, r); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // writeLock writes config/keyring.lock with a stable fingerprint of the recipient
