@@ -207,6 +207,96 @@ func TestIdentityInKeyring(t *testing.T) {
 	})
 }
 
+// writeTestSecrets writes a settings.secrets.json under dir/config with one
+// encrypted secret (ADMIN_PASSWORD) encrypted to the given recipients.
+func writeTestSecrets(t *testing.T, dir string, recipients ...string) {
+	t.Helper()
+	enc, err := encryptToRecipients("s3cret", recipients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD": enc})
+	if err := os.WriteFile(filepath.Join(dir, "config", secretsFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityDecryptsSecrets(t *testing.T) {
+	me, _ := age.GenerateX25519Identity()
+	other, _ := age.GenerateX25519Identity()
+
+	newConfig := func(t *testing.T, id *age.X25519Identity) (root, cfg string) {
+		t.Helper()
+		root = t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if id != nil {
+			writeTestIdentity(t, root, id)
+		}
+		return root, filepath.Join(root, "config")
+	}
+
+	t.Run("no identity file", func(t *testing.T) {
+		_, cfg := newConfig(t, nil)
+		has, canDecrypt, checkable, err := identityDecryptsSecrets(cfg)
+		if err != nil || has || canDecrypt || !checkable {
+			t.Fatalf("no identity: has=%v canDecrypt=%v checkable=%v err=%v", has, canDecrypt, checkable, err)
+		}
+	})
+
+	t.Run("key is a recipient — decrypts", func(t *testing.T) {
+		root, cfg := newConfig(t, me)
+		writeTestSecrets(t, root, other.Recipient().String(), me.Recipient().String())
+		has, canDecrypt, checkable, err := identityDecryptsSecrets(cfg)
+		if err != nil || !has || !canDecrypt || !checkable {
+			t.Fatalf("recipient: has=%v canDecrypt=%v checkable=%v err=%v", has, canDecrypt, checkable, err)
+		}
+	})
+
+	// The bug: identity exists (request-access wrote it locally) but the access PR
+	// never merged, so the committed secrets were never rekeyed to this key.
+	t.Run("key present but not a recipient — cannot decrypt", func(t *testing.T) {
+		root, cfg := newConfig(t, me)
+		writeTestSecrets(t, root, other.Recipient().String())
+		has, canDecrypt, checkable, err := identityDecryptsSecrets(cfg)
+		if err != nil || !has || canDecrypt || !checkable {
+			t.Fatalf("not recipient: has=%v canDecrypt=%v checkable=%v err=%v", has, canDecrypt, checkable, err)
+		}
+	})
+
+	t.Run("no encrypted secrets — uncheckable, not a failure", func(t *testing.T) {
+		_, cfg := newConfig(t, me)
+		has, canDecrypt, checkable, err := identityDecryptsSecrets(cfg)
+		if err != nil || !has || canDecrypt || checkable {
+			t.Fatalf("uncheckable: has=%v canDecrypt=%v checkable=%v err=%v", has, canDecrypt, checkable, err)
+		}
+	})
+
+	// Partial-rekey: one secret decrypts, another (e.g. rotated via set-secret from a
+	// stale keyring) does not. loadSettings() would throw on the undecryptable one, so
+	// the check must report canDecrypt=false — not true off the one that works.
+	t.Run("one secret undecryptable — cannot decrypt", func(t *testing.T) {
+		_, cfg := newConfig(t, me)
+		mine, err := encryptToRecipients("ok", []string{me.Recipient().String()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		theirs, err := encryptToRecipients("nope", []string{other.Recipient().String()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD": mine, "ADMIN_MFA_CODE": theirs})
+		if err := os.WriteFile(filepath.Join(cfg, secretsFile), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		has, canDecrypt, checkable, err := identityDecryptsSecrets(cfg)
+		if err != nil || !has || canDecrypt || !checkable {
+			t.Fatalf("partial: has=%v canDecrypt=%v checkable=%v err=%v", has, canDecrypt, checkable, err)
+		}
+	})
+}
+
 func TestReadSettingsReportsIdentityAndMasksSecrets(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QAR_REPO_DIR", dir)
