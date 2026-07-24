@@ -49,6 +49,21 @@ describe('extractSignupUrl', () => {
         )
     })
 
+    it('does not double-unescape a pre-escaped entity in the URL', () => {
+        // "&amp;lt;" must decode to the literal "&lt;" (one pass), NOT collapse to
+        // "<" — decoding the &amp; first and re-scanning would double-unescape.
+        const msg = {
+            id: 'x',
+            subject: 'invite',
+            from: 'noreply@safeinsights.org',
+            text: '',
+            html: '<a href="https://pr9.qa.safeinsights.org/account/signup?q=a&amp;lt;b">Accept</a>',
+        }
+        expect(extractSignupUrl(msg)).toBe(
+            'https://pr9.qa.safeinsights.org/account/signup?q=a&lt;b'
+        )
+    })
+
     it('strips trailing sentence punctuation', () => {
         const msg = {
             id: 'x',

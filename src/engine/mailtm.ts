@@ -2,7 +2,22 @@
 // suite to catch invite emails and read the signup URL. No API key, no config:
 // each invited user gets its own freshly-created account (mail.tm rejects '+' so
 // plus-addressing on one inbox is impossible). See the signup suite design doc.
+import { randomBytes } from 'node:crypto'
+
 const API = 'https://api.mail.tm'
+
+// A cryptographically-secure lowercase-alphanumeric token of `len` chars. Used
+// for the throwaway inbox local part + password; a CSPRNG (not Math.random) keeps
+// these off the "insecure randomness in a security context" radar and guarantees
+// uniqueness. Rejection-free: mask each byte to 0..35 by modulo — the tiny bias is
+// irrelevant for a disposable QA credential.
+const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
+function randomToken(len: number): string {
+    const bytes = randomBytes(len)
+    let out = ''
+    for (let i = 0; i < len; i++) out += ALPHABET[bytes[i] % ALPHABET.length]
+    return out
+}
 
 export interface Inbox {
     id: string
@@ -52,18 +67,17 @@ export async function activeDomain(): Promise<string> {
 
 let seq = 0
 
-// A collision-free-enough local part: a per-process counter + a random suffix.
-// (Engine runtime code — Math.random is fine here, unlike workflow scripts.)
+// A collision-free-enough local part: a per-process counter + a CSPRNG suffix.
 function uniqueLocalPart(): string {
     seq += 1
-    const rand = Math.random().toString(36).slice(2, 10)
-    return `qar-signup-${seq}-${rand}`
+    return `qar-signup-${seq}-${randomToken(8)}`
 }
 
 // Create a fresh mail.tm account and return an authenticated Inbox.
 export async function createInbox(domain: string): Promise<Inbox> {
     const address = `${uniqueLocalPart()}@${domain}`
-    const password = `Qar-${Math.random().toString(36).slice(2).padEnd(10, '0').slice(0, 10)}-9!`
+    // Mixed-case + symbol to satisfy any password policy; the random core is CSPRNG.
+    const password = `Qar-${randomToken(10)}-9!`
     const created = await api('/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -89,13 +103,17 @@ export async function createInbox(domain: string): Promise<Inbox> {
 // unescape first; trailing sentence punctuation is stripped. The exact path is
 // verified against a real invite during signup-suite wiring — widen if needed.
 export function extractSignupUrl(message: Message): string {
-    const unescapeEntities = (s: string) =>
-        s
-            .replace(/&amp;/g, '&')
-            .replace(/&#38;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
+    // Decode each HTML entity in a SINGLE pass over an alternation, so a decoded
+    // '&' can never be re-scanned and combined with following text into a second
+    // entity (the double-unescape bug — e.g. "&amp;lt;" must yield "&lt;", not "<").
+    const ENTITIES: Record<string, string> = {
+        '&amp;': '&',
+        '&#38;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '&quot;': '"',
+    }
+    const unescapeEntities = (s: string) => s.replace(/&(?:amp|#38|lt|gt|quot);/g, m => ENTITIES[m])
     const haystack = unescapeEntities(`${message.text}\n${message.html}`)
     const urls = (haystack.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).map(u =>
         u.replace(/[.,;:!?)\]}]+$/, '')
