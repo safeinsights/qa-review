@@ -91,6 +91,64 @@ export function extractSignupUrl(message: Message): string {
     return signup
 }
 
+async function listMessages(token: string): Promise<{ id: string }[]> {
+    const res = await api('/messages', { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`mail.tm GET /messages failed: ${res.status}`)
+    const body = (await res.json()) as { 'hydra:member'?: { id: string }[] }
+    return body['hydra:member'] ?? []
+}
+
+async function getMessage(token: string, id: string): Promise<Message> {
+    const res = await api(`/messages/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`mail.tm GET /messages/${id} failed: ${res.status}`)
+    const m = (await res.json()) as {
+        id: string
+        subject: string
+        from: { address: string }
+        text?: string
+        html?: string[]
+    }
+    return {
+        id: m.id,
+        subject: m.subject,
+        from: m.from.address,
+        text: m.text ?? '',
+        html: (m.html ?? []).join('\n'),
+    }
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// Poll the inbox until a message matching `predicate` arrives, then return its
+// full body. Bounded by `timeoutMs` (default 60s) — throws if nothing matches in
+// time. Poll interval respects mail.tm's 8 QPS limit.
+export async function waitForMessage(
+    inbox: Inbox,
+    predicate: (m: Message) => boolean,
+    timeoutMs = 60_000
+): Promise<Message> {
+    const deadline = Date.now() + timeoutMs
+    const seen = new Set<string>()
+    while (Date.now() < deadline) {
+        try {
+            const summaries = await listMessages(inbox.token)
+            for (const summary of summaries) {
+                if (seen.has(summary.id)) continue
+                seen.add(summary.id)
+                const full = await getMessage(inbox.token, summary.id)
+                if (predicate(full)) return full
+            }
+        } catch {
+            // Transient list/get failure (429/5xx, or a message that expired
+            // mid-poll) — keep polling until the deadline rather than aborting.
+        }
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) break
+        await sleep(Math.min(2_000, remaining))
+    }
+    throw new Error(`mail.tm: no matching message for ${inbox.address} within ${timeoutMs}ms`)
+}
+
 // Best-effort delete of a mail.tm account (they also expire on their own).
 export async function deleteInbox(inbox: Inbox): Promise<void> {
     await api(`/accounts/${inbox.id}`, {
