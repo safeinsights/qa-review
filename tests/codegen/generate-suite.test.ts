@@ -17,16 +17,21 @@ const trace: ActionTrace = {
 }
 
 describe('generateSuite', () => {
-    it('emits a Suite with one ctx.step per distinct step label', () => {
+    it('emits a Suite with one name-less step block per distinct step label', () => {
         const src = generateSuite(trace)
         expect(src).toContain("name: 'admin-invites-user'")
         expect(src).toContain("description: 'Admin invites a user and confirms they appear'")
         expect(src).toContain("roles: ['admin']")
-        expect(src).toContain("await ctx.step('Open members page'")
-        expect(src).toContain("await ctx.step('Invite a user'")
-        expect(src).toContain("await ctx.step('Confirm they appear'")
+        // Each distinct label appears once, as a step's `name:` field.
+        expect(src).toContain("name: 'Open members page'")
+        expect(src).toContain("name: 'Invite a user'")
+        expect(src).toContain("name: 'Confirm they appear'")
         // Two actions under the same label go in ONE step block.
-        expect(src.match(/ctx\.step\('Invite a user'/g)).toHaveLength(1)
+        expect(src.match(/name: 'Invite a user'/g)).toHaveLength(1)
+        // The body uses ctx.step() with NO repeated label — the name lives only in
+        // the `name:` field.
+        expect(src).toContain('ctx.step(async () => {')
+        expect(src).not.toContain("ctx.step('")
     })
 
     it('maps actions to Playwright calls', () => {

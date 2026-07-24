@@ -43,12 +43,14 @@ export function generateSuite(trace: ActionTrace): string {
         .map(g => {
             // actionLine emits 12-space indent; the step body here nests 8 deeper.
             const body = g.actions.map(a => `        ${actionLine(a)}`).join('\n')
+            // A step declares its name once (the `name:` field). ctx.step() with no
+            // name records under that name — so a single-group step drops the
+            // repeated label entirely.
             return (
                 `        {\n` +
                 `            name: '${sq(g.label)}',\n` +
-                `            run: async (ctx) => {\n` +
-                `                await ctx.step('${sq(g.label)}', async () => {\n${body}\n                })\n` +
-                `            },\n` +
+                `            run: (ctx) =>\n` +
+                `                ctx.step(async () => {\n${body}\n                }),\n` +
                 `        },`
             )
         })
