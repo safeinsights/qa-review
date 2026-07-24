@@ -60,3 +60,28 @@ describe('extractSignupUrl', () => {
         expect(extractSignupUrl(msg)).toBe('https://pr9.qa.safeinsights.org/invite/abc123')
     })
 })
+
+describe('mail.tm api retry', () => {
+    it('retries a 429 then succeeds (activeDomain)', async () => {
+        const realFetch = globalThis.fetch
+        let calls = 0
+        globalThis.fetch = (async () => {
+            calls += 1
+            if (calls === 1) {
+                return new Response('rate limited', { status: 429 })
+            }
+            return new Response(
+                JSON.stringify({ 'hydra:member': [{ domain: 'example.test', isActive: true }] }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+        }) as typeof fetch
+        try {
+            const { activeDomain } = await import('@/engine/mailtm')
+            const domain = await activeDomain()
+            expect(domain).toBe('example.test')
+            expect(calls).toBe(2) // one 429 + one success
+        } finally {
+            globalThis.fetch = realFetch
+        }
+    }, 15_000)
+})

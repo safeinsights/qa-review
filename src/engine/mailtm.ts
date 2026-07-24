@@ -18,8 +18,24 @@ export interface Message {
     html: string
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// All mail.tm requests flow through here. The free tier rate-limits bursts with
+// HTTP 429 (and occasionally 503); these are transient, so retry a few times with
+// increasing backoff before giving the response back to the caller. Non-retryable
+// statuses (and success) return immediately.
 async function api(path: string, init?: RequestInit): Promise<Response> {
-    return fetch(`${API}${path}`, init)
+    const backoffsMs = [500, 1500, 3000, 5000]
+    let res = await fetch(`${API}${path}`, init)
+    for (
+        let attempt = 0;
+        attempt < backoffsMs.length && (res.status === 429 || res.status === 503);
+        attempt++
+    ) {
+        await sleep(backoffsMs[attempt])
+        res = await fetch(`${API}${path}`, init)
+    }
+    return res
 }
 
 // The first active public domain (currently "web-library.net"). Not hardcoded so
@@ -116,8 +132,6 @@ async function getMessage(token: string, id: string): Promise<Message> {
         html: (m.html ?? []).join('\n'),
     }
 }
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 // Poll the inbox until a message matching `predicate` arrives, then return its
 // full body. Bounded by `timeoutMs` (default 60s) — throws if nothing matches in

@@ -36,8 +36,8 @@ export const signupSuite: Suite = {
     steps: [
         {
             name: 'Create two mail.tm inboxes for the invited users',
-            run: async ctx => {
-                await ctx.step('Create two mail.tm inboxes for the invited users', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     const domain = await activeDomain()
                     const researcher = await createInbox(domain)
                     const reviewer = await createInbox(domain)
@@ -45,8 +45,7 @@ export const signupSuite: Suite = {
                         { role: 'researcher', inbox: researcher },
                         { role: 'reviewer', inbox: reviewer },
                     ] satisfies SignupInbox[]
-                })
-            },
+                }),
         },
         {
             name: 'Invite both users as admin',
@@ -63,11 +62,14 @@ export const signupSuite: Suite = {
             run: async ctx => {
                 for (const { role, inbox } of inboxes(ctx)) {
                     await ctx.step(`Sign up the invited ${role}`, async () => {
+                        // Invite email can take a while to be delivered; give it a
+                        // realistic budget rather than the 60s default.
                         const message = await waitForMessage(
                             inbox,
                             m =>
                                 /get started with safeinsights/i.test(m.subject) ||
-                                /safeinsights/i.test(m.from)
+                                /safeinsights/i.test(m.from),
+                            120_000
                         )
                         const url = extractSignupUrl(message)
                         const userId = await completeSignup(ctx, url)
@@ -107,8 +109,10 @@ async function inviteUser(ctx: RunContext, email: string, role: InvitedRole): Pr
                 .click()
         })
     await ctx.page.getByRole('button', { name: /send invitation/i }).click()
-    // Confirm the invite registered: the address appears in the pending list.
-    await ctx.page.getByText(email, { exact: false }).first().waitFor({ state: 'visible' })
+    // On success the dialog swaps to a confirmation screen ("Invitation sent
+    // successfully!") — the invited address does NOT appear in the main members
+    // table (it's only pending), so assert on that confirmation instead.
+    await ctx.page.getByText(/invitation sent successfully/i).waitFor({ state: 'visible' })
 }
 
 // Complete the full new-user signup from the emailed invitation URL and return
@@ -146,14 +150,16 @@ async function completeSignup(ctx: RunContext, invitationUrl: string): Promise<s
     await page.getByRole('link', { name: /authenticator app/i }).click()
     await page.waitForURL(/\/account\/mfa\/app/, { timeout: 30_000 })
 
-    // The secret is a run of base32 chars shown on the page. Read it, then fill the
-    // 6-digit code. Retry across a step boundary since codes roll every 30s.
-    const secret = await readTotpSecret(page)
-    await enterTotp(page, secret)
+    // Enter the authenticator code. enterTotp re-reads the secret from the page on
+    // each attempt — the page can re-render/regenerate the secret after first paint,
+    // so a code must always be computed from the CURRENTLY-displayed secret.
+    await enterTotp(page)
 
-    // 4. Clerk may step-up re-prompt with a single verification input.
+    // 4. Clerk may step-up re-prompt with a single verification input. Read the
+    //    (still-current) secret again for this code.
     const stepUp = page.getByRole('textbox', { name: /verification code/i })
     if (await stepUp.isVisible({ timeout: 10_000 }).catch(() => false)) {
+        const secret = await readTotpSecret(page)
         await stepUp.fill(totp(secret))
         await page
             .getByRole('button', { name: /continue/i })
@@ -161,53 +167,135 @@ async function completeSignup(ctx: RunContext, invitationUrl: string): Promise<s
             .catch(() => {})
     }
 
-    // 5. Recovery codes screen, then the "have you stored them?" confirm dialog.
+    // 5. Recovery codes screen ("Go to SafeInsights") opens a "have you stored
+    //    them?" confirm dialog with its OWN "Go to SafeInsights". Both buttons
+    //    match the same name and the page one sits behind the modal, so target the
+    //    dialog's button specifically (not .first(), which grabs the obscured page
+    //    button and silently no-ops).
     await page
         .getByRole('button', { name: /go to safeinsights/i })
         .first()
         .click()
-    await page
+    const recoveryDialog = page.getByRole('dialog').filter({ hasText: /recovery codes/i })
+    await recoveryDialog
         .getByRole('button', { name: /go to safeinsights/i })
-        .first()
         .click()
         .catch(() => {})
 
-    // 6. Landed authenticated — read the new user's Clerk id for cleanup.
+    // 6. Security-key screen (/account/keys): a one-time private key. "Next" is
+    //    gated behind copying, so click "Copy key" first, then "Next", then confirm
+    //    "Yes, I have stored my key". Best-effort waits — this screen only appears
+    //    for a brand-new account.
+    const copyKey = page.getByRole('button', { name: /copy key/i })
+    if (await copyKey.isVisible({ timeout: 15_000 }).catch(() => false)) {
+        await copyKey.click()
+        await page.getByRole('button', { name: /^next$/i }).click()
+        await page
+            .getByRole('button', { name: /yes, i have stored my key/i })
+            .click()
+            .catch(() => {})
+    }
+
+    // 7. Landed authenticated — read the new user's SafeInsights DB id for cleanup.
+    //    The QA cleanup endpoint (DELETE /api/qa/users/{id}) looks up by the DB
+    //    user UUID (`user.id`), NOT the Clerk id — passing a Clerk id ("user_...")
+    //    into the uuid column 500s. The DB id lives in Clerk publicMetadata.user.id
+    //    (see management-app session.ts metadataUserId). Poll: metadata hydrates a
+    //    beat after login.
     await page.waitForURL(url => /\/dashboard|\/openstax/i.test(url.pathname), { timeout: 30_000 })
-    const userId = await page.evaluate(() => {
-        const clerk = (window as unknown as { Clerk?: { user?: { id?: string } } }).Clerk
-        return clerk?.user?.id ?? ''
-    })
-    if (!userId) throw new Error('Could not read the new user Clerk id after signup')
+    let userId = ''
+    for (let attempt = 0; attempt < 10 && !userId; attempt++) {
+        userId = await page.evaluate(() => {
+            const clerk = (
+                window as unknown as {
+                    Clerk?: { user?: { publicMetadata?: { user?: { id?: string } } } }
+                }
+            ).Clerk
+            return clerk?.user?.publicMetadata?.user?.id ?? ''
+        })
+        if (!userId) await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    if (!userId) {
+        throw new Error('Could not read the new user SafeInsights id (publicMetadata) after signup')
+    }
     return userId
 }
 
-// Read the base32 TOTP secret shown on the authenticator-app setup page. It renders
-// as an uppercase base32 run (>= 16 chars). Prefer the "Copy secret key" adjacent
-// text; fall back to scanning visible text for a base32 token.
+// Read the base32 TOTP secret shown on the authenticator-app setup page. The
+// secret renders asynchronously (the page fetches it after load) and may sit in a
+// leaf node, an input's value, or a data attribute — so poll a few times and scan
+// broadly for an uppercase base32 run (>= 16 chars, and a multiple of 8 to avoid
+// matching unrelated all-caps words). Also try the "Copy secret key" button's
+// clipboard payload via its adjacent text.
 async function readTotpSecret(page: Page): Promise<string> {
-    const secret = await page.evaluate(() => {
-        const rx = /\b[A-Z2-7]{16,}\b/
-        for (const el of Array.from(document.querySelectorAll('body *'))) {
-            const t = (el.textContent || '').trim()
-            if (el.children.length === 0 && rx.test(t)) {
-                const m = t.match(rx)
-                if (m) return m[0]
+    const deadline = Date.now() + 20_000
+    // NOTE: the evaluate body must avoid named inner functions — tsx/esbuild wraps
+    // them with a `__name` helper that doesn't exist in the browser, throwing
+    // "ReferenceError: __name is not defined". So gather raw candidate strings in
+    // the browser with plain loops, and do the base32 selection here in Node.
+    while (Date.now() < deadline) {
+        const candidates = await page.evaluate(() => {
+            const out: string[] = []
+            for (const inp of Array.from(document.querySelectorAll('input'))) {
+                out.push((inp as HTMLInputElement).value || '')
+            }
+            for (const el of Array.from(document.querySelectorAll('body *'))) {
+                let own = ''
+                for (const n of Array.from(el.childNodes)) {
+                    if (n.nodeType === 3) own += n.textContent || ''
+                }
+                out.push(own)
+                out.push(el.getAttribute('data-secret') || '')
+            }
+            return out
+        })
+        // Clerk's authenticator secret is a 32-char base32 string. Require >= 26 to
+        // exclude stray all-caps DOM tokens (e.g. the literal "VIEWPORTBOUNDARY",
+        // 16 chars, which is valid base32 and would otherwise be mistaken for the
+        // secret) and prefer the LONGEST match.
+        let best = ''
+        for (const raw of candidates) {
+            for (const m of raw.toUpperCase().matchAll(/\b[A-Z2-7]{26,}\b/g)) {
+                if (m[0].length % 8 === 0 && m[0].length > best.length) best = m[0]
             }
         }
-        return ''
-    })
-    if (!secret) throw new Error('Could not find the TOTP secret on the MFA setup page')
-    return secret
+        if (best) return best
+        await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+    // Include a DOM snippet so a miss is diagnosable from the result bundle without
+    // another live run.
+    const dom = await page
+        .evaluate(() => document.querySelector('main')?.innerText?.slice(0, 800) ?? '(no main)')
+        .catch(() => '(dom read failed)')
+    throw new Error(`Could not find the TOTP secret on the MFA setup page. main text:\n${dom}`)
 }
 
 // Fill the 6-box PinInput with a freshly-computed TOTP code and submit. If the
-// verify fails (a code that straddled a 30s rollover), recompute once and retry.
-async function enterTotp(page: Page, secret: string): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
+// verify fails, wait for a fresh 30s window and retry with a newly-computed code —
+// the failure mode is always a code that straddled a rollout boundary, never a
+// wrong algorithm (the secret and TOTP are verified). Throws if every attempt is
+// rejected so the failure is loud, not a silent hang.
+async function enterTotp(page: Page): Promise<void> {
+    // Resolve the 6-box Mantine PinInput robustly: prefer the proven SMS-pin
+    // selector (placeholder="0" in a role=group, mirroring engine/auth.ts fillPin),
+    // then fall back to any role=group inputs, then the accessible-name form.
+    let inputs = page.locator('[role="group"] input[placeholder="0"]')
+    if ((await inputs.count()) < 6) {
+        const grouped = page.locator('[role="group"] input')
+        inputs =
+            (await grouped.count()) >= 6 ? grouped : page.getByRole('textbox', { name: 'PinInput' })
+    }
+    let lastSecret = ''
+    for (let attempt = 0; attempt < 5; attempt++) {
+        // Re-read the secret each attempt: the page can re-render/regenerate it
+        // after first paint, so a code computed from an earlier read would be for a
+        // secret the server no longer expects. Compute as late as possible.
+        const secret = await readTotpSecret(page)
+        lastSecret = secret
         const code = totp(secret)
-        const inputs = page.locator('[role="group"] input, input[aria-label="PinInput"]')
         const count = await inputs.count()
+        // Fill each box directly — verified live that .fill() per box registers and
+        // enables the Verify button. Fast entry keeps the code within its 30s window.
         if (count >= 6) {
             for (let i = 0; i < 6; i++) await inputs.nth(i).fill(code[i])
         } else {
@@ -217,17 +305,27 @@ async function enterTotp(page: Page, secret: string): Promise<void> {
             .getByRole('button', { name: /verify code/i })
             .click()
             .catch(() => {})
-        // Success if we leave the app-setup pin step (recovery codes / step-up appears).
-        const moved = await page
-            .getByRole('button', { name: /go to safeinsights/i })
-            .waitFor({ state: 'visible', timeout: 8_000 })
-            .then(() => true)
-            .catch(() => false)
-        const stepUp = await page
-            .getByRole('textbox', { name: /verification code/i })
-            .waitFor({ state: 'visible', timeout: 2_000 })
-            .then(() => true)
-            .catch(() => false)
-        if (moved || stepUp) return
+
+        // Success = we left the pin-entry step: either the recovery-codes screen
+        // (Go to SafeInsights) or Clerk's step-up prompt appeared.
+        const moved = await Promise.race([
+            page
+                .getByRole('button', { name: /go to safeinsights/i })
+                .waitFor({ state: 'visible', timeout: 8_000 })
+                .then(() => true),
+            page
+                .getByRole('textbox', { name: /verification code/i })
+                .waitFor({ state: 'visible', timeout: 8_000 })
+                .then(() => true),
+        ]).catch(() => false)
+        if (moved) return
+
+        // Rejected (or still on the pin step). Wait for the NEXT time window so we
+        // never resubmit the same code, then clear the boxes and retry.
+        const msIntoWindow = Date.now() % 30_000
+        await new Promise(resolve => setTimeout(resolve, 30_000 - msIntoWindow + 500))
     }
+    throw new Error(
+        `authenticator MFA: code rejected after multiple attempts (secret=${lastSecret})`
+    )
 }
