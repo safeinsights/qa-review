@@ -33,3 +33,44 @@ export async function activeDomain(): Promise<string> {
     if (!active) throw new Error('mail.tm returned no domains')
     return active.domain
 }
+
+let seq = 0
+
+// A collision-free-enough local part: a per-process counter + a random suffix.
+// (Engine runtime code — Math.random is fine here, unlike workflow scripts.)
+function uniqueLocalPart(): string {
+    seq += 1
+    const rand = Math.random().toString(36).slice(2, 10)
+    return `qar-signup-${seq}-${rand}`
+}
+
+// Create a fresh mail.tm account and return an authenticated Inbox.
+export async function createInbox(domain: string): Promise<Inbox> {
+    const address = `${uniqueLocalPart()}@${domain}`
+    const password = `Qar-${Math.random().toString(36).slice(2).padEnd(10, '0').slice(0, 10)}-9!`
+    const created = await api('/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, password }),
+    })
+    if (!created.ok) throw new Error(`mail.tm POST /accounts failed: ${created.status}`)
+    const account = (await created.json()) as { id: string; address: string }
+
+    const tokenRes = await api('/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, password }),
+    })
+    if (!tokenRes.ok) throw new Error(`mail.tm POST /token failed: ${tokenRes.status}`)
+    const { token } = (await tokenRes.json()) as { token: string }
+
+    return { id: account.id, address: account.address, token }
+}
+
+// Best-effort delete of a mail.tm account (they also expire on their own).
+export async function deleteInbox(inbox: Inbox): Promise<void> {
+    await api(`/accounts/${inbox.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${inbox.token}` },
+    }).catch(() => {})
+}
