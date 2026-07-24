@@ -77,6 +77,50 @@ describe('runEngine', () => {
         expect(fs.existsSync(path.join(result.bundleDir, 'summary.json'))).toBe(true)
     })
 
+    it('records a name-less ctx.step under the enclosing step name', async () => {
+        // The terse suite form: run calls ctx.step(action) with NO name, so the
+        // engine records the position under the step's own `name`.
+        const d = deps()
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'terse step',
+                    run: ctx => ctx.step(async () => {}),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        const step = result.steps.find(s => s.status === 'passed')
+        expect(step?.name).toBe('terse step')
+    })
+
+    it('records a throwing name-less ctx.step as a failure under the step name', async () => {
+        const d = deps()
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'boom step',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            throw new Error('kaboom')
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        const step = result.steps.find(s => s.status === 'failed')
+        expect(step?.name).toBe('boom step')
+        expect(step?.error).toContain('kaboom')
+    })
+
     it('attaches the console captured DURING a step to that step event', async () => {
         // Capture the page.on('console') handler the engine registers, then fire a
         // synthetic console message from inside the step so it lands in the buffer

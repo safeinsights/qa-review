@@ -8,6 +8,11 @@ export interface RunContext {
     // collision-free), mirroring management-app's uniqueTitle pattern.
     tag: string
     // Emit a step event. Wrap an action: await step('Create study', () => ...).
+    // Omit the name to record under the ENCLOSING step's own `name` (the common
+    // case — a 1:1 step: `run: ctx => ctx.step(() => doThing(ctx))`). Pass a name
+    // only to split a body into multiple named positions or to use a sub-label
+    // that differs from the step's `name`.
+    step<T>(action: () => Promise<T>): Promise<T>
     step<T>(name: string, action: () => Promise<T>): Promise<T>
     // Register ids for guaranteed id-based cleanup (Task 5).
     trackStudy(id: string): void
@@ -22,6 +27,11 @@ export interface RunContext {
     // REVIEWER_RESULTS_PRIVATE_KEY). Undefined if unset — a suite that needs it
     // should throw a clear error pointing at `qar set-secret`.
     resultsKey?: string
+    // Credentials for the CURRENTLY signed-in role, tracking loginAs(). A suite
+    // needs these when it has to drive a login form the engine's own loginAs()
+    // doesn't cover — e.g. the Coder IDE's Clerk-hosted OIDC sign-in, which forces
+    // a fresh interactive login (prompt=login) outside the app.
+    account: { email: string; password: string; mfaCode: string }
     // Per-run mutable scratch bag. Steps are separate objects now (see Step), so a
     // value one step captures (e.g. a created study's id) is stashed here for a
     // later step to read: `ctx.state.studyId = id` … `ctx.state.studyId as string`.

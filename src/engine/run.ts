@@ -233,11 +233,29 @@ export async function runEngine(
             const lines = consoleBuf.splice(0)
             return lines.length ? lines : undefined
         }
+        // Tracks the currently signed-in role so ctx.account stays correct across
+        // mid-run loginAs() switches. Starts as the role the run logged in with.
+        let currentRole = req.role
+        // The name of the step whose run() is currently executing, so a body may
+        // call ctx.step(action) WITHOUT repeating the step's name. Set by the step
+        // loop before each step.run(ctx); the ctx.step closure reads the live value.
+        let currentStepName = ''
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
             tag,
-            async step(name, action) {
+            // Getter so it reflects the LATEST loginAs() switch, not the role at
+            // ctx-construction time.
+            get account() {
+                const a = env.accounts[currentRole]
+                return { email: a.email, password: a.password, mfaCode: a.mfaCode }
+            },
+            async step<T>(a: string | (() => Promise<T>), b?: () => Promise<T>): Promise<T> {
+                // Overloaded: step(action) records under the enclosing step's name;
+                // step(name, action) uses the explicit name.
+                const name: string = typeof a === 'function' ? currentStepName : a
+                const action: () => Promise<T> =
+                    typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
                 try {
                     const out = await action()
@@ -284,6 +302,8 @@ export async function runEngine(
                 if (!handle) throw new Error('loginAs called before the browser was opened')
                 // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
                 const newToken = await deps.login(handle, env, role, recorder.bundleDir)
+                // Track the switch so ctx.account now returns the new role's creds.
+                currentRole = role
                 // Keep id-based cleanup authorized as the now-current user.
                 ;(cleanup as unknown as { authToken: string }).authToken = newToken
             },
@@ -320,6 +340,10 @@ export async function runEngine(
             // run without the retry deps rethrows to the outer catch (existing behavior).
             for (;;) {
                 try {
+                    // So a body may call ctx.step(action) without repeating the name.
+                    // Set inside the retry loop so a reloaded step records under its
+                    // (possibly renamed) name.
+                    currentStepName = step.name
                     await step.run(ctx)
                     break
                 } catch (cause) {
