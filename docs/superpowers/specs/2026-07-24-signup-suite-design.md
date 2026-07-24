@@ -14,7 +14,62 @@ hard-deleted** via the QA cleanup API added in
 The suite runs **as `admin`** (admin is who sends invites). A PR run is identical
 to a QA run except for the base URL — no PR-only gating.
 
-## Why mail.tm
+This work is split into two phases. **Phase 0 is a prerequisite bug fix** to
+`loginAs`/login that the signup suite depends on; **Phase 1** is the suite
+itself. Phase 0 ships first (own PR) so Phase 1 builds on a verified foundation.
+
+## Phase 0 — fix `loginAs` account-switching (prerequisite)
+
+Two coupled bugs in the current engine, discovered while designing this suite,
+make the signup suite's role-switch + cleanup impossible to trust:
+
+1. **`loginAs` can silently stay on the previous account.** `run.ts`'s `loginAs`
+   clears the app's cookies (`page.context().clearCookies()`) and
+   `localStorage`/`sessionStorage`, then navigates to `/account/signin`. But
+   Clerk's own session survives that clear (its state is not only in the app's
+   cookies, and/or the clear races Clerk client re-hydration), so the app renders
+   Clerk's **"You're already signed in as \<previous account\>"** interstitial
+   (with *Continue* / *Sign in with a different account* buttons) instead of the
+   email/password form.
+2. **Login success is asserted without checking *which* account.** `auth.ts`
+   treats login as done once the URL leaves `/signin` and a `/^Hi,/i` greeting
+   (or the dashboard) is visible (`auth.ts:57–72`). A leftover researcher session
+   satisfies both, so `loginAs('admin')` returns **green while still the
+   researcher**. The cleanup client then sends the researcher's token to `DELETE
+   /api/qa/*`, which requires `isSiAdmin` → **401/403**, and that failure is
+   swallowed into the non-fatal `cleanup` category (`run.ts:389,405`). Net
+   effect: **`study-happy-path` tracks its study for cleanup (`trackStudy`,
+   line 132) but the study is never actually deleted** — matching the observed
+   "it doesn't clean up".
+
+**Fixes:**
+
+- **Force a real logout before re-login.** In `loginAs` (or the start of
+  `auth.ts`'s driver), when the "already signed in" interstitial appears, click
+  **"Sign in with a different account"** so Clerk drops the session and shows the
+  login form. (Belt-and-suspenders: also handle it defensively even on the very
+  first login.) The exact button text from the live app is
+  *"Sign in with a different account"* (confirmed from the provided screenshot).
+- **Assert the signed-in identity matches the requested role.** After login,
+  verify the authenticated page shows the *expected account*, not just *an*
+  account — fail loudly (throw `AuthError`) otherwise. Signal: the app's
+  post-login greeting / account display. **Design detail for the plan:** the
+  greeting is `Hi, <name>` but config only has each account's `email`, not a
+  display name; the plan must pick a reliable mapping — either assert against an
+  account identifier the app actually renders post-login (e.g. the email shown in
+  an account menu) or add a per-account display name to `environments.ts`.
+  Whichever is chosen, the assertion must distinguish admin from researcher from
+  reviewer.
+
+**Phase 0 verification:** run `study-happy-path` (or `create-study` + a manual
+role switch) live and confirm (a) `loginAs('admin')` reaches the admin dashboard,
+not the interstitial, and (b) the tracked study/user is **actually gone** after
+the run (cleanup result `ok`, and a follow-up check that the id 404s). Only then
+start Phase 1.
+
+## Phase 1 — the `signup` suite
+
+### Why mail.tm
 
 The invite flow emails a signup URL to the invited address, so the suite must
 read that email programmatically. Provider decision:
@@ -41,7 +96,7 @@ read that email programmatically. Provider decision:
   config.
 - Rate limit: 8 QPS per IP (far above this suite's needs).
 
-## Flow
+### Flow
 
 The suite starts as `admin` (the engine logs in the declared role before the
 first step) and must **end as admin** so guaranteed cleanup runs with SI-admin
@@ -80,9 +135,9 @@ cleanup (engine-driven, always runs even on mid-run failure):
     optional best-effort nicety, not required
 ```
 
-## Components
+### Components
 
-### `src/suites/signup.ts` — the suite
+#### `src/suites/signup.ts` — the suite
 
 - Plain `Suite` object, `name: 'signup'`, `roles: ['admin']`, ordered
   `steps: Step[]`, **relative imports only** (`./types`, `../engine/...`).
@@ -102,15 +157,17 @@ cleanup (engine-driven, always runs even on mid-run failure):
   switches between the *shared* accounts (admin/researcher/reviewer) — it cannot
   represent a brand-new invited user. So for the signup itself the suite must get
   a clean, unauthenticated browser state and navigate to the invite URL directly.
-  Open question for the plan: do this by clearing the existing context
-  (`ctx.page.context().clearCookies()` + clear storage, then `page.goto(url)`) or
-  by opening a second browser context. Clearing the shared context is simpler and
-  the final `ctx.loginAs('admin')` re-establishes the admin session afterward for
-  cleanup; the plan picks one and states why.
+  **This hits the same Clerk-session-survives-clear problem Phase 0 addresses**:
+  merely clearing cookies + storage may leave the admin's Clerk session live, so
+  the invite URL could render the "already signed in" interstitial instead of a
+  fresh signup form. The plan should reuse Phase 0's real-logout primitive (the
+  interstitial handler) here too, or open a genuinely separate browser context
+  for the signup. The plan picks one and states why; a separate context is the
+  most robust since it shares no Clerk state with the admin session.
 - No complex logic in step bodies beyond driving the UI; extraction/polling live
   in the mail.tm helper.
 
-### `src/engine/mailtm.ts` — mail.tm client (infra, not a suite)
+#### `src/engine/mailtm.ts` — mail.tm client (infra, not a suite)
 
 Typed helper module. Functions:
 
@@ -133,7 +190,7 @@ scripts*, but this is ordinary engine runtime code (not a workflow script), so
 standard randomness is fine; still, prefer a per-run unique local-part so
 concurrent runs never collide.
 
-### Cleanup via management-app#839 — reuses existing engine machinery
+#### Cleanup via management-app#839 — reuses existing engine machinery
 
 The cleanup path already exists in the engine and was built for exactly this;
 the suite adds **no new cleanup code and no new secret**.
@@ -155,10 +212,12 @@ the suite adds **no new cleanup code and no new secret**.
   Bearer token, tolerating failures. The suite just calls `ctx.trackUser(id)`.
 - **Authority**: the endpoint requires `isSiAdmin`; a researcher/reviewer session
   would 401. The suite therefore ends as admin (`ctx.loginAs('admin')`) so the
-  cleanup token is the admin's — the established `study-happy-path` pattern.
+  cleanup token is the admin's. This relies on the **Phase 0 fix** — before it,
+  `loginAs('admin')` could silently stay on the previous account and cleanup
+  would 401 (the same latent bug that stops `study-happy-path` cleaning up).
 - mail.tm inbox deletion is optional best-effort (accounts expire on their own).
 
-## Testing
+### Testing
 
 - **`tests/engine/mailtm.test.ts`** (vitest) — live round-trip against the real
   mail.tm API: `activeDomain()` returns a non-empty domain; `createInbox()`
@@ -170,7 +229,7 @@ the suite adds **no new cleanup code and no new secret**.
 - No unit tests for the suite's UI steps — they are E2E, verified by running the
   suite.
 
-## Runtime assumptions to verify first when building
+### Runtime assumptions to verify first when building
 
 Ordered by risk. Each is checked live against a real environment before the
 suite is considered done.
@@ -189,7 +248,7 @@ suite is considered done.
    matches the right link and not, say, an unsubscribe footer link. Confirmed by
    reading one real invite email during implementation.
 
-## Non-goals / YAGNI
+### Non-goals / YAGNI
 
 - No plus-addressing or shared-inbox logic (mail.tm can't do it).
 - No stored inbox credentials in `config/` (accounts are created per run).
