@@ -81,6 +81,27 @@ export async function loginAs(
                 // dashboard heading rather than the greeting.
                 await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
             })
+
+        // Assert we are signed in AS the intended account. loginAs() is used to
+        // SWITCH accounts (e.g. researcher -> admin for cleanup authority); a stale
+        // session that never actually switched would pass the generic markers above
+        // but is the wrong user. The greeting we just waited for is rendered from
+        // Clerk's user state, so a healthy session exposes the email here — fail
+        // closed (don't silently skip) so a wrong-account state never proceeds to
+        // e.g. run cleanup with a non-admin token that 401s.
+        const signedInEmail = await getClerkEmail(page)
+        if (!signedInEmail) {
+            throw new Error(
+                `Could not read the signed-in email from Clerk to confirm account ` +
+                    `${account.email} (role ${role}); refusing to proceed with an unverified identity`
+            )
+        }
+        if (signedInEmail.toLowerCase() !== account.email.toLowerCase()) {
+            throw new Error(
+                `Logged in as ${signedInEmail} but expected ${account.email} (role ${role}) — ` +
+                    `loginAs did not switch accounts`
+            )
+        }
     } catch (cause) {
         // Capture what the page looked like at the point of failure so the result
         // bundle shows WHY login failed (best-effort).
@@ -99,6 +120,28 @@ export async function loginAs(
     // Clerk isn't ready or has no session token, return '' so cleanup simply
     // fails gracefully rather than blocking the run.
     return await getClerkToken(page)
+}
+
+// Read the signed-in user's primary email from the Clerk client on the page.
+// Returns '' if Clerk/user isn't ready after a short poll. Used to assert we are
+// authenticated AS the account we intended — a stale session from a prior role
+// would otherwise satisfy the generic "greeting is visible" success check.
+async function getClerkEmail(page: Page): Promise<string> {
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const email = await page
+            .evaluate(() => {
+                const clerk = (
+                    window as unknown as {
+                        Clerk?: { user?: { primaryEmailAddress?: { emailAddress?: string } } }
+                    }
+                ).Clerk
+                return clerk?.user?.primaryEmailAddress?.emailAddress ?? null
+            })
+            .catch(() => null)
+        if (email) return email
+        await page.waitForTimeout(500)
+    }
+    return ''
 }
 
 // Read a fresh Clerk session token from the authenticated page. Polls briefly
