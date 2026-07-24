@@ -72,6 +72,23 @@ describe('generateSuite escaping + identifier safety', () => {
         expect(true).toBe(true)
     })
 
+    it('escapes backslashes/backticks in a goto URL so it cannot break out of the template', () => {
+        const t: ActionTrace = {
+            name: 'tricky-url',
+            description: 'x',
+            role: 'admin',
+            // A backslash immediately before a backtick + a ${ sequence: naive
+            // backtick-only escaping would let the input backslash consume the
+            // escape and break out of the template literal.
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal ${ is the payload under test
+            actions: [{ step: 'Go', kind: 'goto', url: '/x\\`${process.env}/y' }],
+        }
+        const src = generateSuite(t)
+        // The backslash is doubled, the backtick and ${ are escaped.
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the escaped ${ appears in generated source
+        expect(src).toContain('/x\\\\\\`\\${process.env}/y')
+    })
+
     it('produces a valid identifier for a name with a leading digit', () => {
         const t: ActionTrace = {
             name: '2fa-login',
