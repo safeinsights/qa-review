@@ -18,6 +18,17 @@ export async function loginAs(
 
     try {
         await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
+        // Clerk may show a "You're already signed in as <x>" interstitial instead
+        // of the login form when a prior session survived the cookie/storage clear
+        // (its state is not only in the app's cookies). Clicking "Sign in with a
+        // different account" drops that session and shows the real form. Best-effort:
+        // only fires when the button is actually present.
+        const differentAccount = page.getByRole('button', {
+            name: /sign in with a different account/i,
+        })
+        if (await differentAccount.isVisible({ timeout: 3_000 }).catch(() => false)) {
+            await differentAccount.click().catch(() => {})
+        }
         // The app is client-rendered: a loading spinner shows first, then the
         // form hydrates. Wait for the Email field to actually appear before
         // interacting (web-first wait absorbs the spinner).
