@@ -43,26 +43,41 @@ read that email programmatically. Provider decision:
 
 ## Flow
 
+The suite starts as `admin` (the engine logs in the declared role before the
+first step) and must **end as admin** so guaranteed cleanup runs with SI-admin
+delete authority — the same pattern `study-happy-path` uses. Because
+`ctx.loginAs()` clears the Playwright context (cookies + web storage) and
+re-drives Clerk, each new-user signup and each return-to-admin is a `loginAs`-like
+context switch. To avoid logging the admin in and out around every invite, the
+flow **batches**: do BOTH admin invites first (admin session intact), then do the
+two signups, then finish as admin for cleanup.
+
 ```
-setup:
+setup (step 1):
   - GET /domains once → pick the active domain
   - create 2 fresh mail.tm accounts (researcher inbox, reviewer inbox)
-  - store { address, token, id } for each in ctx.state.inboxes
+  - store the two { role, address, token, id } inboxes in ctx.state.inboxes
 
-per role in [researcher, reviewer]:
-  1. as admin, invite <inbox.address> as <role>            (admin invite UI)
-  2. poll mail.tm GET /messages for that inbox until the invite arrives
+invite (step 2, as admin — session already active):
+  for each inbox: invite <inbox.address> as <inbox.role>   (admin invite UI)
+
+catch + sign up (step 3, per role):
+  1. poll mail.tm GET /messages for that inbox until the invite arrives
      (web-first poll bounded by the engine's global timeout)
-  3. GET /messages/{id} → read body/html → extract the signup URL
-  4. in a FRESH browser context, navigate to the URL and complete signup
+  2. GET /messages/{id} → read body/html → extract the signup URL
+  3. clear the browser context, navigate to the URL, complete signup
      (set password / any required fields)
-  5. assert the new user reaches the <role> dashboard
-  6. capture the new user's id for cleanup (from URL or page)
+  4. assert the new user reaches the <role> dashboard
+  5. capture the new user's id and call ctx.trackUser(id) for cleanup
 
-cleanup (always runs, even on mid-run failure):
-  - for each created user id: DELETE /api/qa/users/{userId}
-    using the admin's SI-admin Clerk session token
-  - delete the 2 mail.tm accounts (best-effort)
+finish as admin (final step):
+  - ctx.loginAs('admin')   → re-points cleanup auth to the SI-admin token
+
+cleanup (engine-driven, always runs even on mid-run failure):
+  - the existing CleanupClient DELETEs /api/qa/users/{id} for each tracked user
+    using the admin's Clerk session token (captured at login)
+  - mail.tm inboxes are disposable and expire on their own; deleting them is an
+    optional best-effort nicety, not required
 ```
 
 ## Components
@@ -72,14 +87,26 @@ cleanup (always runs, even on mid-run failure):
 - Plain `Suite` object, `name: 'signup'`, `roles: ['admin']`, ordered
   `steps: Step[]`, **relative imports only** (`./types`, `../engine/...`).
 - Shared state threads through `ctx.state`:
-  - `ctx.state.inboxes` — the two mail.tm inboxes `{ role, address, token, id }`.
-  - `ctx.state.createdUserIds` — ids captured as each signup completes, so
-    cleanup can target them even if a later step fails (mirrors how
-    `create-study` captures the study id as early as possible for guaranteed
-    cleanup).
-- New users sign up in a **separate Playwright browser context** (fresh cookies)
-  so the admin's authenticated session survives across both invites and into
-  cleanup.
+  - `ctx.state.inboxes` — the two mail.tm inboxes `{ role, address, token, id }`,
+    created in step 1 and read by later steps.
+- Created-user ids are registered with **`ctx.trackUser(id)`** the moment each
+  signup completes, so the engine's cleanup deletes them even if a later step
+  fails (mirrors how `create-study`/`study-happy-path` track ids early for
+  guaranteed cleanup). No separate `createdUserIds` bag is needed —
+  `trackUser` is the interface.
+- Both invites happen while the admin session is active (step 2), *then* the
+  signups run (step 3), avoiding a log-out/log-in cycle around each invite. The
+  final step returns to admin via `ctx.loginAs('admin')` so cleanup has delete
+  authority.
+- **Signing up as an unauthenticated new user**: `ctx.loginAs(role)` only
+  switches between the *shared* accounts (admin/researcher/reviewer) — it cannot
+  represent a brand-new invited user. So for the signup itself the suite must get
+  a clean, unauthenticated browser state and navigate to the invite URL directly.
+  Open question for the plan: do this by clearing the existing context
+  (`ctx.page.context().clearCookies()` + clear storage, then `page.goto(url)`) or
+  by opening a second browser context. Clearing the shared context is simpler and
+  the final `ctx.loginAs('admin')` re-establishes the admin session afterward for
+  cleanup; the plan picks one and states why.
 - No complex logic in step bodies beyond driving the UI; extraction/polling live
   in the mail.tm helper.
 
@@ -106,17 +133,30 @@ scripts*, but this is ordinary engine runtime code (not a workflow script), so
 standard randomness is fine; still, prefer a per-run unique local-part so
 concurrent runs never collide.
 
-### Cleanup via management-app#839
+### Cleanup via management-app#839 — reuses existing engine machinery
+
+The cleanup path already exists in the engine and was built for exactly this;
+the suite adds **no new cleanup code and no new secret**.
 
 - Endpoint: `DELETE /api/qa/users/{userId}` — hard-deletes the user (DB + Clerk),
   hard-gated to non-prod (`PROD_ENV === false`), requires a valid **SI-admin
-  Clerk session token**. Returns `200` on success, `404` if the id is missing.
-- The suite obtains the admin's Clerk session token from the authenticated
-  browser context (the admin login already happened in the engine) and issues the
-  DELETE for each created user id.
-- Runs in the suite's **cleanup phase** so it fires on mid-run failure too.
-- mail.tm inbox deletion is best-effort (accounts are disposable and expire on
-  their own).
+  Clerk session token** in the `Authorization: Bearer` header (a cookie does NOT
+  work — `requireQaAdmin` only reads the Bearer header). Returns `200` on
+  success, `404` if the id is missing.
+- **Auth token**: `src/engine/auth.ts` `getClerkToken(page)` already extracts a
+  fresh Clerk **session JWT** from the authenticated admin page
+  (`window.Clerk.session.getToken()`) at login, and the comment there says it is
+  returned "for the QA cleanup client". `verifyToken()` on the server accepts
+  exactly this token. **We do NOT mint a token via the Clerk Backend API** and do
+  NOT add `CLERK_SECRET_KEY` / the admin user_id to config — that would be a
+  redundant second auth path.
+- **Delete client**: `src/engine/cleanup.ts` `CleanupClient` already implements
+  `trackUser(id)` / `trackStudy(id)` and DELETEs each via `/api/qa/*` with the
+  Bearer token, tolerating failures. The suite just calls `ctx.trackUser(id)`.
+- **Authority**: the endpoint requires `isSiAdmin`; a researcher/reviewer session
+  would 401. The suite therefore ends as admin (`ctx.loginAs('admin')`) so the
+  cleanup token is the admin's — the established `study-happy-path` pattern.
+- mail.tm inbox deletion is optional best-effort (accounts expire on their own).
 
 ## Testing
 
@@ -140,14 +180,21 @@ suite is considered done.
    risk; a repo search for "disposable"/"blocklist" in management-app found
    nothing, but that is not proof. Verify by attempting one real invite.
 2. **The `admin` account is an SI admin**, so `DELETE /api/qa/users/{userId}`
-   authorizes (else cleanup 403s).
+   authorizes (else cleanup 403s). (The same account is used for the invites, so
+   the invite step failing would surface this first.)
 3. **The exact admin invite UI** (where "invite user + choose role/org" lives)
    and the **signup form fields** the invited user must complete — discovered by
    driving the live UI during implementation.
+4. **The invite email's signup URL format** (path/query) — so `extractSignupUrl`
+   matches the right link and not, say, an unsubscribe footer link. Confirmed by
+   reading one real invite email during implementation.
 
 ## Non-goals / YAGNI
 
 - No plus-addressing or shared-inbox logic (mail.tm can't do it).
 - No stored inbox credentials in `config/` (accounts are created per run).
+- **No Clerk Backend API token minting and no `CLERK_SECRET_KEY` in config** —
+  cleanup reuses the browser session token the engine already captures.
+- No new cleanup code — reuses `CleanupClient` + `ctx.trackUser`.
 - No fallback email provider.
 - No verification of email *content* beyond finding a well-formed signup URL.
