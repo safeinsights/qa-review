@@ -1,7 +1,7 @@
 {
-    "QA_BASE_URL": "https://app.qa.safeinsights.org",
-    "STAGING_BASE_URL": "https://app.staging.safeinsights.org",
-    "ADMIN_EMAIL": "qa-review+admin@safeinsights.org",
-    "RESEARCHER_EMAIL": "qa-review+researcher@safeinsights.org",
-    "REVIEWER_EMAIL": "qa-review+dp@safeinsights.org"
+  "ADMIN_EMAIL": "qa-review+admin@safeinsights.org",
+  "QA_BASE_URL": "https://app.qa.safeinsights.org",
+  "RESEARCHER_EMAIL": "qa-review+researcher@safeinsights.org",
+  "REVIEWER_EMAIL": "qa-review+dp@safeinsights.org",
+  "STAGING_BASE_URL": "https://app.staging.safeinsights.org"
 }
