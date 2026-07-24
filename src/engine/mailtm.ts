@@ -9,13 +9,21 @@ const API = 'https://api.mail.tm'
 // A cryptographically-secure lowercase-alphanumeric token of `len` chars. Used
 // for the throwaway inbox local part + password; a CSPRNG (not Math.random) keeps
 // these off the "insecure randomness in a security context" radar and guarantees
-// uniqueness. Rejection-free: mask each byte to 0..35 by modulo — the tiny bias is
-// irrelevant for a disposable QA credential.
+// uniqueness. Uses rejection sampling (not modulo) so the distribution is UNBIASED:
+// a byte is only accepted if it falls in the largest whole multiple of the alphabet
+// (0..251 for 36 symbols); 252..255 are discarded and redrawn.
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
 function randomToken(len: number): string {
-    const bytes = randomBytes(len)
+    const limit = 256 - (256 % ALPHABET.length) // 252 for a 36-char alphabet
     let out = ''
-    for (let i = 0; i < len; i++) out += ALPHABET[bytes[i] % ALPHABET.length]
+    while (out.length < len) {
+        for (const b of randomBytes((len - out.length) * 2)) {
+            if (b < limit) {
+                out += ALPHABET[b % ALPHABET.length]
+                if (out.length === len) break
+            }
+        }
+    }
     return out
 }
 
