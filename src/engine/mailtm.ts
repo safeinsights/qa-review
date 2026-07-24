@@ -67,6 +67,30 @@ export async function createInbox(domain: string): Promise<Inbox> {
     return { id: account.id, address: account.address, token }
 }
 
+// Pull the SafeInsights signup URL out of an invite email. Prefers a URL whose
+// path looks like the invite/signup flow so an unrelated footer link (e.g.
+// unsubscribe) is never chosen. HTML bodies encode `&` as `&amp;` in hrefs, so we
+// unescape first; trailing sentence punctuation is stripped. The exact path is
+// verified against a real invite during signup-suite wiring — widen if needed.
+export function extractSignupUrl(message: Message): string {
+    const unescapeEntities = (s: string) =>
+        s
+            .replace(/&amp;/g, '&')
+            .replace(/&#38;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+    const haystack = unescapeEntities(`${message.text}\n${message.html}`)
+    const urls = (haystack.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).map(u =>
+        u.replace(/[.,;:!?)\]}]+$/, '')
+    )
+    const signup = urls.find(u => /(sign[-_]?up|accept|invit|activate)/i.test(u))
+    if (!signup) {
+        throw new Error(`no signup url found in message ${message.id}`)
+    }
+    return signup
+}
+
 // Best-effort delete of a mail.tm account (they also expire on their own).
 export async function deleteInbox(inbox: Inbox): Promise<void> {
     await api(`/accounts/${inbox.id}`, {
