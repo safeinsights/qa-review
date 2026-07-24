@@ -71,7 +71,12 @@ func (p *ptySession) start(app *App, dir string, env []string, args []string) er
 	if p.ptmx != nil {
 		return fmt.Errorf("a session is already running")
 	}
-	cmd := exec.Command("claude", args...)
+	// Resolve "claude" to an absolute path against the GUI-augmented PATH.
+	// exec.Command resolves a bare name via LookPath against the PARENT process
+	// PATH (just /usr/bin:/bin for a Finder-launched app) — NOT cmd.Env — so a
+	// bare "claude" fails "executable file not found in $PATH" even though it's on
+	// the augmented PATH the Setup Doctor checks. See guiResolve in app.go.
+	cmd := exec.Command(guiResolve("claude"), args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	ptmx, err := pty.Start(cmd)

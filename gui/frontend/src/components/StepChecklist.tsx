@@ -222,12 +222,27 @@ function StepRow({
                     📷
                 </button>
             ) : isPaused ? (
-                <span
-                    title={isHaltedHere ? 'Paused here' : 'Will pause before this step'}
-                    style={{ fontSize: 13, color: 'var(--amber, #d08a1a)' }}
+                <button
+                    type="button"
+                    title="Click to remove this pause"
+                    onClick={e => {
+                        e.stopPropagation()
+                        if (canToggle) onTogglePause(name)
+                    }}
+                    disabled={!canToggle}
+                    style={{
+                        appearance: 'none',
+                        border: 'none',
+                        background: 'transparent',
+                        padding: 0,
+                        margin: 0,
+                        fontSize: 13,
+                        color: 'var(--amber, #d08a1a)',
+                        cursor: canToggle ? 'pointer' : 'default',
+                    }}
                 >
                     ⏸
-                </span>
+                </button>
             ) : null}
             {/* Failure-side companion trigger: sits on its own line under a failed
                 step (flexBasis 100% + the row's flexWrap), so the "Ask Claude"
