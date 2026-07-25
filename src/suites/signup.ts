@@ -145,10 +145,14 @@ async function completeSignup(ctx: RunContext, invitationUrl: string): Promise<s
     await page.getByRole('button', { name: /create account/i }).click()
 
     // 3. Mandatory MFA setup — choose the authenticator-app path, which shows the
-    //    TOTP secret in plaintext so we can derive codes headlessly.
-    await page.waitForURL(/\/account\/mfa/, { timeout: 30_000 })
-    await page.getByRole('link', { name: /authenticator app/i }).click()
-    await page.waitForURL(/\/account\/mfa\/app/, { timeout: 30_000 })
+    //    TOTP secret in plaintext so we can derive codes headlessly. Wait for the
+    //    method links / setup page markers rather than URLs.
+    const authenticatorLink = page.getByRole('link', { name: /authenticator app/i })
+    await authenticatorLink.waitFor({ state: 'visible' })
+    await authenticatorLink.click()
+    // The setup page's "Verify code" button marks arrival; enterTotp then reads
+    // the displayed secret.
+    await page.getByRole('button', { name: /verify code/i }).waitFor({ state: 'visible' })
 
     // Enter the authenticator code. enterTotp re-reads the secret from the page on
     // each attempt — the page can re-render/regenerate the secret after first paint,
@@ -202,7 +206,9 @@ async function completeSignup(ctx: RunContext, invitationUrl: string): Promise<s
     //    into the uuid column 500s. The DB id lives in Clerk publicMetadata.user.id
     //    (see management-app session.ts metadataUserId). Poll: metadata hydrates a
     //    beat after login.
-    await page.waitForURL(url => /\/dashboard|\/openstax/i.test(url.pathname), { timeout: 30_000 })
+    // Arrival on the authenticated app = the dashboard marker renders (rather than
+    // a URL match). The publicMetadata poll below is the real readiness gate.
+    await page.locator('text=dashboard').first().waitFor({ state: 'visible', timeout: 30_000 })
     let userId = ''
     for (let attempt = 0; attempt < 10 && !userId; attempt++) {
         userId = await page.evaluate(() => {

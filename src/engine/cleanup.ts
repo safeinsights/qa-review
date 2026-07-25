@@ -47,6 +47,13 @@ export class CleanupClient {
         }
     }
 
+    // A DELETE is "cleaned up" on 2xx OR 404: 404 means the id is already gone,
+    // which is the goal (idempotent) — e.g. a suite that deletes + verifies before
+    // this teardown runs, or a retried teardown. Only real errors (403/500/0) fail.
+    private static isDeleted(status: number): boolean {
+        return (status >= 200 && status < 300) || status === 404
+    }
+
     async run(): Promise<CleanupResult> {
         const deleted: string[] = []
         const failed: string[] = []
@@ -56,13 +63,13 @@ export class CleanupClient {
             const status = await this.del(`/api/qa/studies/${id}`)
             const key = `study:${id}`
             statuses[key] = status
-            ;(status >= 200 && status < 300 ? deleted : failed).push(key)
+            ;(CleanupClient.isDeleted(status) ? deleted : failed).push(key)
         }
         for (const id of this.users) {
             const status = await this.del(`/api/qa/users/${id}`)
             const key = `user:${id}`
             statuses[key] = status
-            ;(status >= 200 && status < 300 ? deleted : failed).push(key)
+            ;(CleanupClient.isDeleted(status) ? deleted : failed).push(key)
         }
         return { ok: failed.length === 0, deleted, failed, statuses }
     }

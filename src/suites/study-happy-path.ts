@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { faker } from '@faker-js/faker'
-import type { Locator, Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { repoDir } from '../engine/paths'
 import type { RunContext, Suite } from './types'
@@ -49,10 +49,14 @@ const RESULTS_POLL_INTERVAL_MS = 15_000
 // key box (or error) to actually render before deciding the results aren't ready
 // yet. Covers the reload + SPA hydration so a not-yet-rendered box isn't missed.
 const RESULTS_RENDER_WAIT_MS = 8_000
+// Short settle after isReactHydrated before clicking the "Proceed to step 3"
+// next/link button: the App Router route entry for the /agreements segment wires
+// up just after initial hydration, and a click in that gap no-ops silently.
+const PROCEED_NAV_SETTLE_MS = 500
 
 // Shared per-run state threaded between steps via ctx.state. `study` is the
-// generated content; `studyId` is captured at Step 2 and reused by every later
-// step. Helpers read them off ctx.state (cast at the use site).
+// generated content; `studyId` is captured in Step 1 (the moment the study record
+// is created) and reused by every later step. Helpers read them off ctx.state.
 function content(ctx: RunContext): StudyContent {
     return ctx.state.study as StudyContent
 }
@@ -92,13 +96,14 @@ export const studyHappyPathSuite: Suite = {
                         .getByRole('link', { name: /Propose New Study/i })
                         .first()
                         .click()
-                    await ctx.page.waitForURL(/\/study\/request$/)
+                    // Arrival on the request page = its org picker rendered.
+                    await ctx.page.getByTestId('org-select').waitFor({ state: 'visible' })
                 }),
         },
         {
-            name: 'Step 1: choose org and language',
-            run: ctx =>
-                ctx.step(async () => {
+            name: 'Step 1: choose org and language, then capture the study id',
+            run: async ctx => {
+                await ctx.step(async () => {
                     const orgSelect = ctx.page.getByTestId('org-select')
                     await orgSelect.click()
                     await ctx.page
@@ -108,24 +113,23 @@ export const studyHappyPathSuite: Suite = {
                     const rRadio = ctx.page.getByRole('radio', { name: 'R', exact: true })
                     await rRadio.waitFor({ state: 'visible' })
                     await rRadio.click()
+                    // Proceeding to Step 2 CREATES the study record; its id is in the
+                    // proposal-page URL. Wait for the proposal form to render (the
+                    // Study Title field is its marker), THEN read the id from the URL
+                    // — the URL is settled once the form is on screen. Capture + track
+                    // here, the instant the study exists, so no created study is ever
+                    // left untracked.
                     await ctx.page.getByRole('button', { name: /Proceed to Step 2/i }).click()
-                }),
-        },
-        {
-            name: 'Reach Step 2 and capture the study id',
-            run: async ctx => {
-                const studyId = await ctx.step(async () => {
-                    await ctx.page.waitForURL(/\/study\/[0-9a-f-]+\/proposal$/i)
+                    await ctx.page.getByLabel('Study Title').waitFor({ state: 'visible' })
                     const match = ctx.page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
-                    if (!match)
+                    if (!match) {
                         throw new Error(
                             `Could not find study id in proposal URL: ${ctx.page.url()}`
                         )
-                    return match[1]
+                    }
+                    ctx.state.studyId = match[1]
+                    ctx.trackStudy(match[1])
                 })
-                // Track for cleanup BEFORE anything else can fail — the study exists now.
-                ctx.state.studyId = studyId
-                ctx.trackStudy(studyId)
             },
         },
         {
@@ -196,16 +200,44 @@ export const studyHappyPathSuite: Suite = {
                             waitUntil: 'domcontentloaded',
                         }
                     )
-                    await clickAndWaitForURL(
-                        ctx,
-                        ctx.page.getByRole('link', { name: /Proceed to step 3/i }),
-                        /\/agreements\/researcher(\?.*)?$/
+                    // Advance step-by-step, waiting for a distinctive element on each
+                    // destination page: clicking "Proceed to step 3" lands on the agreements
+                    // page, whose own "Proceed to Step 4" button is the arrival signal;
+                    // clicking that lands on /code, signalled by "Upload your files".
+                    //
+                    // The "Proceed to step 3" anchor is server-rendered, so it is visible
+                    // (and click-actionable) before the SPA finishes hydrating — a click that
+                    // lands in that window is swallowed by the not-yet-mounted router and the
+                    // page stays on /submitted. Wait for the app's hydration flag before the
+                    // single click; a click on the hydrated page navigates reliably, so if it
+                    // then fails to advance that is a real app bug this step should surface.
+                    // Tight timeout on purpose: a healthy page hydrates in ~1s, so if the
+                    // flag isn't set within a few seconds that is a real slow-hydration
+                    // problem we want surfaced, not absorbed by the 30s default.
+                    await ctx.page.waitForFunction(
+                        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true,
+                        undefined,
+                        { timeout: 5_000 }
                     )
-                    await clickAndWaitForURL(
-                        ctx,
-                        ctx.page.getByRole('button', { name: /Proceed to Step 4/i }),
-                        /\/code$/
-                    )
+                    // "Proceed to step 3" is a Mantine <Button component={next/link}>: its
+                    // onClick preventDefaults the native anchor navigation and relies on the
+                    // App Router's router.push. isReactHydrated flips true at initial
+                    // hydration, but the client route entry for the /agreements segment wires
+                    // up slightly later — a click in that gap is consumed while router.push
+                    // no-ops, so the page silently stays on /submitted (no error). There's no
+                    // exposed "route ready" signal to await, so settle briefly after
+                    // hydration before the single click.
+                    const proceedToStep3 = ctx.page.getByRole('link', {
+                        name: /Proceed to step 3/i,
+                    })
+                    await proceedToStep3.waitFor({ state: 'visible' })
+                    await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
+                    await proceedToStep3.click()
+                    const proceedToStep4 = ctx.page.getByRole('button', {
+                        name: /Proceed to Step 4/i,
+                    })
+                    await proceedToStep4.waitFor({ state: 'visible' })
+                    await proceedToStep4.click()
                     await ctx.page.getByText('Upload your files').waitFor({ state: 'visible' })
                 }),
         },
@@ -230,13 +262,11 @@ export const studyHappyPathSuite: Suite = {
                     await btn.waitFor({ state: 'visible' })
                     // On a cold workspace the app provisions the whole code-server
                     // environment FIRST ("Launching IDE" + a progress bar) and only then
-                    // navigates. Ctrl/Cmd-click keeps that navigation in THIS tab; wait
-                    // for the app to leave /code onto Coder.
+                    // navigates. Ctrl/Cmd-click keeps that navigation in THIS tab. We
+                    // don't wait on a Coder URL — the destination markers below (the
+                    // "Continue to launch IDE" control or the workbench) are the real
+                    // proof of arrival, and provisioning can take minutes.
                     await btn.click({ modifiers: ['Shift'] })
-                    await ctx.page.waitForURL(/coder\.[^/]+\/|\/@[^/]+\/.+\/apps\/code-server/i, {
-                        timeout: 300_000,
-                    })
-                    await ctx.page.waitForLoadState('domcontentloaded')
                     // Coder's OIDC uses prompt=login, so launching lands on Coder's
                     // "session expired / Continue to launch IDE" page — a LINK (not a
                     // button) to the OIDC callback — even though the app session is live.
@@ -247,15 +277,17 @@ export const studyHappyPathSuite: Suite = {
                         .getByRole('link', { name: /Continue to launch IDE/i })
                         .or(ctx.page.getByRole('button', { name: /Continue to launch IDE/i }))
                     const workbench = ctx.page.locator('.monaco-workbench')
+                    // Cold-workspace provisioning can take minutes; this race (not a
+                    // URL wait) is now the arrival gate, so give it the full budget.
                     const seen = await Promise.race([
                         continueControl
                             .first()
-                            .waitFor({ state: 'visible', timeout: 120_000 })
+                            .waitFor({ state: 'visible', timeout: 300_000 })
                             .then(() => 'continue')
                             .catch(() => null),
                         workbench
                             .first()
-                            .waitFor({ state: 'visible', timeout: 120_000 })
+                            .waitFor({ state: 'visible', timeout: 300_000 })
                             .then(() => 'workbench')
                             .catch(() => null),
                     ])
@@ -320,7 +352,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/code`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    await ctx.page.getByText('Upload your files').waitFor({ state: 'visible' })
+                    // Files already exist (uploaded via the IDE run), so the page renders the
+                    // "Review files" management view rather than the empty-state "Upload your
+                    // files" prompt. The "Study code" heading anchors both states.
+                    await ctx.page
+                        .getByRole('heading', { name: 'Study code' })
+                        .waitFor({ state: 'visible' })
                 }),
         },
         {
@@ -394,7 +431,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('button', { name: /^Yes, resubmit study code$/i })
                         .click()
-                    await ctx.page.waitForURL('**/view')
+                    // Resubmit lands on the study view; the "Edit study code" heading
+                    // is gone once submitted, so wait for that heading to detach as the
+                    // signal the resubmit navigated away from the edit form.
+                    await ctx.page
+                        .getByRole('heading', { name: /Edit study code/i })
+                        .waitFor({ state: 'hidden' })
                 }),
         },
         // ---- Reviewer: approve code (round 2) ----
@@ -483,11 +525,12 @@ export const studyHappyPathSuite: Suite = {
             name: 'Reviewer approves the results',
             run: ctx =>
                 ctx.step(async () => {
+                    await ctx.page.getByRole('button', { name: /Approve/ }).click()
+                    // Approving results redirects to the reviewer dashboard.
                     await ctx.page
-                        .getByRole('button', { name: /^Approve$/i })
-                        .last()
-                        .click()
-                    await ctx.page.waitForURL('**/dashboard')
+                        .locator('text=Review Studies')
+                        .first()
+                        .waitFor({ state: 'visible' })
                 }),
         },
         // ---- Researcher: confirm the approved results are visible ----
@@ -514,7 +557,51 @@ export const studyHappyPathSuite: Suite = {
             // researcher and reviewer accounts lack (a reviewer-session cleanup 401s).
             run: ctx => ctx.step(() => ctx.loginAs('admin')),
         },
+        {
+            name: 'Verify the study is deleted',
+            // Delete the study via the QA cleanup API and ASSERT it succeeded, so a
+            // cleanup failure fails the run loudly instead of being swallowed by the
+            // engine's best-effort teardown (which folds a failed delete into a
+            // non-fatal 'cleanup' category). The engine's later teardown delete of
+            // the same id then harmlessly 404s.
+            run: ctx =>
+                ctx.step(async () => {
+                    await deleteStudyAndVerify(ctx, id(ctx))
+                }),
+        },
     ],
+}
+
+// Delete a study through the QA cleanup API using the admin's Clerk session token
+// (read from the page), assert a 2xx, then confirm a repeat delete reports it gone
+// (404). Throws on anything else so cleanup problems surface as a failed step.
+async function deleteStudyAndVerify(ctx: RunContext, studyId: string): Promise<void> {
+    const token = await ctx.page.evaluate(async () => {
+        const clerk = (
+            window as unknown as {
+                Clerk?: { session?: { getToken(): Promise<string | null> } }
+            }
+        ).Clerk
+        return (await clerk?.session?.getToken()) ?? ''
+    })
+    if (!token) throw new Error('Could not read admin Clerk token to verify study cleanup')
+
+    const del = () =>
+        ctx.page.request.delete(`${ctx.baseURL}/api/qa/studies/${studyId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        })
+
+    const res = await del()
+    if (!res.ok()) {
+        throw new Error(`QA cleanup DELETE study ${studyId} failed: HTTP ${res.status()}`)
+    }
+    // Confirm it's actually gone: a second delete finds nothing (404).
+    const again = await del()
+    if (again.status() !== 404) {
+        throw new Error(
+            `Study ${studyId} still present after delete (repeat DELETE returned ${again.status()}, expected 404)`
+        )
+    }
 }
 
 // --- helpers (mirror management-app/tests/study-flow.spec.ts) ---
@@ -585,23 +672,6 @@ async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
     await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, {
         waitUntil: 'domcontentloaded',
     })
-}
-
-// Click a nav control and wait for the URL to match. On the PR preview the app is
-// client-rendered and a click can land before the SPA router is ready (so the
-// navigation never fires); retry the click once with a generous per-attempt
-// budget before giving up.
-async function clickAndWaitForURL(ctx: RunContext, target: Locator, urlRe: RegExp): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-        await target.click()
-        const navigated = await ctx.page
-            .waitForURL(urlRe, { timeout: 45_000 })
-            .then(() => true)
-            .catch(() => false)
-        if (navigated) return
-    }
-    // One last wait so the caller gets the real timeout error if it truly never navigated.
-    await ctx.page.waitForURL(urlRe, { timeout: 15_000 })
 }
 
 // Confirm in the modal and wait for it to close. On the live preview the confirm

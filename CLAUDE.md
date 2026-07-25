@@ -41,6 +41,14 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   assertions/`toPass`, isolate per-run data), never mask it with a retry, an
   inline timeout, or a bare `waitForTimeout`. Don't set inline Playwright
   timeouts; configure them globally.
+- **Wait on page elements, not URLs.** After a click/navigation, wait for a
+  distinctive element on the DESTINATION page (`getByRole(...).waitFor()`,
+  web-first `expect`), NOT `page.waitForURL()`. A URL can change before the page
+  is interactive (or a click can land before the SPA router is ready), so
+  URL-waits race and time out while the real signal — the target UI — is what you
+  actually depend on. If you genuinely need a value FROM the URL (e.g. a
+  record id in the path), still wait for a destination element first, THEN read
+  `page.url()` once the page has rendered.
 
 ### Stop conditions
 

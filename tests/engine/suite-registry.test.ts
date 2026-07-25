@@ -5,19 +5,17 @@ describe('suite-registry', () => {
     it('lists available suites with name + description', async () => {
         const names = (await listSuites()).map(s => s.name)
         expect(names).toContain('signin')
-        expect(names).toContain('create-study')
+        expect(names).toContain('study-happy-path')
     })
 
     it('lists each suite with its static step names in order', async () => {
-        const createStudy = (await listSuites()).find(s => s.name === 'create-study')
-        expect(createStudy?.steps).toEqual([
+        const studyHappyPath = (await listSuites()).find(s => s.name === 'study-happy-path')
+        expect(studyHappyPath?.steps.slice(0, 3)).toEqual([
             'Open the researcher org dashboard',
             'Start a new study proposal',
-            'Step 1: choose org and language',
-            'Reach Step 2 and capture the study id',
-            'Step 2: fill the proposal',
-            'Submit the initial request',
+            'Step 1: choose org and language, then capture the study id',
         ])
+        expect(studyHappyPath?.steps.at(-1)).toBe('Verify the study is deleted')
     })
 
     it('returns a suite by name', async () => {

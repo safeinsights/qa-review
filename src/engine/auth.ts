@@ -20,19 +20,39 @@ export async function loginAs(
         await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
         // Clerk may show a "You're already signed in as <x>" interstitial instead
         // of the login form when a prior session survived the cookie/storage clear
-        // (its state is not only in the app's cookies). Clicking "Sign in with a
-        // different account" drops that session and shows the real form. Best-effort:
-        // only fires when the button is actually present.
+        // (its state is not only in the app's cookies) — this suite switches roles
+        // mid-run via loginAs, so the PREVIOUS role's session is routinely still
+        // live here. Clicking "Sign in with a different account" drops that session
+        // and reveals the real form.
+        //
+        // The interstitial hydrates on its own timeline (client-rendered, behind a
+        // spinner), so a one-shot "is the button visible right now?" peek races the
+        // hydration and skips the click — then we'd wait uselessly for an Email
+        // field the interstitial is covering. Instead race the two possible outcomes
+        // (interstitial button vs. Email field); if the interstitial wins, dismiss it
+        // and wait for the form. Retry the click because the button briefly disables
+        // itself while Clerk tears the session down.
+        const emailField = page.getByLabel('Email')
         const differentAccount = page.getByRole('button', {
             name: /sign in with a different account/i,
         })
-        if (await differentAccount.isVisible({ timeout: 3_000 }).catch(() => false)) {
-            await differentAccount.click().catch(() => {})
+        await Promise.race([
+            emailField.waitFor({ state: 'visible', timeout: 30_000 }),
+            differentAccount.waitFor({ state: 'visible', timeout: 30_000 }),
+        ]).catch(() => {})
+        if (await differentAccount.isVisible().catch(() => false)) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await differentAccount.click().catch(() => {})
+                const gone = await emailField
+                    .waitFor({ state: 'visible', timeout: 10_000 })
+                    .then(() => true)
+                    .catch(() => false)
+                if (gone) break
+            }
         }
         // The app is client-rendered: a loading spinner shows first, then the
         // form hydrates. Wait for the Email field to actually appear before
         // interacting (web-first wait absorbs the spinner).
-        const emailField = page.getByLabel('Email')
         await emailField.waitFor({ state: 'visible', timeout: 30_000 })
         await emailField.fill(account.email)
         await page.getByLabel('Password').fill(account.password)
