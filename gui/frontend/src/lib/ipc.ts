@@ -157,27 +157,18 @@ export async function runProcess(program: string, args: string[], cwd: string): 
 // method) isn't present, and never throw so a click can't silently break.
 export function openExternal(url: string): void {
     const open = window.runtime?.BrowserOpenURL
-    // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
-    console.debug(
-        '[openExternal] url=%s hasRuntime=%s hasOpen=%s',
-        url,
-        !!window.runtime,
-        typeof open
-    )
     if (typeof open === 'function') {
         try {
             open(url)
             return
-        } catch (e) {
-            // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
-            console.warn('[openExternal] BrowserOpenURL threw, falling back to window.open', e)
+        } catch {
+            /* fall through to window.open */
         }
     }
     try {
         window.open(url, '_blank', 'noopener,noreferrer')
-    } catch (e) {
-        // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
-        console.error('[openExternal] window.open failed', e)
+    } catch {
+        /* nothing else we can do */
     }
 }
 
