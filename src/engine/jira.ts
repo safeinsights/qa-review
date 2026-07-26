@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { markdownToAdf } from 'marklassian'
 
 // Minimal Jira Cloud REST client for posting comments that embed screenshots.
 //
@@ -77,20 +78,17 @@ export function extractMediaId(location: string): string | null {
 }
 
 // Builds the ADF document for a comment interleaving text and inline images.
-// Text segments are emitted as plain paragraphs: Jira renders ADF, not markdown,
-// so the body is passed through as literal text rather than being half-converted.
+// Jira renders ADF, not markdown, so each text segment is converted from markdown
+// to ADF (headings, bold/italic, inline code, lists, links) via marklassian and its
+// block nodes are spliced in — this is what preserves the formatting Claude writes.
+// Media segments become mediaSingle nodes in place, keeping the text/image order.
 export function buildCommentAdf(segments: CommentSegment[]): Record<string, unknown> {
     const content: Record<string, unknown>[] = []
     for (const segment of segments) {
         if (segment.type === 'text') {
-            for (const line of segment.text.split(/\n{2,}/)) {
-                const trimmed = line.trim()
-                if (!trimmed) continue
-                content.push({
-                    type: 'paragraph',
-                    content: [{ type: 'text', text: trimmed }],
-                })
-            }
+            if (!segment.text.trim()) continue
+            const doc = markdownToAdf(segment.text) as { content?: Record<string, unknown>[] }
+            for (const node of doc.content ?? []) content.push(node)
         } else {
             const attrs: Record<string, unknown> = {
                 id: segment.mediaId,

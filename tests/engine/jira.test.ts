@@ -55,6 +55,38 @@ describe('buildCommentAdf', () => {
     it('always emits at least one node, since ADF rejects an empty doc', () => {
         expect(buildCommentAdf([]).content).toHaveLength(1)
     })
+
+    // Text segments are markdown → ADF (not literal text), so Claude's verdict
+    // formatting renders instead of showing raw `##`/`**`/`-` characters.
+    it('converts a markdown heading to an ADF heading node', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '## Verdict: PASS' }])
+        const node = (doc.content as Record<string, unknown>[])[0]
+        expect(node).toMatchObject({ type: 'heading', attrs: { level: 2 } })
+    })
+
+    it('converts **bold** to a text node with a strong mark', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'the **login** flow' }])
+        const para = (doc.content as { content: Record<string, unknown>[] }[])[0]
+        const bold = para.content.find(n => (n as { text?: string }).text === 'login') as Record<
+            string,
+            unknown
+        >
+        expect(bold.marks).toEqual([{ type: 'strong' }])
+    })
+
+    it('converts a markdown bullet list to an ADF bulletList', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '- one\n- two' }])
+        const list = (doc.content as Record<string, unknown>[])[0]
+        expect(list.type).toBe('bulletList')
+        expect((list.content as unknown[]).length).toBe(2)
+    })
+
+    it('converts a markdown link to a text node with a link mark', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '[here](https://x.co)' }])
+        const para = (doc.content as { content: Record<string, unknown>[] }[])[0]
+        const link = para.content[0] as { marks?: Record<string, unknown>[] }
+        expect(link.marks?.[0]).toMatchObject({ type: 'link', attrs: { href: 'https://x.co' } })
+    })
 })
 
 describe('splitBodyIntoSegments', () => {

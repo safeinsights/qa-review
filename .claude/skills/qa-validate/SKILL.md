@@ -106,10 +106,11 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    `{{image:2}}` in the body to place them mid-text instead. It prints
    `{"id","url"}` — give the user the URL.
 
-   Do NOT use the MCP's `jira_add_comment` for a comment containing screenshots: it
-   can only emit text, so `![](f.png)` / `!f.png|thumbnail!` render as LITERAL TEXT
-   (upstream bug mcp-atlassian#608). Body text is passed through literally, so write
-   plain prose — `##` and `**bold**` will NOT render.
+   **The body is Markdown** — it's converted to Jira's ADF, so use formatting:
+   `##` headings, `**bold**`, `*italic*`, `` `code` ``, `-` bullet lists, and
+   `[text](url)` links all render. (Do NOT use the MCP's `jira_add_comment` for a
+   comment with screenshots: it can only emit text, so image syntax renders as
+   LITERAL TEXT — upstream bug mcp-atlassian#608.)
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
