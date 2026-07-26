@@ -1,12 +1,4 @@
-import {
-    ActionIcon,
-    Button,
-    PasswordInput,
-    SegmentedControl,
-    Tabs,
-    Textarea,
-    TextInput,
-} from '@mantine/core'
+import { ActionIcon, Button, SegmentedControl, Tabs, Textarea, TextInput } from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
 import { readSettings, revealSecret, type SettingField, writeSetting } from '../lib/ipc'
 
@@ -186,9 +178,10 @@ export function FieldRow({
             setRevealErr((e as Error).message)
         }
     }
-    // Only offer reveal for a secret that actually has a stored value.
+    // Only offer reveal for a secret that actually has a stored value. The eye
+    // sits inside the input (rightSection) so it reads as "reveal THIS field".
     const canReveal = f.secret && f.set
-    const revealButton = canReveal ? (
+    const eyeIcon = canReveal ? (
         <ActionIcon
             variant="subtle"
             color="gray"
@@ -248,13 +241,9 @@ export function FieldRow({
                 }}
             >
                 {hideLabel ? null : <span style={{ fontWeight: 600 }}>{f.label}</span>}
-                <span
-                    className="kicker"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
+                <span className="kicker">
                     {f.set ? `current: ${tierLabel(f.tier, f.localOnly)}` : 'not set'}
                     {f.secret ? ' · secret' : ''}
-                    {revealButton}
                 </span>
             </div>
             {isPem ? (
@@ -271,6 +260,9 @@ export function FieldRow({
                         autosize
                         minRows={4}
                         maxRows={12}
+                        // Eye pinned to the top-right corner of the textarea.
+                        rightSection={eyeIcon}
+                        rightSectionProps={{ style: { alignItems: 'flex-start', paddingTop: 6 } }}
                         styles={{ input: { fontFamily: 'var(--mono, monospace)', fontSize: 12 } }}
                     />
                     <div
@@ -289,30 +281,28 @@ export function FieldRow({
             ) : (
                 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginTop: 8 }}>
                     {revealed !== null ? (
-                        // Show the decrypted stored value read-only; the eye toggles it off.
-                        <TextInput style={{ flex: 1 }} value={revealed} readOnly />
-                    ) : f.secret ? (
-                        <PasswordInput
-                            style={{ flex: 1 }}
-                            value={draft.value}
-                            onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
-                            placeholder={f.set ? '•••••• (set — type to replace)' : 'enter a value'}
-                            // Hide Mantine's built-in visibility toggle: it only reveals what's
-                            // TYPED here (a pending replacement, blank for a stored secret), which
-                            // reads as "reveal shows nothing". Our own eye (revealButton, above)
-                            // fetches the actual stored value instead.
-                            visibilityToggleButtonProps={{
-                                style: { display: 'none' },
-                                tabIndex: -1,
-                                'aria-hidden': true,
-                            }}
-                        />
-                    ) : (
+                        // Show the decrypted stored value read-only; the eye (rightSection) toggles it off.
                         <TextInput
                             style={{ flex: 1 }}
+                            value={revealed}
+                            readOnly
+                            rightSection={eyeIcon}
+                        />
+                    ) : (
+                        // A secret's draft input is masked (type=password) with OUR eye in the
+                        // rightSection — not Mantine's PasswordInput, whose built-in toggle only
+                        // un-masks the (blank) draft and reads as "reveal shows nothing".
+                        <TextInput
+                            style={{ flex: 1 }}
+                            type={f.secret ? 'password' : undefined}
                             value={draft.value}
                             onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
-                            placeholder="enter a value"
+                            placeholder={
+                                f.secret && f.set
+                                    ? '•••••• (set — type to replace)'
+                                    : 'enter a value'
+                            }
+                            rightSection={eyeIcon}
                         />
                     )}
                     {tierControl}
