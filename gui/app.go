@@ -137,6 +137,9 @@ type App struct {
 	// teardown (StopSessionIfOwner) only proceeds if the caller still owns this token.
 	sessionToken string
 	sessionSeq   int
+	// stopVerdictWatch stops the validation session's verdict-file poller (which
+	// emits "verdict-posted" when Claude records a verdict). Closed on teardown.
+	stopVerdictWatch chan struct{}
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -474,11 +477,64 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (st
 		a.StopSession()
 		return "", err
 	}
+	a.startVerdictWatch()
 	go func() {
 		time.Sleep(2 * time.Second)
 		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard, instructions))
 	}()
 	return token, nil
+}
+
+// startVerdictWatch polls the verdict rendezvous file for the duration of the
+// validation session. `qar verdict-posted` writes it after Claude posts a verdict
+// (button- or manually-driven); on seeing it we emit "verdict-posted" {issue,result}
+// so the GUI hides the Verdict button, then consume the file. Any stale file from a
+// prior session is cleared up front so it can't fire a false positive.
+func (a *App) startVerdictWatch() {
+	path := verdictPostedPath()
+	_ = os.Remove(path)
+	stop := make(chan struct{})
+	a.sessionMu.Lock()
+	a.stopVerdictWatch = stop
+	a.sessionMu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				var v struct {
+					Issue  string `json:"issue"`
+					Result string `json:"result"`
+				}
+				if json.Unmarshal(data, &v) == nil && v.Issue != "" {
+					runtime.EventsEmit(a.ctx, "verdict-posted", map[string]any{
+						"issue": v.Issue, "result": v.Result,
+					})
+				}
+				// Consume it either way so a malformed file can't spin.
+				_ = os.Remove(path)
+			}
+		}
+	}()
+}
+
+// stopVerdictWatcher stops the poller if one is running (idempotent).
+func (a *App) stopVerdictWatcher() {
+	a.sessionMu.Lock()
+	stop := a.stopVerdictWatch
+	a.stopVerdictWatch = nil
+	a.sessionMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 }
 
 // composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
@@ -616,6 +672,7 @@ func (a *App) SendToPty(text string) error {
 // screencast), and removes the temp MCP config. Returns whether anything was
 // actually running (so callers can decide whether to emit "session-ended").
 func (a *App) teardownSession() bool {
+	a.stopVerdictWatcher()
 	running := a.pty.running()
 	a.pty.stop()
 

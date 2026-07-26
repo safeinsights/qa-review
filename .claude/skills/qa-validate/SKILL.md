@@ -126,7 +126,11 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    - **Validated** → transition to **"Final Review - EM & PM"**.
    - **Rejected** → **un-assign** (`jira_update_issue(fields='{"assignee": null}')`)
      AND transition to **"Development"**.
-5. **Clean up** anything you created (studies/users) — see "Cleaning up" below.
+5. **Tell the GUI the verdict is posted** so it hides the Verdict button and shows the
+   outcome — run `qar verdict-posted --issue <CARD> --result <validated|rejected>`.
+   Do this AFTER the comment + transition succeed, whether the user pressed the
+   Verdict button or asked you directly.
+6. **Clean up** anything you created (studies/users) — see "Cleaning up" below.
 
 ## Cleaning up created users/studies (you have everything you need — don't get stuck)
 Delete every user/study you created. `qar cleanup` needs a **Clerk session JWT** via

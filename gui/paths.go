@@ -78,6 +78,14 @@ func repoReady() bool {
 	return err == nil && info.IsDir()
 }
 
+// verdictPostedPath mirrors the engine's verdictPostedPath() (src/engine/paths.ts):
+// <repoDir>/results/verdict-posted.json. `qar verdict-posted` writes it (via the
+// engine, which resolves the same repo via QAR_REPO_DIR); the validation session
+// polls it here. Keep in sync with the TS path.
+func verdictPostedPath() string {
+	return filepath.Join(repoDir(), "results", "verdict-posted.json")
+}
+
 // resourcesDir returns the .app's Contents/Resources dir (where the engine bundle
 // + shipped node + Playwright node_modules live), or "" when not running from an
 // .app bundle (e.g. `wails dev`), in which case callers fall back to `pnpm qar`.

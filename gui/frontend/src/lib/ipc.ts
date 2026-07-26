@@ -321,6 +321,24 @@ export async function onSessionEnded(cb: () => void): Promise<UnlistenFn> {
     return rt().EventsOn('session-ended', () => cb())
 }
 
+export interface VerdictPosted {
+    issue: string
+    result: 'validated' | 'rejected'
+}
+
+// Fires when Claude records a posted verdict (`qar verdict-posted`), whether the
+// GUI's Verdict button or a manual instruction drove it. The Validation tab uses it
+// to hide the Verdict button and show the outcome.
+export async function onVerdictPosted(cb: (v: VerdictPosted) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('verdict-posted', (...data) => {
+        const p = (data[0] ?? {}) as { issue?: string; result?: string }
+        cb({
+            issue: String(p.issue ?? ''),
+            result: p.result === 'rejected' ? 'rejected' : 'validated',
+        })
+    })
+}
+
 // Non-ready engine output (login errors etc.) surfaced before the terminal opens.
 export async function onSessionLog(cb: (line: string) => void): Promise<UnlistenFn> {
     return rt().EventsOn('session-log', (...data) => cb(String(data[0])))

@@ -16,6 +16,7 @@ import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { syncCommand } from '@/cli/commands/sync'
 import { totpCommand } from '@/cli/commands/totp'
+import { verdictPostedCommand } from '@/cli/commands/verdict'
 import { commandHelp, topLevelHelp, unknownCommandMessage } from '@/cli/help'
 import { loadSettings } from '@/engine/settings'
 
@@ -81,6 +82,8 @@ async function main() {
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-delete-comment':
             return jiraDeleteCommentCommand(opts, await loadSettings())
+        case 'verdict-posted':
+            return verdictPostedCommand(opts)
         default:
             console.error(unknownCommandMessage(subcommand))
             process.exit(1)

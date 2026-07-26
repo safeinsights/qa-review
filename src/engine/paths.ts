@@ -59,6 +59,15 @@ export function sessionRequestResultPath(): string {
     return path.join(resultsRoot(), 'session-request-result.json')
 }
 
+// Rendezvous for "a verdict was posted to Jira". `qar verdict-posted` writes
+// `{ issue, result }` here after Claude posts a validated/rejected verdict (whether
+// driven by the GUI's Verdict button or a manual instruction); the running validation
+// session polls this path and tells the GUI, which then hides the Verdict button and
+// shows the outcome. One session at a time, so a single fixed path needs no keying.
+export function verdictPostedPath(): string {
+    return path.join(resultsRoot(), 'verdict-posted.json')
+}
+
 // Single-instance lock for `qar session`. The rendezvous above is ONE fixed path,
 // so a second session would consume requests meant for the first: `session-login`
 // would report success while logging in a browser nobody is attached to. The lock

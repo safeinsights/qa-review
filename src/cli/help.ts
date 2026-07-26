@@ -107,6 +107,12 @@ export const COMMANDS: CommandHelp[] = [
         usage: 'qar jira-delete-comment --issue <KEY> --ids <id1,id2>',
         summary: 'Delete Jira comments (404 = already gone = success).',
     },
+    {
+        name: 'verdict-posted',
+        usage: 'qar verdict-posted --issue <KEY> --result <validated|rejected>',
+        summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',
+        details: 'Call right after posting a verdict comment + transition to Jira.',
+    },
 ]
 
 export function commandNames(): string[] {
