@@ -283,7 +283,9 @@ function LiveSession({
                         borderRadius: 10,
                         overflow: 'hidden',
                         minWidth: 650,
-                        minHeight: 460,
+                        // Fixed, viewport-capped height so the terminal scrolls
+                        // internally instead of growing the grid row without bound.
+                        height: 'min(72vh, 720px)',
                         padding: 8,
                     }}
                 >

@@ -86,5 +86,13 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         }
     }, [onExit])
 
-    return <div ref={hostRef} style={{ width: '100%', height: '100%', minHeight: 360 }} />
+    // maxHeight caps the host so xterm's FitAddon computes a stable row count and
+    // scrolls internally, instead of the terminal's natural height feeding back into
+    // an unconstrained grid row and growing without bound. The parent still sizes it.
+    return (
+        <div
+            ref={hostRef}
+            style={{ width: '100%', height: '100%', minHeight: 360, maxHeight: '100%' }}
+        />
+    )
 }
