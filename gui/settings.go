@@ -34,53 +34,84 @@ func isEncryptedValue(v string) bool {
 	return strings.HasPrefix(strings.TrimSpace(v), ageArmorHeader)
 }
 
-// secretVars are the var names whose values must be encrypted when committed to
-// the project tier. Kept in sync with secretVarNames() in src/engine/settings.ts
-// (each account's password + MFA code + results private key).
-var secretVars = map[string]bool{
-	"ADMIN_PASSWORD":                         true,
-	"ADMIN_MFA_CODE":                         true,
-	"ADMIN_RESULTS_PRIVATE_KEY_QA":           true,
-	"ADMIN_RESULTS_PRIVATE_KEY_STAGING":      true,
-	"RESEARCHER_PASSWORD":                    true,
-	"RESEARCHER_MFA_CODE":                    true,
-	"RESEARCHER_RESULTS_PRIVATE_KEY_QA":      true,
-	"RESEARCHER_RESULTS_PRIVATE_KEY_STAGING": true,
-	"REVIEWER_PASSWORD":                      true,
-	"REVIEWER_MFA_CODE":                      true,
-	"REVIEWER_RESULTS_PRIVATE_KEY_QA":        true,
-	"REVIEWER_RESULTS_PRIVATE_KEY_STAGING":   true,
+// envList is the set of stable envs that carry per-env account secrets. Kept in
+// sync with PRIVATE_KEY_ENVS in config/environments.ts.
+var envList = []string{"qa", "staging", "production"}
+
+// accountGroups maps each account's display group to its var prefix.
+var accountGroups = []struct{ group, prefix string }{
+	{"Admin", "ADMIN"},
+	{"Researcher", "RESEARCHER"},
+	{"Reviewer", "REVIEWER"},
 }
 
-// knownVars is the ordered list of fields the Settings panel shows: per-env base
-// URLs, then each account's email + password + MFA code + per-env results private
-// keys. `Group` renders account sections; `Env` marks the qa/staging key variants
-// the panel groups into sub-tabs. Kept in sync with knownVarNames()/secretVarNames()
-// in src/engine/settings.ts (derived there from SHARED_ACCOUNTS x PRIVATE_KEY_ENVS).
-var knownVars = []SettingField{
-	{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
-	{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
-	// Jira MCP config for the Validation tab. LocalOnly (gitignored, never encrypted)
-	// — a personal, per-user site/email/token. Not in secretVars: local-tier values
-	// are always plaintext. The token is still Secret:true for input masking.
-	{Key: "JIRA_URL", Label: "Jira site URL", Secret: false, Group: "Jira", LocalOnly: true},
-	{Key: "JIRA_USERNAME", Label: "Jira email", Secret: false, Group: "Jira", LocalOnly: true},
-	{Key: "JIRA_API_TOKEN", Label: "Jira API token", Secret: true, Group: "Jira", LocalOnly: true},
-	{Key: "ADMIN_EMAIL", Label: "Email", Secret: false, Group: "Admin"},
-	{Key: "ADMIN_PASSWORD", Label: "Password", Secret: true, Group: "Admin"},
-	{Key: "ADMIN_MFA_CODE", Label: "MFA code", Secret: true, Group: "Admin"},
-	{Key: "ADMIN_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Admin", Env: "qa"},
-	{Key: "ADMIN_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Admin", Env: "staging"},
-	{Key: "RESEARCHER_EMAIL", Label: "Email", Secret: false, Group: "Researcher"},
-	{Key: "RESEARCHER_PASSWORD", Label: "Password", Secret: true, Group: "Researcher"},
-	{Key: "RESEARCHER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Researcher"},
-	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Researcher", Env: "qa"},
-	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Researcher", Env: "staging"},
-	{Key: "REVIEWER_EMAIL", Label: "Email", Secret: false, Group: "Reviewer"},
-	{Key: "REVIEWER_PASSWORD", Label: "Password", Secret: true, Group: "Reviewer"},
-	{Key: "REVIEWER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Reviewer"},
-	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "qa"},
-	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "staging"},
+// secretVars are the var names whose values must be encrypted when committed to the
+// project tier. Kept in sync with secretVarNames() in src/engine/settings.ts: every
+// account field is per-env and secret (email, password, results private key, MFA
+// code, MFA seed). Built from accountGroups x envList so it can't drift.
+var secretVars = buildSecretVars()
+
+func buildSecretVars() map[string]bool {
+	m := map[string]bool{}
+	for _, ag := range accountGroups {
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			m[ag.prefix+"_EMAIL_"+e] = true
+			m[ag.prefix+"_PASSWORD_"+e] = true
+			m[ag.prefix+"_RESULTS_PRIVATE_KEY_"+e] = true
+			m[ag.prefix+"_MFA_CODE_"+e] = true
+			m[ag.prefix+"_MFA_SEED_"+e] = true
+		}
+	}
+	return m
+}
+
+// knownVars is the ordered list of fields the panel shows: per-env base URLs, the
+// Jira config, then each account's per-env fields. `Group` renders account sections
+// (shown in the Accounts tab); `Env`/`Section` mark the per-env variants the panel
+// groups into sub-tabs — the "Account" section holds email/password/MFA code/seed
+// (short inputs), the "Results private key" section holds the PEM (Multiline). Kept
+// in sync with knownVarNames()/secretVarNames() in src/engine/settings.ts.
+var knownVars = buildKnownVars()
+
+func buildKnownVars() []SettingField {
+	fields := []SettingField{
+		{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
+		{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
+		{Key: "PRODUCTION_BASE_URL", Label: "Production base URL", Secret: false, Group: ""},
+		// Jira MCP config for the Validation tab. LocalOnly (gitignored, never
+		// encrypted) — a personal, per-user site/email/token. Not in secretVars:
+		// local-tier values are always plaintext. The token is still Secret for masking.
+		{Key: "JIRA_URL", Label: "Jira site URL", Secret: false, Group: "Jira", LocalOnly: true},
+		{Key: "JIRA_USERNAME", Label: "Jira email", Secret: false, Group: "Jira", LocalOnly: true},
+		{Key: "JIRA_API_TOKEN", Label: "Jira API token", Secret: true, Group: "Jira", LocalOnly: true},
+	}
+	for _, ag := range accountGroups {
+		// The core account fields — one env-tabbed "Account" section per account,
+		// each env tab holding email + password + MFA code + TOTP seed (short inputs).
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			fields = append(fields,
+				SettingField{Key: ag.prefix + "_EMAIL_" + e, Label: "Email",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_PASSWORD_" + e, Label: "Password",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_MFA_CODE_" + e, Label: "MFA fixed code",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_MFA_SEED_" + e, Label: "MFA TOTP seed",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+			)
+		}
+		// Per-env results private key (its own env-tabbed section, PEM textarea).
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			fields = append(fields, SettingField{
+				Key: ag.prefix + "_RESULTS_PRIVATE_KEY_" + e, Label: "Results private key",
+				Secret: true, Group: ag.group, Env: env, Section: "Results private key", Multiline: true,
+			})
+		}
+	}
+	return fields
 }
 
 // SettingField is one row in the Settings panel.
@@ -91,10 +122,18 @@ type SettingField struct {
 	// Account section this field belongs to ("Admin"/"Researcher"/"Reviewer"),
 	// or "" for ungrouped fields (the base URLs).
 	Group string `json:"group"`
-	// For per-environment fields (the results private keys), the env this value
-	// is for ("qa"/"staging") — the panel renders these as sub-tabs within the
-	// account. "" for env-agnostic fields (email/password/MFA, base URLs).
+	// For per-environment fields (results private keys, MFA code, MFA seed), the
+	// env this value is for ("qa"/"staging"/"production") — the panel renders these
+	// as sub-tabs within the account. "" for env-agnostic fields (email/password,
+	// base URLs).
 	Env string `json:"env"`
+	// Label of the env-tabbed sub-section this field belongs to ("Results private
+	// key", "MFA"), letting several env-tagged fields (e.g. the MFA code + seed for
+	// one env) render together under one env tab. "" for the account's plain fields.
+	Section string `json:"section"`
+	// Multiline hints the panel to render a textarea instead of a one-line input —
+	// true for the PEM results keys, false for short values (MFA code, TOTP seed).
+	Multiline bool `json:"multiline"`
 	// Where the current value comes from: "project", "secrets", "local", or ""
 	// (unset). For secrets, the value itself is NOT returned to the UI.
 	Tier string `json:"tier"`
@@ -396,6 +435,65 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 		view.Fields = append(view.Fields, field)
 	}
 	return view, nil
+}
+
+// RevealSecret returns the current plaintext value of one settings key, resolving
+// it with the same precedence as ReadSettings (local > secrets > project). An
+// encrypted committed value is decrypted with the local identity; a plaintext
+// value (local tier, or a non-secret) is returned as-is. Used by the panel's
+// reveal (eye) toggle so a tester can confirm what's stored without re-typing it.
+// Errors if the key is unset, or if it's encrypted but the local identity can't
+// decrypt it (not a recipient / no identity).
+func (a *App) RevealSecret(cwd, key string) (string, error) {
+	dir := configDirFor(cwd)
+	local, err := readSettingsFile(filepath.Join(dir, localFile))
+	if err != nil {
+		return "", err
+	}
+	secrets, err := readSettingsFile(filepath.Join(dir, secretsFile))
+	if err != nil {
+		return "", err
+	}
+	project, err := readSettingsFile(filepath.Join(dir, projectFile))
+	if err != nil {
+		return "", err
+	}
+
+	// Match ReadSettings precedence: local > secrets > project. Only the secrets
+	// tier can hold an encrypted (armored) value; local/project are plaintext.
+	var val string
+	switch {
+	case has(local, key):
+		val = local[key]
+	case has(secrets, key):
+		val = secrets[key]
+	case has(project, key):
+		val = project[key]
+	default:
+		return "", fmt.Errorf("%q is not set", key)
+	}
+
+	if !isEncryptedValue(val) {
+		return val, nil
+	}
+	id, ok, err := loadIdentity(dir)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("no local identity — request access to reveal encrypted values")
+	}
+	plain, err := decryptWithIdentity(val, id)
+	if err != nil {
+		return "", fmt.Errorf("cannot decrypt %q: your key may not be a recipient yet", key)
+	}
+	return plain, nil
+}
+
+// has reports whether a settings map contains a key.
+func has(m map[string]string, key string) bool {
+	_, ok := m[key]
+	return ok
 }
 
 // WriteSetting writes one field to the chosen tier ("project" or "local").

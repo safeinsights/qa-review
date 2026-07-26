@@ -11,14 +11,18 @@ import { readIdentity } from '@/engine/identity'
 import { configDir } from '@/engine/paths'
 import {
     ENVIRONMENTS,
+    emailVar,
+    mfaCodeVar,
+    mfaSeedVar,
     PRIVATE_KEY_ENVS,
+    passwordVar,
     privateKeyVar,
     SHARED_ACCOUNTS,
 } from '../../config/environments'
 
 // Flat var map the engine consumes (same shape `process.env` had). Keys are the
 // committed var names declared in config/environments.ts (ADMIN_EMAIL,
-// QA_BASE_URL, MFA_CODE, …); values are the resolved (decrypted) strings.
+// QA_BASE_URL, ADMIN_MFA_CODE_QA, …); values are the resolved (decrypted) strings.
 export type Vars = Record<string, string | undefined>
 
 // --- Settings files (repo-root config/) ---
@@ -41,16 +45,24 @@ export function isEncryptedValue(value: string): boolean {
     return value.trimStart().startsWith(AGE_ARMOR_HEADER)
 }
 
-// The full set of secret var names (passwords + per-account MFA codes). Non-secret
-// vars (emails, base URLs) may live in any tier in plaintext; secret vars must be
-// encrypted when committed to the project tier. Derived from config/environments.ts
-// so the list can't drift from the declared accounts.
-export function secretVarNames(): string[] {
-    return Object.values(SHARED_ACCOUNTS).flatMap(a => [
-        a.passwordVar,
-        a.mfaVar,
-        ...PRIVATE_KEY_ENVS.map(env => privateKeyVar(a, env)),
+// Every per-env account secret var for one account: email, password, results
+// private key, MFA code, and MFA seed — one of each per env. All are secret.
+function accountSecretVars(a: (typeof SHARED_ACCOUNTS)[keyof typeof SHARED_ACCOUNTS]): string[] {
+    return PRIVATE_KEY_ENVS.flatMap(env => [
+        emailVar(a, env),
+        passwordVar(a, env),
+        privateKeyVar(a, env),
+        mfaCodeVar(a, env),
+        mfaSeedVar(a, env),
     ])
+}
+
+// The full set of secret var names — every account field is per-env and secret.
+// Only base URLs are non-secret (they may live in any tier in plaintext); secret
+// vars must be encrypted when committed to the project tier. Derived from
+// config/environments.ts so the list can't drift from the declared accounts.
+export function secretVarNames(): string[] {
+    return Object.values(SHARED_ACCOUNTS).flatMap(accountSecretVars)
 }
 
 export function isSecretVar(key: string): boolean {
@@ -58,15 +70,11 @@ export function isSecretVar(key: string): boolean {
 }
 
 // Every var name the settings system knows about, in a stable display order:
-// per-env base URLs, then each account's email + password + MFA code.
+// per-env base URLs, then each account's per-env secrets (email, password, results
+// key, MFA code, MFA seed).
 export function knownVarNames(): string[] {
     const baseUrls = ENVIRONMENTS.map(e => e.baseUrlVar)
-    const accounts = Object.values(SHARED_ACCOUNTS).flatMap(a => [
-        a.emailVar,
-        a.passwordVar,
-        a.mfaVar,
-        ...PRIVATE_KEY_ENVS.map(env => privateKeyVar(a, env)),
-    ])
+    const accounts = Object.values(SHARED_ACCOUNTS).flatMap(accountSecretVars)
     return [...baseUrls, ...accounts]
 }
 

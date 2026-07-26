@@ -19,15 +19,15 @@ function tmpRoot() {
 
 const ENV_VARS = {
     QA_BASE_URL: 'https://qa.example.com',
-    ADMIN_EMAIL: 'a@example.com',
-    ADMIN_PASSWORD: 'p',
-    ADMIN_MFA_CODE: '424242',
-    RESEARCHER_EMAIL: 'r@example.com',
-    RESEARCHER_PASSWORD: 'p',
-    RESEARCHER_MFA_CODE: '424242',
-    REVIEWER_EMAIL: 'v@example.com',
-    REVIEWER_PASSWORD: 'p',
-    REVIEWER_MFA_CODE: '424242',
+    ADMIN_EMAIL_QA: 'a@example.com',
+    ADMIN_PASSWORD_QA: 'p',
+    ADMIN_MFA_CODE_QA: '424242',
+    RESEARCHER_EMAIL_QA: 'r@example.com',
+    RESEARCHER_PASSWORD_QA: 'p',
+    RESEARCHER_MFA_CODE_QA: '424242',
+    REVIEWER_EMAIL_QA: 'v@example.com',
+    REVIEWER_PASSWORD_QA: 'p',
+    REVIEWER_MFA_CODE_QA: '424242',
 }
 
 function deps(overrides: Partial<Parameters<typeof runEngine>[1]> = {}) {

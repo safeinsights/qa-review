@@ -98,23 +98,23 @@ func TestWriteSettingRouting(t *testing.T) {
 		t.Fatalf("project file: got %v", proj)
 	}
 
-	if err := app.WriteSetting(dir, "ADMIN_PASSWORD", "pw-admin", "project"); err != nil {
+	if err := app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "pw-admin", "project"); err != nil {
 		t.Fatal(err)
 	}
 	secrets := readJSON(t, filepath.Join(dir, "config", secretsFile))
-	enc := secrets["ADMIN_PASSWORD"]
+	enc := secrets["ADMIN_PASSWORD_QA"]
 	if !strings.HasPrefix(strings.TrimSpace(enc), "-----BEGIN AGE ENCRYPTED FILE-----") {
-		t.Fatalf("expected encrypted ADMIN_PASSWORD, got: %q", enc)
+		t.Fatalf("expected encrypted ADMIN_PASSWORD_QA, got: %q", enc)
 	}
 	if dec, err := decryptString(enc, id); err != nil || dec != "pw-admin" {
 		t.Fatalf("decrypt secret: got %q err %v", dec, err)
 	}
 
-	if err := app.WriteSetting(dir, "MFA_CODE", "424242", "local"); err != nil {
+	if err := app.WriteSetting(dir, "ADMIN_MFA_CODE_QA", "424242", "local"); err != nil {
 		t.Fatal(err)
 	}
 	local := readJSON(t, filepath.Join(dir, "config", localFile))
-	if local["MFA_CODE"] != "424242" {
+	if local["ADMIN_MFA_CODE_QA"] != "424242" {
 		t.Fatalf("local file: got %v", local)
 	}
 }
@@ -148,6 +148,41 @@ func TestWriteSettingLocalOnly(t *testing.T) {
 	}
 }
 
+// RevealSecret returns the current plaintext: decrypting an encrypted committed
+// secret, passing a plaintext local value through, and erroring on an unset key.
+func TestRevealSecret(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := age.GenerateX25519Identity()
+	writeTestKeyring(t, dir, id.Recipient().String())
+	writeTestIdentity(t, dir, id)
+	app := &App{}
+
+	// Encrypted committed secret -> decrypted on reveal.
+	if err := app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "pw-admin", "project"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := app.RevealSecret(dir, "ADMIN_PASSWORD_QA"); err != nil || got != "pw-admin" {
+		t.Fatalf("reveal encrypted: got %q err %v", got, err)
+	}
+
+	// Plaintext local value -> returned as-is (local wins over any other tier).
+	if err := app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "local-pw", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := app.RevealSecret(dir, "ADMIN_PASSWORD_QA"); err != nil || got != "local-pw" {
+		t.Fatalf("reveal local: got %q err %v", got, err)
+	}
+
+	// Unset key -> error.
+	if _, err := app.RevealSecret(dir, "REVIEWER_PASSWORD_STAGING"); err == nil {
+		t.Fatal("expected error revealing an unset key")
+	}
+}
+
 func TestWriteSettingMovesBetweenTiers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QAR_REPO_DIR", dir)
@@ -177,7 +212,7 @@ func TestWriteSecretToProjectRequiresKeyring(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{} // no keyring written
-	err := app.WriteSetting(dir, "ADMIN_PASSWORD", "pw", "project")
+	err := app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "pw", "project")
 	if err == nil || !strings.Contains(err.Error(), "keyring is empty") {
 		t.Fatalf("expected keyring-empty error, got: %v", err)
 	}
@@ -237,14 +272,14 @@ func TestIdentityInKeyring(t *testing.T) {
 }
 
 // writeTestSecrets writes a settings.secrets.json under dir/config with one
-// encrypted secret (ADMIN_PASSWORD) encrypted to the given recipients.
+// encrypted secret (ADMIN_PASSWORD_QA) encrypted to the given recipients.
 func writeTestSecrets(t *testing.T, dir string, recipients ...string) {
 	t.Helper()
 	enc, err := encryptToRecipients("s3cret", recipients)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD": enc})
+	data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD_QA": enc})
 	if err := os.WriteFile(filepath.Join(dir, "config", secretsFile), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +350,7 @@ func TestIdentityDecryptsSecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD": mine, "ADMIN_MFA_CODE": theirs})
+		data, _ := json.Marshal(map[string]string{"ADMIN_PASSWORD": mine, "ADMIN_MFA_CODE_QA": theirs})
 		if err := os.WriteFile(filepath.Join(cfg, secretsFile), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +375,7 @@ func TestReadSettingsReportsIdentityAndMasksSecrets(t *testing.T) {
 	}
 	app := &App{}
 	_ = app.WriteSetting(dir, "QA_BASE_URL", "https://qa.example", "project")
-	_ = app.WriteSetting(dir, "ADMIN_PASSWORD", "pw-admin", "project")
+	_ = app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "pw-admin", "project")
 
 	view, err := app.ReadSettings(dir)
 	if err != nil {
@@ -353,7 +388,7 @@ func TestReadSettingsReportsIdentityAndMasksSecrets(t *testing.T) {
 	if byKey["QA_BASE_URL"].Value != "https://qa.example" {
 		t.Fatalf("non-secret value should be visible: %+v", byKey["QA_BASE_URL"])
 	}
-	pw := byKey["ADMIN_PASSWORD"]
+	pw := byKey["ADMIN_PASSWORD_QA"]
 	if pw.Value != "" {
 		t.Fatalf("secret value must be masked, got %q", pw.Value)
 	}

@@ -21,7 +21,7 @@ import { VerdictPanel } from './VerdictPanel'
 // other tab (or the run companion) holds the single shared PTY + browser.
 const MY_KIND: SessionKind = 'validation'
 
-const ENVS = ['qa', 'staging']
+const ENVS = ['qa', 'staging', 'production']
 const ROLES = ['admin', 'researcher', 'reviewer']
 
 // "Validate a Jira ticket": Claude drives the shared logged-out browser (via the

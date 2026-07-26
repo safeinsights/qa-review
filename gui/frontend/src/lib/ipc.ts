@@ -12,7 +12,9 @@ export interface SettingField {
     label: string
     secret: boolean
     group: string // account section: "Admin" | "Researcher" | "Reviewer" | "" (ungrouped)
-    env: string // for per-env fields (results private keys): "qa" | "staging"; "" otherwise
+    env: string // for per-env fields (results key, MFA): "qa" | "staging" | "production"; "" otherwise
+    section: string // env-tabbed sub-section label ("Results private key" | "MFA"); "" for plain fields
+    multiline: boolean // render a textarea (PEM keys) vs a one-line input (MFA code/seed)
     tier: string // "project" | "secrets" | "local" | "" (unset)
     value: string
     set: boolean
@@ -111,6 +113,7 @@ interface WailsApp {
     SaveTrace(bundleDir: string, suite: string): Promise<string>
     ZipBundle(bundleDir: string, suite: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
+    RevealSecret(cwd: string, key: string): Promise<string>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
     Sync(cwd: string): Promise<string>
     ResetAndSync(cwd: string): Promise<string>
@@ -459,6 +462,13 @@ export async function zipBundle(bundleDir: string, suite: string): Promise<strin
 // Read the merged settings view (secret values masked) for the Settings panel.
 export async function readSettings(): Promise<SettingsView> {
     return app().ReadSettings('')
+}
+
+// Reveal one secret's current plaintext value (decrypting a committed secret with
+// the local identity). Backs the reveal (eye) toggle. Rejects if unset or if the
+// value is encrypted but the local identity can't decrypt it.
+export async function revealSecret(key: string): Promise<string> {
+    return app().RevealSecret('', key)
 }
 
 // Write one field to a tier ("project" commits it; "local" is a gitignored override).

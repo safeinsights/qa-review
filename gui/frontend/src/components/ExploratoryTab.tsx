@@ -19,7 +19,7 @@ import { Terminal } from './Terminal'
 // other tab (or the run companion) holds the single shared PTY + browser.
 const MY_KIND: SessionKind = 'authoring'
 
-const ENVS = ['qa', 'staging']
+const ENVS = ['qa', 'staging', 'production']
 const ROLES = ['admin', 'researcher', 'reviewer']
 
 // "Author a Suite": the user describes a test, then drives claude in an embedded

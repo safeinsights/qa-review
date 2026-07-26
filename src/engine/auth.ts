@@ -4,7 +4,8 @@ import type { EnvConfig, Role } from '@/engine/types'
 export class AuthError extends Error {}
 
 // Logs `page` into the live app as `role` by driving the real Clerk sign-in UI
-// (email + password, then the fixed second-factor code). Returns the session
+// (email + password, then the second-factor code — a fixed SMS code on qa/staging,
+// or an authenticator-app TOTP code on production). Returns the session
 // cookie header string (used by the cleanup client to authorize DELETE calls as
 // this user). Throws AuthError on failure so run.ts can categorize it as 'auth'.
 // `bundleDir` (when provided) is where a failure screenshot is written.
@@ -83,22 +84,35 @@ export async function loginAs(
         await page.getByRole('button', { name: 'Login' }).click()
 
         // After Login there is a spinner before the next screen. The account
-        // either lands straight on the dashboard, or (these test accounts) hits
-        // the MFA picker. Wait for EITHER to appear before deciding.
+        // either lands straight on the dashboard, or hits the MFA picker. The
+        // second factor depends on the env: qa/staging test accounts use "SMS
+        // Verification" (a fixed code); production accounts use an authenticator
+        // app (a TOTP code computed from the seed). Both lead to the same 6-digit
+        // pin input. Wait for ANY of the three to appear before deciding.
         const smsButton = page.getByRole('button', { name: 'SMS Verification' })
+        const authenticatorButton = page.getByRole('button', {
+            name: /authenticator|authentication app|totp/i,
+        })
         const dashboard = page.locator('text=dashboard').first()
         await Promise.race([
             smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
+            authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
             dashboard.waitFor({ state: 'visible', timeout: 30_000 }),
         ]).catch(() => {})
 
-        // MFA branch: click SMS Verification, then enter the fixed code. The
-        // picker→code transition has its own spinner and a Mantine re-render can
-        // drop the first click, so retry until the 6-digit pin input appears.
+        // MFA branch: pick whichever second-factor option this env presents, then
+        // enter the code (account.mfaCode is fixed for qa/staging, TOTP-computed for
+        // production). The picker→code transition has its own spinner and a Mantine
+        // re-render can drop the first click, so retry until the pin input appears.
         const pinInput = page.getByTestId('sms-pin-input')
-        if (await smsButton.isVisible().catch(() => false)) {
+        const mfaChoice = (await authenticatorButton.isVisible().catch(() => false))
+            ? authenticatorButton
+            : (await smsButton.isVisible().catch(() => false))
+              ? smsButton
+              : null
+        if (mfaChoice) {
             for (let attempt = 0; attempt < 3; attempt++) {
-                await smsButton.click().catch(() => {})
+                await mfaChoice.click().catch(() => {})
                 const appeared = await pinInput
                     .waitFor({ state: 'visible', timeout: 10_000 })
                     .then(() => true)

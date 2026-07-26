@@ -1,6 +1,11 @@
+import { totp } from '@/engine/totp'
 import type { EnvConfig, Role } from '@/engine/types'
 import {
     ENVIRONMENTS,
+    emailVar,
+    mfaCodeVar,
+    mfaSeedVar,
+    passwordVar,
     prBaseUrl,
     privateKeyEnvFor,
     privateKeyVar,
@@ -18,23 +23,41 @@ function read(vars: Vars, key: string): string {
     return value
 }
 
-// Resolve the shared test accounts (email + password + per-account MFA code) used
-// by every environment (stable or PR preview). Throws clear, actionable errors so
-// a run never starts half-configured. Email/password/MFA are shared across all
-// envs; the results-decryption private key is PER-ENV, so it's looked up for
-// `envName` (PR previews reuse the QA key). The key lookup is NON-throwing: it's
-// optional (only study-happy-path needs it), so a run that doesn't use it must
-// not fail when it's unset.
+// Resolve the per-env test accounts (email + password + second factor) for a run.
+// Throws clear, actionable errors so a run never starts half-configured. Every
+// account field is PER-ENV, looked up for `envName` via privateKeyEnvFor (stable
+// envs map to themselves; PR previews reuse QA). The results-decryption private key
+// lookup is NON-throwing: it's optional (only study-happy-path needs it), so a run
+// that doesn't use it must not fail when it's unset.
+//
+// The second factor is a fixed code (`<ROLE>_MFA_CODE_<ENV>`) and/or a base32 TOTP
+// seed (`<ROLE>_MFA_SEED_<ENV>`). At least one must be set. MFA is resolved LAZILY
+// via a getter: when a seed is present the code is recomputed with totp() on EVERY
+// read — a TOTP code expires every 30s and a run spans minutes (login, then the
+// later Coder step), so computing once at resolve time would hand out a stale code.
+// When only a fixed code is set it's typed verbatim.
 function resolveSharedCredentials(vars: Vars, envName: string): Pick<EnvConfig, 'accounts'> {
-    const keyEnv = privateKeyEnvFor(envName)
+    const accEnv = privateKeyEnvFor(envName)
     const accounts = {} as EnvConfig['accounts']
     for (const role of Object.keys(SHARED_ACCOUNTS) as Role[]) {
         const a = SHARED_ACCOUNTS[role]
+        // A seed (TOTP) takes precedence over a fixed code. Exactly one is required.
+        const seed = vars[mfaSeedVar(a, accEnv)] || undefined
+        const fixedCode = vars[mfaCodeVar(a, accEnv)] || undefined
+        if (!seed && !fixedCode) {
+            throw new Error(
+                `Missing required secret: ${mfaCodeVar(a, accEnv)} or ${mfaSeedVar(a, accEnv)} ` +
+                    `(set a fixed MFA code or a TOTP seed for ${role} on ${accEnv} in the ` +
+                    `Accounts panel or config/settings.local.json)`
+            )
+        }
         accounts[role] = {
-            email: read(vars, a.emailVar),
-            password: read(vars, a.passwordVar),
-            mfaCode: read(vars, a.mfaVar),
-            privateKey: vars[privateKeyVar(a, keyEnv)] || undefined,
+            email: read(vars, emailVar(a, accEnv)),
+            password: read(vars, passwordVar(a, accEnv)),
+            get mfaCode(): string {
+                return seed ? totp(seed) : (fixedCode as string)
+            },
+            privateKey: vars[privateKeyVar(a, accEnv)] || undefined,
         }
     }
     return { accounts }

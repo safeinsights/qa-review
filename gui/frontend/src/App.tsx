@@ -1,5 +1,6 @@
 import { Button, Tabs } from '@mantine/core'
 import { useState } from 'react'
+import { AccountsTab } from './components/AccountsTab'
 import { AutoDoctorModal } from './components/AutoDoctorModal'
 import { ExploratoryTab } from './components/ExploratoryTab'
 import { HelpDrawer } from './components/HelpDrawer'
@@ -93,6 +94,7 @@ export function App() {
                             <Tabs.Tab value="validation">Validation</Tabs.Tab>
                             <Tabs.Tab value="suites">Testing</Tabs.Tab>
                             <Tabs.Tab value="exploratory">Author</Tabs.Tab>
+                            <Tabs.Tab value="accounts">Accounts</Tabs.Tab>
                             <Tabs.Tab value="settings">Settings</Tabs.Tab>
                         </Tabs.List>
 
@@ -110,6 +112,9 @@ export function App() {
                         </Tabs.Panel>
                         <Tabs.Panel value="validation" pt="lg" keepMounted>
                             <ValidationTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="accounts" pt="lg" keepMounted>
+                            <AccountsTab />
                         </Tabs.Panel>
                         <Tabs.Panel value="settings" pt="lg" keepMounted>
                             <SettingsTab />
