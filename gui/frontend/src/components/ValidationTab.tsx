@@ -11,8 +11,8 @@ import {
     stopSessionIfOwner,
 } from '../lib/ipc'
 import type { ConsoleLine } from '../lib/screencast'
-import { BrowserPanel } from './BrowserPanel'
 import { ConsoleLog } from './ConsoleLog'
+import { LiveBrowser } from './LiveBrowser'
 import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
 import { VerdictPanel } from './VerdictPanel'
@@ -354,7 +354,7 @@ function LiveSession({
                 >
                     {screencastPort ? (
                         <>
-                            <BrowserPanel port={screencastPort} onConsole={onConsoleLine} />
+                            <LiveBrowser port={screencastPort} onConsole={onConsoleLine} />
                             <ConsoleLog
                                 live
                                 lines={consoleLines}

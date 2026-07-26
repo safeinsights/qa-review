@@ -10,7 +10,7 @@ import {
     stopSession,
     stopSessionIfOwner,
 } from '../lib/ipc'
-import { BrowserPanel } from './BrowserPanel'
+import { LiveBrowser } from './LiveBrowser'
 import { SaveSuitePanel } from './SaveSuitePanel'
 import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
@@ -333,7 +333,7 @@ function LiveSession({
                     }}
                 >
                     {screencastPort ? (
-                        <BrowserPanel port={screencastPort} />
+                        <LiveBrowser port={screencastPort} />
                     ) : (
                         <div
                             style={{
