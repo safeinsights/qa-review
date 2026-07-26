@@ -18,10 +18,34 @@ export async function loginAs(
 
     try {
         await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
-        // Clerk may show a "You're already signed in as <x>" interstitial instead
-        // of the login form when a prior session survived the cookie/storage clear
-        // (its state is not only in the app's cookies) — this suite switches roles
-        // mid-run via loginAs, so the PREVIOUS role's session is routinely still
+
+        // Proactively sign out any existing Clerk session BEFORE we start, so we
+        // always begin from a clean slate. This is the root-cause fix for the
+        // stale-session bug: relying only on the "sign in with a different account"
+        // interstitial (a racy UI click) could leave the PREVIOUS role's session
+        // active alongside the new one, so the app kept acting as the old user while
+        // login "succeeded". Clerk.signOut() drops ALL sessions. Best-effort: Clerk
+        // may not be loaded yet on the very first visit, in which case there is no
+        // session to clear anyway. After signing out, reload so the form re-renders
+        // without the interstitial.
+        const signedOut = await page
+            .evaluate(async () => {
+                const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } })
+                    .Clerk
+                if (!clerk?.signOut) return false
+                await clerk.signOut()
+                return true
+            })
+            .catch(() => false)
+        if (signedOut) {
+            await page
+                .goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
+                .catch(() => {})
+        }
+
+        // Clerk may STILL show a "You're already signed in as <x>" interstitial (e.g.
+        // signOut wasn't ready in time, or a session survived) — this suite switches
+        // roles mid-run via loginAs, so the PREVIOUS role's session can still be
         // live here. Clicking "Sign in with a different account" drops that session
         // and reveals the real form.
         //
@@ -102,24 +126,33 @@ export async function loginAs(
                 await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
             })
 
-        // Assert we are signed in AS the intended account. loginAs() is used to
-        // SWITCH accounts (e.g. researcher -> admin for cleanup authority); a stale
-        // session that never actually switched would pass the generic markers above
-        // but is the wrong user. The greeting we just waited for is rendered from
-        // Clerk's user state, so a healthy session exposes the email here — fail
-        // closed (don't silently skip) so a wrong-account state never proceeds to
-        // e.g. run cleanup with a non-admin token that 401s.
-        const signedInEmail = await getClerkEmail(page)
-        if (!signedInEmail) {
+        // Assert we are signed in AS the intended account, on the ACTIVE session.
+        // loginAs() is used to SWITCH accounts (e.g. researcher -> admin for cleanup
+        // authority); a stale session that never actually switched would pass the
+        // generic markers above but is the wrong user. We read the ACTIVE session's
+        // user (see getActiveSessionInfo) — fail closed so a wrong-account state never
+        // proceeds to e.g. run cleanup with a non-admin token that hits Access Denied.
+        const active = await getActiveSessionInfo(page)
+        if (!active.email) {
             throw new Error(
-                `Could not read the signed-in email from Clerk to confirm account ` +
+                `Could not read the active Clerk session's email to confirm account ` +
                     `${account.email} (role ${role}); refusing to proceed with an unverified identity`
             )
         }
-        if (signedInEmail.toLowerCase() !== account.email.toLowerCase()) {
+        if (active.email.toLowerCase() !== account.email.toLowerCase()) {
             throw new Error(
-                `Logged in as ${signedInEmail} but expected ${account.email} (role ${role}) — ` +
-                    `loginAs did not switch accounts`
+                `Active session is ${active.email} but expected ${account.email} (role ${role}) — ` +
+                    `loginAs did not switch accounts (stale session still active)`
+            )
+        }
+        // A leftover session from the previous role means the "different account"
+        // teardown didn't fully drop the old one; the app can still act as it. Refuse
+        // rather than risk driving the wrong identity.
+        if (active.sessionCount > 1) {
+            throw new Error(
+                `Signed in as ${account.email} (role ${role}) but Clerk still has ` +
+                    `${active.sessionCount} active sessions — a previous account was not ` +
+                    `signed out; refusing to proceed with an ambiguous session`
             )
         }
     } catch (cause) {
@@ -142,26 +175,41 @@ export async function loginAs(
     return await getClerkToken(page)
 }
 
-// Read the signed-in user's primary email from the Clerk client on the page.
-// Returns '' if Clerk/user isn't ready after a short poll. Used to assert we are
-// authenticated AS the account we intended — a stale session from a prior role
-// would otherwise satisfy the generic "greeting is visible" success check.
-async function getClerkEmail(page: Page): Promise<string> {
+// The identity of the ACTIVE Clerk session on the page: the email its user carries,
+// plus how many sessions Clerk currently has active. We assert on the ACTIVE SESSION
+// (Clerk.session.user), NOT the global Clerk.user — when switching accounts via
+// "sign in with a different account", Clerk can hold multiple sessions and leave the
+// PREVIOUS one active while Clerk.user optimistically points at the new sign-in. The
+// app's cookie and getToken() both follow the ACTIVE session, so reading Clerk.user
+// would report success while the browser still acts as the old user (the exact
+// stale-session bug: cleanup then runs with a non-admin token and hits Access Denied).
+interface ActiveSessionInfo {
+    email: string
+    sessionCount: number
+}
+
+async function getActiveSessionInfo(page: Page): Promise<ActiveSessionInfo> {
     for (let attempt = 0; attempt < 10; attempt++) {
-        const email = await page
+        const info = await page
             .evaluate(() => {
                 const clerk = (
                     window as unknown as {
-                        Clerk?: { user?: { primaryEmailAddress?: { emailAddress?: string } } }
+                        Clerk?: {
+                            session?: { user?: { primaryEmailAddress?: { emailAddress?: string } } }
+                            client?: { activeSessions?: unknown[] }
+                        }
                     }
                 ).Clerk
-                return clerk?.user?.primaryEmailAddress?.emailAddress ?? null
+                const email = clerk?.session?.user?.primaryEmailAddress?.emailAddress ?? null
+                if (!email) return null
+                const sessionCount = clerk?.client?.activeSessions?.length ?? 1
+                return { email, sessionCount }
             })
             .catch(() => null)
-        if (email) return email
+        if (info) return info
         await page.waitForTimeout(500)
     }
-    return ''
+    return { email: '', sessionCount: 0 }
 }
 
 // Read a fresh Clerk session token from the authenticated page. Polls briefly
