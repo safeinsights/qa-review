@@ -13,7 +13,7 @@ import { SyncButton } from './components/SyncButton'
 import { ValidationTab } from './components/ValidationTab'
 
 export function App() {
-    const [tab, setTab] = useState<string | null>('suites')
+    const [tab, setTab] = useState<string | null>('validation')
     const [helpOpen, setHelpOpen] = useState(false)
     // Bumped after a successful sync so SuitesTab re-fetches the (possibly changed)
     // suite list — a pull that adds/removes suites now shows up without a restart.
@@ -90,9 +90,9 @@ export function App() {
                     while the tab is backgrounded, so switching away and back is safe. */}
                     <Tabs value={tab} onChange={setTab} mt="lg" keepMountedMode="display-none">
                         <Tabs.List>
-                            <Tabs.Tab value="suites">Suites</Tabs.Tab>
-                            <Tabs.Tab value="exploratory">Author a Suite</Tabs.Tab>
                             <Tabs.Tab value="validation">Validation</Tabs.Tab>
+                            <Tabs.Tab value="suites">Testing</Tabs.Tab>
+                            <Tabs.Tab value="exploratory">Author</Tabs.Tab>
                             <Tabs.Tab value="settings">Settings</Tabs.Tab>
                         </Tabs.List>
 
