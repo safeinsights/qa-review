@@ -430,7 +430,14 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 		return "", 0, fmt.Errorf("timed out waiting for the browser session to start")
 	}
 
-	runtime.EventsEmit(a.ctx, "session-ready", info.ScreencastPort)
+	// Include the session KIND ("authoring"/"validation"/"companion") so each tab can
+	// tell whether the live session is its OWN or the OTHER tab's — the two tabs share
+	// one PTY + browser, so a tab that isn't the owner shows an "unavailable" state
+	// instead of mirroring the other tab's session.
+	runtime.EventsEmit(a.ctx, "session-ready", map[string]any{
+		"kind":           tokenPrefix,
+		"screencastPort": info.ScreencastPort,
+	})
 	return token, info.CdpPort, nil
 }
 

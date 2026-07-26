@@ -275,9 +275,25 @@ export async function onPtyExit(cb: (code: number | null) => void): Promise<Unli
     return rt().EventsOn('pty-exit', (...data) => cb(typeof data[0] === 'number' ? data[0] : null))
 }
 
-// Fires with the screencast port once the shared browser is ready to display.
-export async function onSessionReady(cb: (screencastPort: number) => void): Promise<UnlistenFn> {
-    return rt().EventsOn('session-ready', (...data) => cb(Number(data[0])))
+// The kind of session that owns the single shared PTY + browser. Both the Author
+// and Validation tabs listen to the same global session events, so each uses `kind`
+// to tell whether the live session is its own or the other tab's.
+export type SessionKind = 'authoring' | 'validation' | 'companion'
+
+export interface SessionReady {
+    kind: SessionKind
+    screencastPort: number
+}
+
+// Fires when the shared browser is ready to display, carrying which tab owns it.
+export async function onSessionReady(cb: (info: SessionReady) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('session-ready', (...data) => {
+        const payload = (data[0] ?? {}) as { kind?: string; screencastPort?: number }
+        cb({
+            kind: (payload.kind ?? 'authoring') as SessionKind,
+            screencastPort: Number(payload.screencastPort ?? 0),
+        })
+    })
 }
 
 export async function onSessionEnded(cb: () => void): Promise<UnlistenFn> {

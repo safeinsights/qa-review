@@ -5,6 +5,7 @@ import {
     onSessionEnded,
     onSessionLog,
     onSessionReady,
+    type SessionKind,
     startValidationSession,
     stopSession,
     stopSessionIfOwner,
@@ -12,8 +13,13 @@ import {
 import type { ConsoleLine } from '../lib/screencast'
 import { BrowserPanel } from './BrowserPanel'
 import { ConsoleLog } from './ConsoleLog'
+import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
 import { VerdictPanel } from './VerdictPanel'
+
+// This tab owns "validation" sessions; a session-ready of any other kind means the
+// other tab (or the run companion) holds the single shared PTY + browser.
+const MY_KIND: SessionKind = 'validation'
 
 const ENVS = ['qa', 'staging']
 const ROLES = ['admin', 'researcher', 'reviewer']
@@ -32,6 +38,9 @@ export function ValidationTab() {
     const [active, setActive] = useState(false)
     const [starting, setStarting] = useState(false)
     const [screencastPort, setScreencastPort] = useState<number | null>(null)
+    // Set when the OTHER tab owns the shared session; the setup form is replaced by
+    // an "unavailable, take over?" banner while this holds a kind.
+    const [ownedByOther, setOwnedByOther] = useState<SessionKind | null>(null)
     const [error, setError] = useState('')
     // Live page console, accumulated for the whole session (like the Suites screen).
     const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([])
@@ -47,12 +56,22 @@ export function ValidationTab() {
         let unEnded: (() => void) | undefined
         let unLog: (() => void) | undefined
         ;(async () => {
-            unReady = await onSessionReady(port => {
+            unReady = await onSessionReady(({ kind, screencastPort: port }) => {
+                if (kind !== MY_KIND) {
+                    // The other tab (or the run companion) took the shared session.
+                    setOwnedByOther(kind)
+                    setActive(false)
+                    setStarting(false)
+                    setScreencastPort(null)
+                    return
+                }
+                setOwnedByOther(null)
                 setScreencastPort(port)
                 setStarting(false)
                 setActive(true)
             })
             unEnded = await onSessionEnded(() => {
+                setOwnedByOther(null)
                 setActive(false)
                 setScreencastPort(null)
                 setStarting(false)
@@ -89,6 +108,17 @@ export function ValidationTab() {
         setActive(false)
         setScreencastPort(null)
         setConsoleLines([])
+    }
+
+    // Stop the other tab's session (freeing the single shared slot) and drop back to
+    // our setup form so the user can start a validation session here.
+    const takeOver = async () => {
+        await stopSession()
+        setOwnedByOther(null)
+    }
+
+    if (ownedByOther) {
+        return <SessionUnavailable ownerKind={ownedByOther} onTakeOver={takeOver} />
     }
 
     if (!active) {
