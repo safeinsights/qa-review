@@ -132,17 +132,23 @@ export function AccountCard({ card, ...rowProps }: { card: GroupCard } & RowProp
             </Tabs.List>
             {envs.map(env => (
                 <Tabs.Panel key={env} value={env} pt={10}>
-                    {card.sections.map(s => {
+                    {card.sections.map((s, i) => {
                         const fields = s.envs.find(e => e.env === env)?.fields ?? []
                         if (!fields.length) return null
+                        // The first section sits directly under the env tabs — no divider
+                        // there. Later sections keep a top border to separate them.
                         return (
                             <div
                                 key={s.section}
-                                style={{
-                                    borderTop: '1px solid var(--line)',
-                                    paddingTop: 12,
-                                    marginTop: 12,
-                                }}
+                                style={
+                                    i === 0
+                                        ? undefined
+                                        : {
+                                              borderTop: '1px solid var(--line)',
+                                              paddingTop: 12,
+                                              marginTop: 12,
+                                          }
+                                }
                             >
                                 {/* The "Account" section heading is redundant with the card's
                                     own "<Role> account" title, so only label multi-purpose
