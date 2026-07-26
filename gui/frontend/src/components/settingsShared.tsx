@@ -297,6 +297,15 @@ export function FieldRow({
                             value={draft.value}
                             onChange={e => setDraft(f.key, { value: e.currentTarget.value })}
                             placeholder={f.set ? '•••••• (set — type to replace)' : 'enter a value'}
+                            // Hide Mantine's built-in visibility toggle: it only reveals what's
+                            // TYPED here (a pending replacement, blank for a stored secret), which
+                            // reads as "reveal shows nothing". Our own eye (revealButton, above)
+                            // fetches the actual stored value instead.
+                            visibilityToggleButtonProps={{
+                                style: { display: 'none' },
+                                tabIndex: -1,
+                                'aria-hidden': true,
+                            }}
                         />
                     ) : (
                         <TextInput
