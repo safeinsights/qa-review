@@ -28,19 +28,26 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         // real browser instead.
         term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)))
         term.open(host)
-        fit.fit()
-        resizePty(term.rows, term.cols).catch(() => {})
-        // The container's final size may not be settled on first paint (flex/grid
-        // layout, fonts loading). Re-fit on the next frame so the initial terminal
-        // isn't sized to a too-small box.
-        const raf = requestAnimationFrame(() => {
+
+        // Fit only when the host actually has a size. On a background tab the panel is
+        // display:none (0×0); fitting then would resize the PTY to 0 cols/rows and
+        // leave the terminal garbled until the next interaction. Skipping keeps the
+        // last good size, and the ResizeObserver re-fits when the tab is shown again.
+        const safeFit = () => {
+            if (host.clientWidth === 0 || host.clientHeight === 0) return
             try {
                 fit.fit()
                 resizePty(term.rows, term.cols).catch(() => {})
             } catch {
-                /* ignore */
+                /* ignore transient layout */
             }
-        })
+        }
+
+        safeFit()
+        // The container's final size may not be settled on first paint (flex/grid
+        // layout, fonts loading). Re-fit on the next frame so the initial terminal
+        // isn't sized to a too-small box.
+        const raf = requestAnimationFrame(safeFit)
 
         // PTY bytes (base64) -> terminal. Decode base64 to a byte array so UTF-8 /
         // control sequences render correctly.
@@ -66,14 +73,7 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
             writeToPty(btoa(bin)).catch(() => {})
         })
 
-        const ro = new ResizeObserver(() => {
-            try {
-                fit.fit()
-                resizePty(term.rows, term.cols).catch(() => {})
-            } catch {
-                /* ignore transient layout */
-            }
-        })
+        const ro = new ResizeObserver(safeFit)
         ro.observe(host)
 
         return () => {
