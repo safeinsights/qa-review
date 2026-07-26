@@ -4,6 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "dev": "cd gui && wails dev",
         "test": "vitest run",
         "test:watch": "vitest",
         "typecheck": "tsc --noEmit",

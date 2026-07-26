@@ -34,21 +34,30 @@ export type CommentSegment = TextSegment | MediaSegment
 const MEDIA_UUID_RE =
     /\/file\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/
 
-// Reads the Jira connection details from the environment. These match the vars the
-// jira-atlassian MCP server is configured with, so no new secret plumbing. Note the
-// Jira account email is NOT the git email — it must be supplied explicitly.
-export function jiraConfigFromEnv(env: NodeJS.ProcessEnv = process.env): JiraConfig {
-    const baseUrl = (env.JIRA_URL ?? 'https://openstax.atlassian.net').replace(/\/+$/, '')
-    const email = env.JIRA_USERNAME ?? ''
-    const apiToken = env.JIRA_API_TOKEN ?? ''
+// Resolves the Jira connection details from a flat var map (the merged settings from
+// loadSettings(), which already layers settings.local.json — where the GUI stores the
+// Jira config — under process.env overrides). This is why `qar jira-comment` no longer
+// needs JIRA_USERNAME exported: the GUI's saved "Jira email" is picked up from the
+// settings files. The Jira account email is NOT the git email.
+export function jiraConfig(vars: Record<string, string | undefined>): JiraConfig {
+    const baseUrl = (vars.JIRA_URL ?? 'https://openstax.atlassian.net').replace(/\/+$/, '')
+    const email = vars.JIRA_USERNAME ?? ''
+    const apiToken = vars.JIRA_API_TOKEN ?? ''
     if (!email) {
         throw new Error(
             'Missing JIRA_USERNAME — your Atlassian account email (e.g. you@rice.edu). ' +
-                'Export it, or pass it inline: JIRA_USERNAME=you@rice.edu qar jira-comment …'
+                'Set it in the GUI Settings (Jira email), or pass it inline: ' +
+                'JIRA_USERNAME=you@rice.edu qar jira-comment …'
         )
     }
     if (!apiToken) throw new Error('Missing JIRA_API_TOKEN')
     return { baseUrl, email, apiToken }
+}
+
+// Back-compat wrapper: resolve straight from process.env. Prefer jiraConfig(vars)
+// with loadSettings() so the GUI's saved settings are honored.
+export function jiraConfigFromEnv(env: NodeJS.ProcessEnv = process.env): JiraConfig {
+    return jiraConfig(env)
 }
 
 function authHeader(config: JiraConfig): string {

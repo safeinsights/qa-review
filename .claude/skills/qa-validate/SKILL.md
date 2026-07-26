@@ -111,11 +111,12 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
 
-   **Auth:** `JIRA_API_TOKEN` is inherited, but `JIRA_USERNAME` usually is NOT (it's
-   hardcoded in the MCP config, not exported). If a command fails with
-   `Missing JIRA_USERNAME`, prefix it with the user's Atlassian email —
-   `JIRA_USERNAME=<their-email> qar jira-comment …`. It is their **Atlassian account
-   email**, which is often NOT their git email; ask if you don't know it.
+   **Auth:** `qar jira-comment` reads the Jira site/email/token from the GUI's saved
+   settings (Settings → Jira), so it normally needs no env vars. Only if a command
+   fails with `Missing JIRA_USERNAME`/`JIRA_API_TOKEN` (settings not filled in) do you
+   need to supply it inline — e.g. `JIRA_USERNAME=<their-atlassian-email> qar
+   jira-comment …`. That email is their **Atlassian account email**, often NOT their
+   git email; ask if you don't know it (or tell them to set it in Settings).
 4. **Transition the ticket** — resolve the transition by NAME (ids vary) via
    `jira_get_transitions` then `jira_transition_issue`:
    - **Validated** → transition to **"Final Review - EM & PM"**.

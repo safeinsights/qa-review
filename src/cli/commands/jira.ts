@@ -4,10 +4,11 @@ import {
     buildCommentAdf,
     type CommentSegment,
     deleteComment,
-    jiraConfigFromEnv,
+    jiraConfig,
     resolveMediaId,
     uploadAttachment,
 } from '@/engine/jira'
+import type { Vars } from '@/engine/settings'
 
 // Splits a body into ordered text/media segments on `{{image:N}}` placeholders,
 // where N is a 1-based index into the supplied image list. Images that are never
@@ -52,7 +53,7 @@ function splitList(value: string | undefined): string[] {
 // only render an embedded image as an ADF media node keyed by a Media Services
 // UUID, so each image is uploaded, its UUID resolved from the attachment-content
 // redirect, and the comment posted as ADF. Prints {"id","url"} as JSON.
-export async function jiraCommentCommand(opts: Record<string, string>): Promise<void> {
+export async function jiraCommentCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const issue = opts.issue ?? ''
     if (!issue) throw new Error('jira-comment requires --issue <KEY>')
     const bodyFile = opts['body-file'] ?? ''
@@ -61,7 +62,7 @@ export async function jiraCommentCommand(opts: Record<string, string>): Promise<
     }
     const body = bodyFile ? fs.readFileSync(bodyFile, 'utf8') : (opts.body ?? '')
 
-    const config = jiraConfigFromEnv()
+    const config = jiraConfig(vars)
     const images = splitList(opts.images)
     for (const image of images) {
         if (!fs.existsSync(image)) throw new Error(`Image not found: ${image}`)
@@ -80,13 +81,16 @@ export async function jiraCommentCommand(opts: Record<string, string>): Promise<
 
 // `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` — remove comments
 // (e.g. cleaning up a mis-formatted validation post). A 404 counts as done.
-export async function jiraDeleteCommentCommand(opts: Record<string, string>): Promise<void> {
+export async function jiraDeleteCommentCommand(
+    opts: Record<string, string>,
+    vars: Vars
+): Promise<void> {
     const issue = opts.issue ?? ''
     if (!issue) throw new Error('jira-delete-comment requires --issue <KEY>')
     const ids = splitList(opts.ids)
     if (!ids.length) throw new Error('jira-delete-comment requires --ids <id1,id2>')
 
-    const config = jiraConfigFromEnv()
+    const config = jiraConfig(vars)
     for (const id of ids) {
         await deleteComment(config, issue, id)
         process.stdout.write(`${JSON.stringify({ id, deleted: true })}\n`)

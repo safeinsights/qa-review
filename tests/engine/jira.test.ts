@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
-import { buildCommentAdf, extractMediaId, jiraConfigFromEnv } from '@/engine/jira'
+import { buildCommentAdf, extractMediaId, jiraConfig, jiraConfigFromEnv } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
 
@@ -110,5 +110,27 @@ describe('jiraConfigFromEnv', () => {
             JIRA_API_TOKEN: 't',
         } as NodeJS.ProcessEnv)
         expect(config.baseUrl).toBe('https://example.atlassian.net')
+    })
+})
+
+describe('jiraConfig (from merged settings vars)', () => {
+    // The GUI stores JIRA_USERNAME/URL/token in settings.local.json; loadSettings()
+    // merges them into a Vars map. jiraConfig reads that map so `qar jira-comment`
+    // works WITHOUT the env var being exported into the process.
+    it('resolves the config from a settings-style var map (no env needed)', () => {
+        const config = jiraConfig({
+            JIRA_URL: 'https://openstax.atlassian.net',
+            JIRA_USERNAME: 'qa@rice.edu',
+            JIRA_API_TOKEN: 'tok',
+        })
+        expect(config).toEqual({
+            baseUrl: 'https://openstax.atlassian.net',
+            email: 'qa@rice.edu',
+            apiToken: 'tok',
+        })
+    })
+
+    it('still fails loudly when the username is absent from settings and env', () => {
+        expect(() => jiraConfig({ JIRA_API_TOKEN: 'tok' })).toThrow(/JIRA_USERNAME/)
     })
 })

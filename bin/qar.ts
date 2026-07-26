@@ -61,9 +61,9 @@ async function main() {
         case 'totp':
             return totpCommand(opts)
         case 'jira-comment':
-            return jiraCommentCommand(opts)
+            return jiraCommentCommand(opts, await loadSettings())
         case 'jira-delete-comment':
-            return jiraDeleteCommentCommand(opts)
+            return jiraDeleteCommentCommand(opts, await loadSettings())
         default:
             console.error(
                 `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session | session-login | session-create-user | session-create-study | mail-inbox | mail-wait | totp | jira-comment | jira-delete-comment`
