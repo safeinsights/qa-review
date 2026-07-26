@@ -8,6 +8,7 @@ import { createUserViaInvite } from '@/engine/flows/signup'
 import { createStudyFromScratch } from '@/engine/flows/study'
 import { resultsRoot, sessionRequestPath, sessionRequestResultPath } from '@/engine/paths'
 import { ScreencastServer } from '@/engine/screencast'
+import { acquireSessionLock } from '@/engine/session-lock'
 import {
     consumeSessionRequest,
     readSessionRequest,
@@ -36,14 +37,31 @@ import type { EnvConfig } from '@/engine/types'
 export async function sessionCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
 
+    // Claim the single-session lock BEFORE launching Chrome: sessions share one
+    // request channel, so a second one silently steals `qar session-*` requests.
+    // Acquiring first means a rejected session never orphans a browser process.
+    const releaseLock = acquireSessionLock()
+
     // Launch with a fixed CDP port (retry once if the picked port got taken).
-    const { browser, context, page, cdpPort } = await launchChromeWithCdp({ baseURL: env.baseURL })
+    let launched: Awaited<ReturnType<typeof launchChromeWithCdp>>
+    try {
+        launched = await launchChromeWithCdp({ baseURL: env.baseURL })
+    } catch (e) {
+        releaseLock()
+        throw e
+    }
+    const { browser, context, page, cdpPort } = launched
 
     // Land on the login page so the user (or Claude) sees a sensible starting state
     // before an on-demand login arrives.
     await page
         .goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
         .catch(() => {})
+
+    // Drop the lock even on an abnormal exit (uncaught throw), so the next session
+    // isn't left reclaiming a stale file. `exit` handlers must be synchronous, which
+    // the release is.
+    process.on('exit', releaseLock)
 
     const server = await ScreencastServer.start(page)
     process.stdout.write(sessionLine({ cdpPort, screencastPort: server.port }))
@@ -74,6 +92,7 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
     await server.close().catch(() => {})
     await context.close().catch(() => {})
     await browser.close().catch(() => {})
+    releaseLock()
 }
 
 // Watch sessionRequestPath() for action requests and run each on the held page,

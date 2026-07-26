@@ -59,6 +59,15 @@ export function sessionRequestResultPath(): string {
     return path.join(resultsRoot(), 'session-request-result.json')
 }
 
+// Single-instance lock for `qar session`. The rendezvous above is ONE fixed path,
+// so a second session would consume requests meant for the first: `session-login`
+// would report success while logging in a browser nobody is attached to. The lock
+// holds the owner's pid so a stale file (killed process) can be distinguished from
+// a live owner and reclaimed.
+export function sessionLockPath(): string {
+    return path.join(resultsRoot(), 'session.lock')
+}
+
 // Suite source dir. The engine imports these .ts files directly via tsx (both
 // `pnpm qar` and the packaged app run node with `--import tsx`), so there is no
 // compile step — the registry globs this dir.
