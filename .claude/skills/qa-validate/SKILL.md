@@ -31,6 +31,9 @@ approve actions.
   card** (e.g. `OTTER-655`). The browser is on that environment, on the login page.
 
 ## Keeping the session smooth (IMPORTANT — read before running anything)
+
+- **Never open a new chrome instance or page.** Chrome is already running and the
+  `qar` command will use the existing session.
 - **Never prefix a command with `cd`** — you are already in `$QAR_REPO_DIR`.
 - **One command per Bash call.** Chained/piped commands fall outside the allowlist
   and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `pnpm typecheck`,

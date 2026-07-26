@@ -16,13 +16,30 @@ import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { syncCommand } from '@/cli/commands/sync'
 import { totpCommand } from '@/cli/commands/totp'
+import { commandHelp, topLevelHelp, unknownCommandMessage } from '@/cli/help'
 import { loadSettings } from '@/engine/settings'
 
-const BOOLEANS = ['json', 'headed', 'screencast']
+// `help` MUST be a boolean: otherwise `qar session --help` parses `--help` as a
+// key expecting a value, silently launches a session, and reports nothing.
+const BOOLEANS = ['json', 'headed', 'screencast', 'help']
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)
     const opts = parseArgs(rest, { booleans: BOOLEANS })
+
+    if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+        console.log(topLevelHelp())
+        return
+    }
+    if (opts.help) {
+        const text = commandHelp(subcommand)
+        if (!text) {
+            console.error(unknownCommandMessage(subcommand))
+            process.exit(1)
+        }
+        console.log(text)
+        return
+    }
     // `list` and `codegen` don't touch credentials; the rest resolve config from
     // the layered settings files (replacing the old dotenv-loaded .env).
     switch (subcommand) {
@@ -65,9 +82,7 @@ async function main() {
         case 'jira-delete-comment':
             return jiraDeleteCommentCommand(opts, await loadSettings())
         default:
-            console.error(
-                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session | session-login | session-create-user | session-create-study | mail-inbox | mail-wait | totp | jira-comment | jira-delete-comment`
-            )
+            console.error(unknownCommandMessage(subcommand))
             process.exit(1)
     }
 }
