@@ -327,3 +327,29 @@ func TestDebugMarkdownFormatsNotFound(t *testing.T) {
 		t.Fatalf("not-found line wrong:\n%s", md)
 	}
 }
+
+func TestComposeValidationPrompt(t *testing.T) {
+	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
+		if !strings.Contains(p, "/qa-validate") || !strings.Contains(p, "OTTER-1") {
+			t.Fatalf("base prompt missing:\n%s", p)
+		}
+		if !strings.Contains(p, "\n\nAdditional instructions from the user:\nFocus on the mobile layout.") {
+			t.Fatalf("instructions not appended as a paragraph:\n%s", p)
+		}
+	})
+
+	t.Run("omits the instructions paragraph when blank/whitespace", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "   ")
+		if strings.Contains(p, "Additional instructions") {
+			t.Fatalf("blank instructions should not add a paragraph:\n%s", p)
+		}
+	})
+
+	t.Run("a PR target overrides env", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "")
+		if !strings.Contains(p, "--pr 42") || strings.Contains(p, "--env qa") {
+			t.Fatalf("PR target not used:\n%s", p)
+		}
+	})
+}

@@ -446,7 +446,7 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 // (uvx mcp-atlassian) server, and the opening prompt invokes qa-validate. Claude
 // reads the ticket + PR, logs in via `qar session-login`, drives the shared browser
 // via chrome-devtools MCP to check the acceptance criteria, and posts the verdict.
-func (a *App) StartValidationSession(env, pr, jiraCard string) (string, error) {
+func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (string, error) {
 	token, cdpPort, err := a.startSessionBrowser("validation", env, pr)
 	if err != nil {
 		return "", err
@@ -476,7 +476,7 @@ func (a *App) StartValidationSession(env, pr, jiraCard string) (string, error) {
 	}
 	go func() {
 		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard))
+		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard, instructions))
 	}()
 	return token, nil
 }
@@ -495,12 +495,13 @@ func composeAuthoringPrompt(env, pr, role, instruction string) string {
 // composeValidationPrompt is the validation Claude's first message: invoke the
 // qa-validate skill with the env/PR target + Jira card. The browser is open but
 // NOT logged in — the skill infers the role from the ticket and logs in itself.
-func composeValidationPrompt(env, pr, jiraCard string) string {
+// Any user-supplied `instructions` are appended as a separate final paragraph.
+func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
 	target := "--env " + env
 	if strings.TrimSpace(pr) != "" {
 		target = "--pr " + pr
 	}
-	return fmt.Sprintf(
+	prompt := fmt.Sprintf(
 		"/qa-validate The browser is open (not yet logged in) against %s. Validate Jira "+
 			"ticket %s: read the ticket (jira-atlassian MCP) and its PR (gh) to learn what "+
 			"changed, infer the role and log in via `qar session-login --role <role>` (ask "+
@@ -508,6 +509,10 @@ func composeValidationPrompt(env, pr, jiraCard string) string {
 			"acceptance criteria. Give a clear PASS/FAIL verdict.",
 		target, jiraCard,
 	)
+	if s := strings.TrimSpace(instructions); s != "" {
+		prompt += "\n\nAdditional instructions from the user:\n" + s
+	}
+	return prompt
 }
 
 // composeCompanionPrompt is the companion Claude's first message: invoke the

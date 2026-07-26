@@ -82,7 +82,12 @@ interface WailsApp {
         instruction: string
     ): Promise<string>
     StartRunCompanion(cdpPort: number, suite: string): Promise<string>
-    StartValidationSession(env: string, pr: string, jiraCard: string): Promise<string>
+    StartValidationSession(
+        env: string,
+        pr: string,
+        jiraCard: string,
+        instructions: string
+    ): Promise<string>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -234,9 +239,10 @@ export async function startRunCompanion(cdpPort: number, suite: string): Promise
 export async function startValidationSession(
     env: string,
     pr: string,
-    jiraCard: string
+    jiraCard: string,
+    instructions: string
 ): Promise<string> {
-    return app().StartValidationSession(env, pr, jiraCard)
+    return app().StartValidationSession(env, pr, jiraCard, instructions)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.

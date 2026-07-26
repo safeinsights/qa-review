@@ -1,4 +1,4 @@
-import { Alert, Button, Select, TextInput } from '@mantine/core'
+import { Alert, Button, Select, Textarea, TextInput } from '@mantine/core'
 import { useViewportSize } from '@mantine/hooks'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -33,6 +33,7 @@ export function ValidationTab() {
     const [pr, setPr] = useState('')
     const [role, setRole] = useState('admin')
     const [jiraCard, setJiraCard] = useState('')
+    const [instructions, setInstructions] = useState('')
     const card = parseJiraCard(jiraCard)
 
     const [active, setActive] = useState(false)
@@ -94,7 +95,7 @@ export function ValidationTab() {
         setActive(true)
         setConsoleLines([])
         try {
-            sessionToken.current = await startValidationSession(env, pr, card)
+            sessionToken.current = await startValidationSession(env, pr, card, instructions)
         } catch (e) {
             setError(String(e) + (logBuf.current ? `\n${logBuf.current}` : ''))
             setActive(false)
@@ -132,6 +133,8 @@ export function ValidationTab() {
                 setRole={setRole}
                 jiraCard={jiraCard}
                 setJiraCard={setJiraCard}
+                instructions={instructions}
+                setInstructions={setInstructions}
                 start={start}
                 error={error}
             />
@@ -157,7 +160,8 @@ function parseJiraCard(input: string): string {
     return m ? m[0].toUpperCase() : input.trim()
 }
 
-// The setup form: pick env/PR/role, enter the Jira card, then start the session.
+// The setup form: pick env/PR/role, enter the Jira card + optional instructions,
+// then start the session.
 function SessionSetup({
     env,
     setEnv,
@@ -167,6 +171,8 @@ function SessionSetup({
     setRole,
     jiraCard,
     setJiraCard,
+    instructions,
+    setInstructions,
     start,
     error,
 }: {
@@ -178,6 +184,8 @@ function SessionSetup({
     setRole: (v: string) => void
     jiraCard: string
     setJiraCard: (v: string) => void
+    instructions: string
+    setInstructions: (v: string) => void
     start: () => void
     error: string
 }) {
@@ -232,14 +240,28 @@ function SessionSetup({
                             comboboxProps={{ withinPortal: true }}
                         />
                     </Field>
-                    <Field label="Jira card">
+                    <Field label="Jira card" grow>
                         <TextInput
                             value={jiraCard}
                             onChange={e => setJiraCard(e.currentTarget.value)}
-                            placeholder="OTTER-123 or a Jira URL"
-                            w={220}
+                            placeholder="OTTER-123 or a full Jira URL"
+                            style={{ flex: 1 }}
+                            miw={340}
                         />
                     </Field>
+                </div>
+                <Textarea
+                    label="Additional instructions"
+                    description="Optional — appended to Claude's starting prompt as a final paragraph."
+                    value={instructions}
+                    onChange={e => setInstructions(e.currentTarget.value)}
+                    placeholder="e.g. focus on the mobile layout; the feature flag is enabled for the researcher account"
+                    autosize
+                    minRows={2}
+                    maxRows={6}
+                    mt="md"
+                />
+                <div style={{ display: 'flex', marginTop: 16 }}>
                     <Button
                         onClick={start}
                         disabled={!jiraCard.trim()}
@@ -358,9 +380,19 @@ function LiveSession({
     )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+    label,
+    grow,
+    children,
+}: {
+    label: string
+    grow?: boolean
+    children: React.ReactNode
+}) {
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div
+            style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: grow ? 1 : undefined }}
+        >
             <span className="kicker">{label}</span>
             {children}
         </div>
