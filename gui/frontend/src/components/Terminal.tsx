@@ -25,8 +25,15 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         term.loadAddon(fit)
         // Make URLs in claude's output clickable. The default handler would open in
         // the webview; route through the Wails runtime so links open in the user's
-        // real browser instead.
-        term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)))
+        // real browser instead. Log so a click that doesn't open can be diagnosed
+        // (does the handler fire at all vs. does openExternal fail?).
+        term.loadAddon(
+            new WebLinksAddon((_event, uri) => {
+                // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
+                console.debug('[Terminal] link activated:', uri)
+                openExternal(uri)
+            })
+        )
         term.open(host)
 
         // Fit only when the host actually has a size. On a background tab the panel is

@@ -152,9 +152,33 @@ export async function runProcess(program: string, args: string[], cwd: string): 
 }
 
 // Open a URL in the user's real browser (via the Wails runtime), not the webview.
-// Used by the embedded terminal so clicking a link in claude's output works.
+// Used by the embedded terminal so clicking a link in claude's output works. The
+// Wails runtime is injected on the window; fall back to window.open if it (or the
+// method) isn't present, and never throw so a click can't silently break.
 export function openExternal(url: string): void {
-    rt().BrowserOpenURL(url)
+    const open = window.runtime?.BrowserOpenURL
+    // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
+    console.debug(
+        '[openExternal] url=%s hasRuntime=%s hasOpen=%s',
+        url,
+        !!window.runtime,
+        typeof open
+    )
+    if (typeof open === 'function') {
+        try {
+            open(url)
+            return
+        } catch (e) {
+            // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
+            console.warn('[openExternal] BrowserOpenURL threw, falling back to window.open', e)
+        }
+    }
+    try {
+        window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (e) {
+        // biome-ignore lint/suspicious/noConsole: diagnostic for link-open issues
+        console.error('[openExternal] window.open failed', e)
+    }
 }
 
 // A run was rejected because one is already active (Go's ErrRunInProgress).
