@@ -372,6 +372,12 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 		args = append(args, "--env", env)
 	}
 	cmd := engineCmd(args...)
+	// Own process group so teardown can kill the WHOLE tree (pnpm → tsx → node →
+	// Chrome), not just the top wrapper. In dev the session is spawned via `pnpm qar`,
+	// and pnpm does NOT forward SIGTERM to its child — so signalling only cmd.Process
+	// left the real `qar session` (+ its Chrome) orphaned, holding the session lock so
+	// every later session start failed with "Another qar session is already running".
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", 0, err
@@ -690,15 +696,29 @@ func (a *App) teardownSession() bool {
 	if cmd != nil {
 		running = true
 		if cmd.Process != nil {
-			// Signal only — a single cmd.Wait() runs in StartAuthoringSession's
-			// `exited` goroutine and reaps the process (calling Wait twice races).
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+			// Kill the whole process GROUP (-pid), not just the wrapper: the session is
+			// pnpm → tsx → node → Chrome, and pnpm won't forward a signal to its child.
+			// Signalling only cmd.Process orphaned the real session + its Chrome, which
+			// kept holding the session lock. cmd.Wait() runs in startSessionBrowser's
+			// `exited` goroutine and reaps it (don't Wait twice here). SIGKILL follows
+			// so a process ignoring SIGTERM can't linger and hold the lock.
+			pid := cmd.Process.Pid
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
+			go escalateKill(pid)
 		}
 	}
 	if mcpPath != "" {
 		_ = os.Remove(mcpPath)
 	}
 	return running
+}
+
+// escalateKill SIGKILLs a process group a moment after a SIGTERM, so a session that
+// doesn't honor SIGTERM promptly can't linger and keep holding the single-session
+// lock. Harmless if the group already exited (kill on a gone pgid is a no-op error).
+func escalateKill(pid int) {
+	time.Sleep(2 * time.Second)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // StopSession (bound) tears down the authoring session and tells the GUI it ended
