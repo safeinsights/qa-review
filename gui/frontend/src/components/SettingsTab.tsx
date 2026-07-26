@@ -1,14 +1,7 @@
 import { Alert } from '@mantine/core'
 import { RequestAccessButton } from './RequestAccessButton'
 import { SetupDoctorButton } from './SetupDoctorButton'
-import {
-    Card,
-    EnvTabbedSection,
-    FieldRow,
-    Section,
-    toGroupCards,
-    useSettings,
-} from './settingsShared'
+import { AccountCard, Card, FieldRow, Section, toGroupCards, useSettings } from './settingsShared'
 
 export function SettingsTab() {
     const { fields, hasIdentity, error, setError, rowProps } = useSettings()
@@ -72,14 +65,7 @@ export function SettingsTab() {
                     {card.plain.map(f => (
                         <FieldRow key={f.key} field={f} {...rowProps} />
                     ))}
-                    {card.sections.map(s => (
-                        <EnvTabbedSection
-                            key={`${card.group}:${s.section}`}
-                            label={s.section}
-                            envs={s.envs}
-                            {...rowProps}
-                        />
-                    ))}
+                    <AccountCard card={card} {...rowProps} />
                 </Section>
             ))}
         </div>

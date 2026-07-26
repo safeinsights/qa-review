@@ -108,41 +108,64 @@ export interface RowProps {
     hasIdentity: boolean
 }
 
-// One account's per-env sub-section (e.g. "Account" or "Results private key"): a
-// single label with a tab per env. Each tab holds every field for that env — the
-// four Account inputs, or one PEM key. A tab shows ✓ if any of its fields is set.
-export function EnvTabbedSection({
-    label,
-    envs,
-    ...rowProps
-}: { label: string; envs: EnvTab[] } & RowProps) {
-    const [tab, setTab] = useState(envs[0]?.env ?? 'qa')
+// One account's env-tabbed body: ONE env selector at the top drives every section
+// below (Account fields + Results private key), so switching env swaps all of that
+// account's fields together — no per-section tabs. Each section renders as a label
+// followed by that env's fields. A tab shows ✓ if the account has any value set in
+// that env (across all sections).
+export function AccountCard({ card, ...rowProps }: { card: GroupCard } & RowProps) {
+    // The union of envs across the account's sections, in first-seen order.
+    const envs = [...new Set(card.sections.flatMap(s => s.envs.map(e => e.env)))]
+    const [tab, setTab] = useState(envs[0] ?? 'qa')
+    const isSetInEnv = (env: string) =>
+        card.sections.some(s => s.envs.find(e => e.env === env)?.fields.some(f => f.set))
+
     return (
-        <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
-            <span style={{ fontWeight: 600 }}>{label}</span>
-            <Tabs value={tab} onChange={v => setTab(v ?? envs[0]?.env ?? 'qa')} mt={6}>
-                <Tabs.List>
-                    {envs.map(e => (
-                        <Tabs.Tab key={e.env} value={e.env}>
-                            {e.env}
-                            {e.fields.some(f => f.set) ? ' ✓' : ''}
-                        </Tabs.Tab>
-                    ))}
-                </Tabs.List>
-                {envs.map(e => (
-                    <Tabs.Panel key={e.env} value={e.env} pt={10}>
-                        {e.fields.map(f => (
-                            <FieldRow
-                                key={f.key}
-                                field={f}
-                                {...rowProps}
-                                hideLabel={e.fields.length === 1}
-                            />
-                        ))}
-                    </Tabs.Panel>
+        <Tabs value={tab} onChange={v => setTab(v ?? envs[0] ?? 'qa')} mt={6}>
+            <Tabs.List>
+                {envs.map(env => (
+                    <Tabs.Tab key={env} value={env}>
+                        {env}
+                        {isSetInEnv(env) ? ' ✓' : ''}
+                    </Tabs.Tab>
                 ))}
-            </Tabs>
-        </div>
+            </Tabs.List>
+            {envs.map(env => (
+                <Tabs.Panel key={env} value={env} pt={10}>
+                    {card.sections.map(s => {
+                        const fields = s.envs.find(e => e.env === env)?.fields ?? []
+                        if (!fields.length) return null
+                        return (
+                            <div
+                                key={s.section}
+                                style={{
+                                    borderTop: '1px solid var(--line)',
+                                    paddingTop: 12,
+                                    marginTop: 12,
+                                }}
+                            >
+                                {/* The "Account" section heading is redundant with the card's
+                                    own "<Role> account" title, so only label multi-purpose
+                                    sections (e.g. "Results private key"). */}
+                                {s.section !== 'Account' ? (
+                                    <span style={{ fontWeight: 600 }}>{s.section}</span>
+                                ) : null}
+                                {fields.map(f => (
+                                    <FieldRow
+                                        key={f.key}
+                                        field={f}
+                                        {...rowProps}
+                                        // A single-field section (Results private key) is already
+                                        // named by the heading above — don't repeat the label.
+                                        hideLabel={fields.length === 1}
+                                    />
+                                ))}
+                            </div>
+                        )
+                    })}
+                </Tabs.Panel>
+            ))}
+        </Tabs>
     )
 }
 
