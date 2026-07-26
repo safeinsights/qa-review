@@ -99,7 +99,8 @@ export const COMMANDS: CommandHelp[] = [
         name: 'jira-comment',
         usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',
-        details: 'Body is literal text (no markdown). Use {{image:N}} to place an image inline.',
+        details:
+            'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image inline.',
     },
     {
         name: 'jira-delete-comment',
