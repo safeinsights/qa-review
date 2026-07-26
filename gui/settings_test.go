@@ -119,6 +119,35 @@ func TestWriteSettingRouting(t *testing.T) {
 	}
 }
 
+// A local-only field (the Jira config) is rejected at the project tier and written
+// plaintext to the local file at the local tier — it can never be committed/encrypted.
+func TestWriteSettingLocalOnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{}
+
+	if err := app.WriteSetting(dir, "JIRA_API_TOKEN", "tok-123", "project"); err == nil {
+		t.Fatal("expected JIRA_API_TOKEN at project tier to be rejected")
+	}
+
+	if err := app.WriteSetting(dir, "JIRA_API_TOKEN", "tok-123", "local"); err != nil {
+		t.Fatalf("local write: %v", err)
+	}
+	local := readJSON(t, filepath.Join(dir, "config", localFile))
+	if local["JIRA_API_TOKEN"] != "tok-123" {
+		t.Fatalf("local file: got %v", local)
+	}
+	// No secrets file should have been created for a local-only field.
+	if _, err := os.Stat(filepath.Join(dir, "config", secretsFile)); err == nil {
+		if s := readJSON(t, filepath.Join(dir, "config", secretsFile)); s["JIRA_API_TOKEN"] != "" {
+			t.Fatal("JIRA_API_TOKEN must never land in the encrypted secrets file")
+		}
+	}
+}
+
 func TestWriteSettingMovesBetweenTiers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QAR_REPO_DIR", dir)

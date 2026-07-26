@@ -1,8 +1,9 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { useEffect, useRef } from 'react'
 import '@xterm/xterm/css/xterm.css'
-import { onPtyExit, onPtyOutput, resizePty, writeToPty } from '../lib/ipc'
+import { onPtyExit, onPtyOutput, openExternal, resizePty, writeToPty } from '../lib/ipc'
 
 // Embedded interactive terminal for the claude PTY. Renders raw PTY bytes and
 // forwards keystrokes back to Go (which writes them to claude's pseudo-terminal),
@@ -22,6 +23,10 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         })
         const fit = new FitAddon()
         term.loadAddon(fit)
+        // Make URLs in claude's output clickable. The default handler would open in
+        // the webview; route through the Wails runtime so links open in the user's
+        // real browser instead.
+        term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)))
         term.open(host)
         fit.fit()
         resizePty(term.rows, term.cols).catch(() => {})

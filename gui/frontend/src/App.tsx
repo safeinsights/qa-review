@@ -10,6 +10,7 @@ import { SettingsTab } from './components/SettingsTab'
 import { SetupGate } from './components/SetupGate'
 import { SuitesTab } from './components/SuitesTab'
 import { SyncButton } from './components/SyncButton'
+import { ValidationTab } from './components/ValidationTab'
 
 export function App() {
     const [tab, setTab] = useState<string | null>('suites')
@@ -83,6 +84,7 @@ export function App() {
                         <Tabs.List>
                             <Tabs.Tab value="suites">Suites</Tabs.Tab>
                             <Tabs.Tab value="exploratory">Author a Suite</Tabs.Tab>
+                            <Tabs.Tab value="validation">Validation</Tabs.Tab>
                             <Tabs.Tab value="settings">Settings</Tabs.Tab>
                         </Tabs.List>
 
@@ -97,6 +99,9 @@ export function App() {
                         </Tabs.Panel>
                         <Tabs.Panel value="exploratory" pt="lg" keepMounted>
                             <ExploratoryTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="validation" pt="lg" keepMounted>
+                            <ValidationTab />
                         </Tabs.Panel>
                         <Tabs.Panel value="settings" pt="lg" keepMounted>
                             <SettingsTab />

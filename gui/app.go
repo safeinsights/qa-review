@@ -56,15 +56,34 @@ func withGuiPath() []string {
 			path = d + ":" + path
 		}
 	}
+	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
+	// (bin/qar), which dispatches to QAR_BIN (packaged) or `pnpm qar` (dev). This is
+	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
+	if binDir := filepath.Join(repoDir(), "bin"); !strings.Contains(path, binDir) {
+		path = binDir + ":" + path
+	}
 	out := make([]string, 0, len(env))
 	for _, e := range env {
 		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "QAR_REPO_DIR=") {
 			continue
 		}
+		// Strip CLAUDE_CODE_* markers so a `claude` we spawn in the PTY starts a
+		// FRESH session. Otherwise, if the GUI itself was launched from within a
+		// Claude Code session (dev), the child claude inherits CLAUDE_CODE_CHILD_SESSION
+		// and disables its own transcript saving ("Transcript saving is off").
+		if strings.HasPrefix(e, "CLAUDE_CODE_") {
+			continue
+		}
 		out = append(out, e)
 	}
-	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives.
-	return append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
+	// and export QAR_BIN (packaged only) so the `bin/qar` shim — and thus a bare `qar`
+	// in the Claude PTY — runs the bundled engine where there is no `pnpm`.
+	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	if qb := qarBinValue(); qb != "" {
+		out = append(out, "QAR_BIN="+qb)
+	}
+	return out
 }
 
 // guiPath extracts the PATH value from a withGuiPath() env slice.
@@ -260,6 +279,28 @@ var authoringAllowedTools = []string{
 	"Edit",
 }
 
+// validationAllowedTools is the scoped pre-approval set for the Validation session.
+// Claude drives the shared browser (chrome-devtools MCP), reads the ticket + posts
+// findings (jira-atlassian MCP), finds the PR (gh), and uses qar helpers (login,
+// mail-inbox/mail-wait/totp for signup flows). Same file/shell surface as authoring.
+var validationAllowedTools = []string{
+	"mcp__chrome-devtools",
+	"mcp__jira-atlassian",
+	"Bash(gh:*)",
+	"Bash(pnpm qar:*)",
+	"Bash(qar:*)",
+	"Bash(pnpm typecheck:*)",
+	"Bash(pnpm test:*)",
+	"Bash(mkdir:*)",
+	"Bash(ls:*)",
+	"Bash(cat:*)",
+	"Bash(date:*)",
+	"Bash(echo:*)",
+	"Read",
+	"Write",
+	"Edit",
+}
+
 // StartAuthoringSession boots an interactive "author a suite" session:
 //  1. start `qar session --role <r> (--env|--pr)`, wait for its ready line
 //     (cdpPort + screencastPort) — this GATES claude start (no race),
@@ -270,20 +311,58 @@ var authoringAllowedTools = []string{
 //
 // One session at a time: starting a new one stops the old.
 func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, error) {
-	// Evict any live session (companion or a prior authoring one). If it actually
-	// tore something down, tell the GUI so the OTHER tab (which shares the single
-	// PTY slot) resets to idle instead of showing a live session over a dead PTY.
-	// This is the eviction of the OLD session; the new one we start below immediately
-	// re-announces itself (session-ready / a fresh token), so there's no self-teardown.
+	token, cdpPort, err := a.startSessionBrowser("authoring", env, pr)
+	if err != nil {
+		return "", err
+	}
+
+	mcpPath, err := writeSessionMcpConfig(cdpPort)
+	if err != nil {
+		a.StopSession()
+		return "", err
+	}
+	a.sessionMu.Lock()
+	a.sessionMcpPath = mcpPath
+	a.sessionMu.Unlock()
+
+	claudeArgs := []string{
+		"--permission-mode", "default",
+		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		"--add-dir", repoDir(),
+		"--mcp-config", mcpPath,
+	}
+	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
+		a.StopSession()
+		return "", err
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
+	}()
+	return token, nil
+}
+
+// startSessionBrowser evicts any live session, spawns `qar session (--env|--pr)`
+// (login deferred — the browser starts logged out), and waits for its ready line
+// carrying the CDP + screencast ports. It emits "session-ready" {screencastPort}
+// so the GUI shows the live browser, and returns the fresh session token + CDP
+// port so the caller can write a per-session MCP config and spawn claude. Shared
+// by the authoring and validation sessions (they differ only in MCP config +
+// prompt); `tokenPrefix` labels the session ("authoring"/"validation").
+func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, error) {
+	// Evict any live session (companion or a prior one). If it actually tore
+	// something down, tell the GUI so the OTHER tab (which shares the single PTY
+	// slot) resets to idle instead of showing a live session over a dead PTY. The
+	// new session we start below immediately re-announces itself (session-ready /
+	// a fresh token), so there's no self-teardown.
 	if a.teardownSession() {
 		runtime.EventsEmit(a.ctx, "session-ended")
 	}
-	// Mint the active token AFTER the eviction above, so any prior session's owner
-	// no longer holds the active token (their later StopSessionIfOwner is a no-op).
-	token := a.newSessionToken("authoring")
+	// Mint the active token AFTER the eviction so any prior session's owner no
+	// longer holds the active token (their later StopSessionIfOwner is a no-op).
+	token := a.newSessionToken(tokenPrefix)
 
-	// 1. Start the engine session.
-	args := []string{"session", "--role", role}
+	args := []string{"session"}
 	if strings.TrimSpace(pr) != "" {
 		args = append(args, "--pr", pr)
 	} else {
@@ -292,18 +371,18 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	cmd := engineCmd(args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		a.emitSpawnFailure("qar session", err)
-		return "", err
+		return "", 0, err
 	}
 	a.sessionMu.Lock()
 	a.sessionCmd = cmd
 	a.sessionMu.Unlock()
 
-	// 2. Wait for the session ready line (cdpPort + screencastPort) with a timeout.
+	// Wait for the session ready line (cdpPort + screencastPort) with a timeout.
 	type sessionInfo struct {
 		Type           string `json:"type"`
 		CdpPort        int    `json:"cdpPort"`
@@ -332,8 +411,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	}()
 
 	// Fail fast if the engine process exits before emitting the ready line (e.g.
-	// a stale repo without the `session` command, or a login error) — don't make
-	// the user wait out the full timeout.
+	// a stale repo without the `session` command) — don't wait out the timeout.
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
@@ -346,14 +424,28 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 		if out == "" {
 			out = fmt.Sprintf("the engine exited (%v) before the browser was ready", err)
 		}
-		return "", fmt.Errorf("could not start the session:\n%s", out)
+		return "", 0, fmt.Errorf("could not start the session:\n%s", out)
 	case <-time.After(90 * time.Second):
 		a.teardownSession()
-		return "", fmt.Errorf("timed out waiting for the browser session to start")
+		return "", 0, fmt.Errorf("timed out waiting for the browser session to start")
 	}
 
-	// 3. Per-session MCP config + announce the live browser to the GUI.
-	mcpPath, err := writeSessionMcpConfig(info.CdpPort)
+	runtime.EventsEmit(a.ctx, "session-ready", info.ScreencastPort)
+	return token, info.CdpPort, nil
+}
+
+// StartValidationSession boots a "validate a Jira ticket" session: the same shared
+// logged-out browser as authoring, but the MCP config ALSO carries the Jira
+// (uvx mcp-atlassian) server, and the opening prompt invokes qa-validate. Claude
+// reads the ticket + PR, logs in via `qar session-login`, drives the shared browser
+// via chrome-devtools MCP to check the acceptance criteria, and posts the verdict.
+func (a *App) StartValidationSession(env, pr, jiraCard string) (string, error) {
+	token, cdpPort, err := a.startSessionBrowser("validation", env, pr)
+	if err != nil {
+		return "", err
+	}
+
+	mcpPath, err := writeValidationMcpConfig(cdpPort, a.readJiraConfig())
 	if err != nil {
 		a.StopSession()
 		return "", err
@@ -361,12 +453,13 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
-	runtime.EventsEmit(a.ctx, "session-ready", info.ScreencastPort)
 
-	// 4. Spawn claude in a PTY against the shared browser.
 	claudeArgs := []string{
-		"--permission-mode", "default",
-		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
+		// writes (comments/transitions/un-assign) and non-allowlisted Bash still
+		// prompt live in the terminal for a human gate.
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", strings.Join(validationAllowedTools, ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
 	}
@@ -374,25 +467,40 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 		a.StopSession()
 		return "", err
 	}
-
-	// Send the opening instruction once claude's TUI is up (small delay so the
-	// prompt box is ready to receive it). Same split text-then-CR submit as the
-	// "Save as suite" path, so the user never has to press Enter by hand.
 	go func() {
 		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
+		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard))
 	}()
 	return token, nil
 }
 
 // composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
-// with the env/role/instruction. The browser is already launched + logged in.
+// with the env/role/instruction. The browser is launched but NOT logged in — login
+// is deferred, so the skill logs in as `role` on start via `qar session-login`.
 func composeAuthoringPrompt(env, pr, role, instruction string) string {
 	target := "--env " + env
 	if strings.TrimSpace(pr) != "" {
 		target = "--pr " + pr
 	}
-	return fmt.Sprintf("/qa-explore The browser is already open and logged in as %s against %s. Instruction: %s", role, target, instruction)
+	return fmt.Sprintf("/qa-explore The browser is open (not yet logged in) against %s. Log in as %s (run `qar session-login --role %s`), then carry out this instruction: %s", target, role, role, instruction)
+}
+
+// composeValidationPrompt is the validation Claude's first message: invoke the
+// qa-validate skill with the env/PR target + Jira card. The browser is open but
+// NOT logged in — the skill infers the role from the ticket and logs in itself.
+func composeValidationPrompt(env, pr, jiraCard string) string {
+	target := "--env " + env
+	if strings.TrimSpace(pr) != "" {
+		target = "--pr " + pr
+	}
+	return fmt.Sprintf(
+		"/qa-validate The browser is open (not yet logged in) against %s. Validate Jira "+
+			"ticket %s: read the ticket (jira-atlassian MCP) and its PR (gh) to learn what "+
+			"changed, infer the role and log in via `qar session-login --role <role>` (ask "+
+			"me if unclear), then drive the browser via the chrome-devtools MCP to verify the "+
+			"acceptance criteria. Give a clear PASS/FAIL verdict.",
+		target, jiraCard,
+	)
 }
 
 // composeCompanionPrompt is the companion Claude's first message: invoke the
@@ -1494,6 +1602,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh", "https://cli.github.com/"},
 		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH.", "https://docs.anthropic.com/en/docs/claude-code/setup"},
 		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node", "https://nodejs.org/en/download"},
+		{"uv (uvx)", "uvx", "--version", "Install uv (provides uvx) for the Jira MCP: brew install uv", "https://docs.astral.sh/uv/getting-started/installation/"},
 	} {
 		if !toolOnPath(t.bin) {
 			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint, DocURL: t.docURL})
@@ -1619,6 +1728,7 @@ func (a *App) DebugReport() DebugReport {
 		{"gh", "--version"},
 		{"claude", "--version"},
 		{"node", "--version"},
+		{"uvx", "--version"},
 	} {
 		r.Tools = append(r.Tools, probeTool(t.name, t.flag))
 	}

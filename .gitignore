@@ -12,3 +12,5 @@ config/age-identity.txt
 *.log
 .worktrees/
 .DS_Store
+# Scratch dirs from validation sessions (screenshots, draft Jira comment bodies)
+.qa-validate-*/

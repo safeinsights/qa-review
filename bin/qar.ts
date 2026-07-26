@@ -1,15 +1,21 @@
 import { parseArgs } from '@/cli/args'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
+import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
+import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { runCommand } from '@/cli/commands/run'
 import { sessionCommand } from '@/cli/commands/session'
+import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
+import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
+import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { syncCommand } from '@/cli/commands/sync'
+import { totpCommand } from '@/cli/commands/totp'
 import { loadSettings } from '@/engine/settings'
 
 const BOOLEANS = ['json', 'headed', 'screencast']
@@ -42,9 +48,25 @@ async function main() {
             return syncCommand()
         case 'session':
             return sessionCommand(opts, await loadSettings())
+        case 'session-login':
+            return sessionLoginCommand(opts)
+        case 'session-create-user':
+            return sessionCreateUserCommand(opts)
+        case 'session-create-study':
+            return sessionCreateStudyCommand()
+        case 'mail-inbox':
+            return mailInboxCommand()
+        case 'mail-wait':
+            return mailWaitCommand(opts)
+        case 'totp':
+            return totpCommand(opts)
+        case 'jira-comment':
+            return jiraCommentCommand(opts)
+        case 'jira-delete-comment':
+            return jiraDeleteCommentCommand(opts)
         default:
             console.error(
-                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session`
+                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session | session-login | session-create-user | session-create-study | mail-inbox | mail-wait | totp | jira-comment | jira-delete-comment`
             )
             process.exit(1)
     }

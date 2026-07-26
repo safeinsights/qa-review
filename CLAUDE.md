@@ -79,7 +79,11 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | session`.
+  request-access | rekey | set-secret | sync | session | jira-comment |
+  jira-delete-comment`.
+- `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
+  See "Posting Jira comments with inline screenshots" below for why this exists
+  instead of the `jira-atlassian` MCP's `jira_add_comment`.
 - `gui/` — Wails app. `gui/app.go` `RunEngine()` spawns the bundled engine
   (`<Resources>/runtime/node <Resources>/engine/qar.bundle.mjs run ...`, or
   `pnpm qar run ...` under `wails dev`) and streams JSON step lines to the React UI.
@@ -241,10 +245,57 @@ Build it:
 - `make dmg` — signed + notarized `.dmg`. Fill in `DEVELOPER_ID` + `NOTARY_PROFILE`
   and `qaReviewSlug` first (see `scripts/build-app.sh` + `gui/paths.go`).
 
-**`qa-explore` skill note:** in the packaged app there is no `pnpm qar`; the engine
-ships as a bundle. `engineCmd` exports **`QAR_BIN`** (= `"<node> <bundle>"`) for the
-Exploratory tab's `claude` run. The `qa-explore` skill must invoke `$QAR_BIN <args>`
-rather than `pnpm qar <args>`.
+**`qar` shim / skill invocation:** in the packaged app there is no `pnpm qar` (the
+engine ships as a bundle), and `pnpm qar` alone wouldn't work in the Claude PTY
+there. So the committed **`bin/qar`** shim (on PATH) dispatches to the bundled engine
+or `pnpm qar` (dev). `qarBinValue()` (`gui/paths.go`) is the single source of the
+`QAR_BIN` string (= `"<node> --import tsx <bundle>"`, packaged only); `withGuiPath()`
+(`gui/app.go`) exports it AND prepends `<repoDir()>/bin` to PATH, so a bare `qar
+<args>` works in the Claude sessions (authoring/validation/companion) in both dev and
+the packaged app. The skills therefore invoke bare **`qar <args>`** — not `pnpm qar`
+or `$QAR_BIN`. The `Bash(qar:*)` allowlist entry (`gui/app.go`) matches this shim.
+
+## Posting Jira comments with inline screenshots
+
+A QA validation is worth much more with the evidence embedded in the comment. The
+`jira-atlassian` MCP's `jira_add_comment` **cannot do this** — it only ever emits
+text. Every image syntax you might try is stored verbatim and renders as literal
+text (`![](f.png)`, `!f.png|thumbnail!`, and a markdown link to the attachment URL
+were all confirmed to fail; the wiki form additionally comes back escaped as
+`\![](f.png)`). This is upstream bug
+[sooperset/mcp-atlassian#608](https://github.com/sooperset/mcp-atlassian/issues/608),
+still open.
+
+The reason: Jira Cloud renders **ADF**, and an embedded image is only expressible
+as an ADF `media` node. That node is keyed by a **Media Services file UUID**, which
+is NOT the numeric attachment id from the upload response. It's exposed only
+indirectly — request `/rest/api/3/attachment/content/{id}` **without following the
+redirect**, and the `Location` header is `.../file/{uuid}/binary`.
+
+`src/engine/jira.ts` does exactly that: upload → resolve UUID from the redirect →
+POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
+
+- `qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]`
+  posts ONE comment with the images embedded. Images append after the body by
+  default; put a `{{image:N}}` placeholder (1-based) in the body to position one
+  inline instead. Prints `{"id","url"}`.
+- `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
+  has no delete tool, so this is the only way to clean up a bad post). 404 = already
+  gone = success.
+
+Body text is passed through as **literal text**, not markdown — Jira will not
+render `##` or `**bold**` from this path, so write plain prose.
+
+Auth comes from the same env vars the MCP server uses: `JIRA_URL` (defaults to
+`https://openstax.atlassian.net`), `JIRA_USERNAME`, `JIRA_API_TOKEN`. Note
+`JIRA_USERNAME` is typically NOT exported in the shell (it's hardcoded in the MCP
+config), so it usually has to be supplied inline:
+`JIRA_USERNAME=you@rice.edu pnpm qar jira-comment …`
+
+Deliberately NOT implemented: an "upload any absolute path" helper. That's the
+arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
+[PR #1402](https://github.com/sooperset/mcp-atlassian/pull/1402); uploads here go
+through the issue attachment endpoint only.
 
 ## Useful commands
 
@@ -259,5 +310,8 @@ rather than `pnpm qar <args>`.
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
   branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`/`QAR_BIN`)
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
+- `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
+  — post a Jira comment with the screenshots embedded inline (see above)
+- `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

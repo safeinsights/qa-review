@@ -13,9 +13,11 @@ export function ReportIssueButton({ tab }: { tab: string | null }) {
     const [title, setTitle] = useState('')
     const [note, setNote] = useState('')
 
-    const isAuthoring = tab === 'exploratory'
+    // Both the authoring and validation tabs run Claude in the shared PTY, so both
+    // attach the Claude transcript (Go owns it) rather than the Suites run state.
+    const isAuthoring = tab === 'exploratory' || tab === 'validation'
     const contextLabel = isAuthoring
-        ? 'the full Claude authoring transcript'
+        ? 'the full Claude session transcript'
         : 'the current Suites run state'
 
     const {

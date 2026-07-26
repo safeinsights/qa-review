@@ -33,7 +33,8 @@ export function SettingsTab() {
             // Seed drafts from current non-secret values; secrets start blank.
             const next: Record<string, Draft> = {}
             for (const f of view.fields) {
-                const tier = f.tier === 'local' ? 'local' : 'project'
+                // Local-only fields (Jira) can never be project — always seed local.
+                const tier = f.localOnly || f.tier === 'local' ? 'local' : 'project'
                 next[f.key] = { value: f.secret ? '' : f.value, tier }
             }
             setDrafts(next)
@@ -203,12 +204,21 @@ function FieldRow({
     hasIdentity,
     hideLabel,
 }: RowProps) {
-    const draft = drafts[f.key] ?? { value: '', tier: 'project' as const }
+    const draft: Draft = drafts[f.key] ?? {
+        value: '',
+        tier: f.localOnly ? 'local' : 'project',
+    }
     const blocked = f.secret && draft.tier === 'project' && !hasIdentity
     // The per-env results private keys are the only env-tagged secrets, and they
     // hold a multi-line PEM — render those in a textarea instead of a one-liner.
     const isPem = f.secret && !!f.env
-    const tierControl = (
+    // Local-only fields (Jira config) can never be committed/encrypted, so drop the
+    // tier selector and show a fixed "Local only" label instead.
+    const tierControl = f.localOnly ? (
+        <span className="kicker" style={{ whiteSpace: 'nowrap' }}>
+            Local only
+        </span>
+    ) : (
         <SegmentedControl
             value={draft.tier}
             onChange={v => setDraft(f.key, { tier: v as Draft['tier'] })}
@@ -246,7 +256,7 @@ function FieldRow({
             >
                 {hideLabel ? null : <span style={{ fontWeight: 600 }}>{f.label}</span>}
                 <span className="kicker">
-                    {f.set ? `current: ${tierLabel(f.tier)}` : 'not set'}
+                    {f.set ? `current: ${tierLabel(f.tier, f.localOnly)}` : 'not set'}
                     {f.secret ? ' · secret' : ''}
                 </span>
             </div>
@@ -341,10 +351,11 @@ function Section({
     )
 }
 
-function tierLabel(tier: string): string {
+function tierLabel(tier: string, localOnly = false): string {
     if (tier === 'project') return 'project (committed)'
     if (tier === 'secrets') return 'project (encrypted)'
-    if (tier === 'local') return 'local override'
+    // A local-only field has no project tier to override, so it's just "local".
+    if (tier === 'local') return localOnly ? 'local' : 'local override'
     return tier
 }
 

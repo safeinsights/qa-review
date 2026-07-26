@@ -44,6 +44,21 @@ export function runStatePath(bundleDir: string): string {
     return path.join(bundleDir, 'run-state.json')
 }
 
+// On-demand action rendezvous for a live `qar session`. A sibling `qar session-*`
+// command writes a request here; the running session process watches this path,
+// performs the action on its held browser, and writes the outcome to
+// sessionRequestResultPath(). One session at a time, so a single fixed path needs
+// no per-run coordination. `session-login`, `session-create-user`, and
+// `session-create-study` all share this one channel (each request carries an
+// `action` field).
+export function sessionRequestPath(): string {
+    return path.join(resultsRoot(), 'session-request.json')
+}
+
+export function sessionRequestResultPath(): string {
+    return path.join(resultsRoot(), 'session-request-result.json')
+}
+
 // Suite source dir. The engine imports these .ts files directly via tsx (both
 // `pnpm qar` and the packaged app run node with `--import tsx`), so there is no
 // compile step — the registry globs this dir.

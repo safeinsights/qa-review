@@ -133,6 +133,60 @@ func writeSessionMcpConfig(cdpPort int) (string, error) {
 	return f.Name(), nil
 }
 
+// JiraCfg is the per-user Jira MCP config (from the settings files). Token empty
+// means "not configured" — the Jira server is then omitted from the MCP config.
+type JiraCfg struct {
+	URL      string
+	Username string
+	Token    string
+}
+
+// writeValidationMcpConfig writes the per-session MCP config for a Validation
+// session: the same chrome-devtools server as writeSessionMcpConfig (so Claude
+// drives the shared browser), PLUS a stdio jira-atlassian server (uvx mcp-atlassian)
+// when a Jira token is configured. The Jira server reads the site/user/token from
+// its env; ENABLED_TOOLS scopes it to the read + comment + attach tools the
+// qa-validate skill uses. Returns the temp file path; the caller removes it at
+// session teardown. NOTE: the file contains the token in plaintext (0600 from
+// CreateTemp, removed at teardown).
+func writeValidationMcpConfig(cdpPort int, jira JiraCfg) (string, error) {
+	servers := map[string]any{
+		"chrome-devtools": map[string]any{
+			"command": "npx",
+			"args": []string{
+				"chrome-devtools-mcp@latest",
+				fmt.Sprintf("--browserUrl=http://127.0.0.1:%d", cdpPort),
+			},
+		},
+	}
+	if strings.TrimSpace(jira.Token) != "" {
+		servers["jira-atlassian"] = map[string]any{
+			"command": "uvx",
+			"args":    []string{"mcp-atlassian"},
+			"env": map[string]string{
+				"JIRA_URL":       jira.URL,
+				"JIRA_USERNAME":  jira.Username,
+				"JIRA_API_TOKEN": jira.Token,
+				"ENABLED_TOOLS": "jira_get_issue,jira_search,jira_get_project_issues," +
+					"jira_add_comment,jira_update_issue,jira_transition_issue,jira_get_transitions",
+			},
+		}
+	}
+	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "qar-validate-mcp-*.json")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
+}
+
 // devSourceRepo finds the live engine source tree (the dir containing bin/qar.ts)
 // for the `wails dev` fallback, searching upward from the working dir and the
 // executable. Returns "" if not found (e.g. a real packaged app).
@@ -158,6 +212,22 @@ func devSourceRepo() string {
 		}
 	}
 	return ""
+}
+
+// qarBinValue is the single source of truth for the QAR_BIN string — the multi-token
+// command that runs the bundled engine in a packaged .app
+// ("<node> --import tsx <bundle>"). It is exported both to the engine subprocess
+// (engineCmd) and to the Claude PTY env (withGuiPath), where the `bin/qar` shim
+// consumes it so a bare `qar …` works. Under `wails dev` there is no Resources
+// bundle, so it returns "" and the shim falls back to `pnpm qar`.
+func qarBinValue() string {
+	res := resourcesDir()
+	if res == "" {
+		return ""
+	}
+	node := filepath.Join(res, "runtime", "node")
+	bundle := filepath.Join(res, "engine", "qar.bundle.mjs")
+	return node + " --import tsx " + bundle
 }
 
 // engineCmd builds the command that runs the bundled engine with the given qar
@@ -186,7 +256,7 @@ func engineCmd(args ...string) *exec.Cmd {
 		env = append(env,
 			"NODE_PATH="+filepath.Join(res, "engine", "node_modules"),
 			"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1",
-			"QAR_BIN="+node+" --import tsx "+bundle,
+			"QAR_BIN="+qarBinValue(),
 		)
 		cmd.Env = env
 	} else {

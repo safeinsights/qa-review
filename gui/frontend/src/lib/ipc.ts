@@ -16,6 +16,7 @@ export interface SettingField {
     tier: string // "project" | "secrets" | "local" | "" (unset)
     value: string
     set: boolean
+    localOnly: boolean // forced to the local tier (no encrypted/project option)
 }
 
 export interface SettingsView {
@@ -81,6 +82,7 @@ interface WailsApp {
         instruction: string
     ): Promise<string>
     StartRunCompanion(cdpPort: number, suite: string): Promise<string>
+    StartValidationSession(env: string, pr: string, jiraCard: string): Promise<string>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -117,6 +119,8 @@ interface WailsApp {
 interface WailsRuntime {
     EventsOn(event: string, cb: (...data: unknown[]) => void): () => void
     EventsOff(event: string): void
+    // Opens a URL in the user's default system browser (NOT inside the webview).
+    BrowserOpenURL(url: string): void
 }
 
 declare global {
@@ -140,6 +144,12 @@ function rt(): WailsRuntime {
 
 export async function runProcess(program: string, args: string[], cwd: string): Promise<void> {
     await app().RunProcess(program, args, cwd)
+}
+
+// Open a URL in the user's real browser (via the Wails runtime), not the webview.
+// Used by the embedded terminal so clicking a link in claude's output works.
+export function openExternal(url: string): void {
+    rt().BrowserOpenURL(url)
 }
 
 // A run was rejected because one is already active (Go's ErrRunInProgress).
@@ -216,6 +226,17 @@ export async function startAuthoringSession(
 // the session token (see stopSessionIfOwner).
 export async function startRunCompanion(cdpPort: number, suite: string): Promise<string> {
     return app().StartRunCompanion(cdpPort, suite)
+}
+
+// Start a Validation session: Go launches the shared (logged-out) browser + claude
+// in a PTY, with the Jira MCP added. The GUI receives `session-ready` + `pty-output`
+// events, same as authoring. Returns the session token (see stopSessionIfOwner).
+export async function startValidationSession(
+    env: string,
+    pr: string,
+    jiraCard: string
+): Promise<string> {
+    return app().StartValidationSession(env, pr, jiraCard)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.

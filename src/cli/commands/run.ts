@@ -23,6 +23,11 @@ import type { Suite } from '@/suites/types'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
+    // `--suite-file <path>` runs a Suite from an arbitrary .ts file (an ad-hoc
+    // validation suite) via suiteOverride, so it's NEVER registered / listed. Its
+    // `name` comes from the loaded Suite. Otherwise `--suite <name>` resolves from
+    // the on-disk registry as usual.
+    const suiteFile = opts['suite-file']
     const suite = opts.suite ?? 'signin'
     const json = opts.json === 'true'
     const headed = opts.headed === 'true'
@@ -80,7 +85,9 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // Suite-shape validation.
     let reloadCounter = 0
     const reloadSuite = async (name: string): Promise<Suite> => {
-        const src = path.join(suitesSrcDir(), `${name}.ts`)
+        // For a --suite-file run, reload from that same file path (not the registry
+        // dir), so retry/edit picks up the temp suite's edits.
+        const src = suiteFile ? path.resolve(suiteFile) : path.join(suitesSrcDir(), `${name}.ts`)
         const bust = `${pathToFileURL(src).href}?t=${++reloadCounter}`
         const found = await discoverSuites([bust], f => import(f))
         const fresh = found.find(s => s.name === name) ?? found[0]
@@ -215,8 +222,17 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         ...controlDeps,
     }
 
+    // For --suite-file, load the Suite object up front and run it as an override
+    // (never touches the on-disk registry / suite list).
+    const suiteOverride = suiteFile ? await reloadSuite(suite) : undefined
+    const suiteName = suiteOverride?.name ?? suite
+
     try {
-        const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)
+        const result = await runEngine(
+            { suite: suiteName, env: envConfig.name, role, envConfig },
+            deps,
+            suiteOverride
+        )
         if (json) {
             process.stdout.write(resultLine(result))
         } else {

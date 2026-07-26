@@ -1,7 +1,15 @@
 import path from 'node:path'
-import { faker } from '@faker-js/faker'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import {
+    beginProposal,
+    chooseOrgAndCaptureId,
+    fillProposal,
+    generateStudyContent,
+    openProposalDashboard,
+    type StudyContent,
+    submitProposal,
+} from '../engine/flows/study'
 import { repoDir } from '../engine/paths'
 import type { RunContext, Suite } from './types'
 
@@ -30,7 +38,6 @@ import type { RunContext, Suite } from './types'
 // Settings panel. The key is per-account AND per-env; env.ts resolves the one
 // matching the running env (PR previews reuse qa) into ctx.resultsKey.
 
-const RESEARCHER_DASH = '/openstax-lab/dashboard'
 const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
 const CODE_CRITERIA_KEYS = [
@@ -78,13 +85,7 @@ export const studyHappyPathSuite: Suite = {
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
                 await ctx.step(async () => {
-                    await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASH}`, {
-                        waitUntil: 'domcontentloaded',
-                    })
-                    await ctx.page
-                        .getByRole('link', { name: /Propose New Study/i })
-                        .first()
-                        .waitFor({ state: 'visible' })
+                    await openProposalDashboard(ctx.page, ctx.baseURL)
                 })
             },
         },
@@ -92,43 +93,18 @@ export const studyHappyPathSuite: Suite = {
             name: 'Start a new study proposal',
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page
-                        .getByRole('link', { name: /Propose New Study/i })
-                        .first()
-                        .click()
-                    // Arrival on the request page = its org picker rendered.
-                    await ctx.page.getByTestId('org-select').waitFor({ state: 'visible' })
+                    await beginProposal(ctx.page)
                 }),
         },
         {
             name: 'Step 1: choose org and language, then capture the study id',
             run: async ctx => {
                 await ctx.step(async () => {
-                    const orgSelect = ctx.page.getByTestId('org-select')
-                    await orgSelect.click()
-                    await ctx.page
-                        .getByRole('option', { name: /openstax/i })
-                        .first()
-                        .click()
-                    const rRadio = ctx.page.getByRole('radio', { name: 'R', exact: true })
-                    await rRadio.waitFor({ state: 'visible' })
-                    await rRadio.click()
-                    // Proceeding to Step 2 CREATES the study record; its id is in the
-                    // proposal-page URL. Wait for the proposal form to render (the
-                    // Study Title field is its marker), THEN read the id from the URL
-                    // — the URL is settled once the form is on screen. Capture + track
-                    // here, the instant the study exists, so no created study is ever
-                    // left untracked.
-                    await ctx.page.getByRole('button', { name: /Proceed to Step 2/i }).click()
-                    await ctx.page.getByLabel('Study Title').waitFor({ state: 'visible' })
-                    const match = ctx.page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
-                    if (!match) {
-                        throw new Error(
-                            `Could not find study id in proposal URL: ${ctx.page.url()}`
-                        )
-                    }
-                    ctx.state.studyId = match[1]
-                    ctx.trackStudy(match[1])
+                    // Proceeding to Step 2 creates the study record. Capture + track
+                    // its id the instant it exists, so no created study is untracked.
+                    const studyId = await chooseOrgAndCaptureId(ctx.page)
+                    ctx.state.studyId = studyId
+                    ctx.trackStudy(studyId)
                 })
             },
         },
@@ -136,29 +112,14 @@ export const studyHappyPathSuite: Suite = {
             name: 'Step 2: fill the proposal',
             run: ctx =>
                 ctx.step(async () => {
-                    const study = content(ctx)
-                    await ctx.page.getByLabel('Study Title').fill(study.title)
-                    await ctx.page.getByPlaceholder('Select dataset(s) of interest').click()
-                    await ctx.page.getByRole('option').first().click()
-                    await fillLexical(ctx, 'Research question(s)', study.researchQuestion)
-                    await fillLexical(ctx, 'Project summary', study.summary)
-                    await fillLexical(ctx, 'Impact', study.impact)
-                    const pi = ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
-                    await pi.click()
-                    await ctx.page.getByRole('option').first().click()
+                    await fillProposal(ctx.page, content(ctx))
                 }),
         },
         {
             name: 'Submit the initial request',
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.getByRole('button', { name: /Submit initial request/i }).click()
-                    await ctx.page
-                        .getByRole('button', { name: /Yes, submit initial request/i })
-                        .click()
-                    await ctx.page
-                        .getByText(/successfully submitted/i)
-                        .waitFor({ state: 'visible' })
+                    await submitProposal(ctx.page)
                 }),
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
@@ -605,53 +566,8 @@ async function deleteStudyAndVerify(ctx: RunContext, studyId: string): Promise<v
 }
 
 // --- helpers (mirror management-app/tests/study-flow.spec.ts) ---
-
-interface StudyContent {
-    title: string
-    researchQuestion: string
-    summary: string
-    impact: string
-    proposalFeedback: string
-    changeRequestFeedback: string
-    resubmissionNote: string
-    codeApprovalFeedback: string
-}
-
-// Realistic-but-synthetic study + review text via faker, using English-word
-// generators (not the Latin faker.lorem). The title keeps `tag` (the
-// unique-per-run suffix) so the study row stays findable and traceable.
-function generateStudyContent(tag: string): StudyContent {
-    const topic = faker.commerce.productName().toLowerCase()
-    const cohort = faker.helpers.arrayElement([
-        'first-year',
-        'transfer',
-        'STEM',
-        'part-time',
-        'online',
-    ])
-    const outcome = faker.helpers.arrayElement([
-        'course completion',
-        'assessment scores',
-        'time-on-task',
-        'retention',
-        'engagement',
-    ])
-    // Join 2–3 English-ish sentences into one paragraph; up to `paras` paragraphs.
-    const para = () =>
-        faker.helpers.multiple(() => faker.hacker.phrase(), { count: { min: 2, max: 3 } }).join(' ')
-    const body = (paras: number) =>
-        faker.helpers.multiple(para, { count: { min: 1, max: paras } }).join('\n\n')
-    return {
-        title: `${faker.company.catchPhraseNoun()} and ${outcome} (QA ${tag})`,
-        researchQuestion: `How does ${topic} relate to ${outcome} among ${cohort} students? ${faker.hacker.phrase()}`,
-        summary: body(2),
-        impact: `This work informs ${faker.company.buzzPhrase()}. ${faker.hacker.phrase()}`,
-        proposalFeedback: `Approving this initial request. ${body(1)}`,
-        changeRequestFeedback: `Requesting revisions before approval. ${body(1)}`,
-        resubmissionNote: `Addressed reviewer feedback. ${body(1)}`,
-        codeApprovalFeedback: `Code approved and ready to run. ${body(1)}`,
-    }
-}
+// StudyContent, generateStudyContent, and fillLexical now live in
+// ../engine/flows/study (shared with ad-hoc validation suites).
 
 // The two code files the app accepts, resolved against the cloned repo (NOT the
 // engine bundle location) via repoDir(), which honors QAR_REPO_DIR at runtime.
@@ -659,13 +575,6 @@ function generateStudyContent(tag: string): StudyContent {
 function fixtureFiles(): string[] {
     const dir = path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]
-}
-
-// Fill a Lexical contenteditable field by aria-label: click to focus, then type.
-async function fillLexical(ctx: RunContext, ariaLabel: string, text: string): Promise<void> {
-    const field = ctx.page.locator(`[aria-label="${ariaLabel}"]`)
-    await field.click()
-    await ctx.page.keyboard.type(text)
 }
 
 async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {

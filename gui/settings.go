@@ -60,6 +60,12 @@ var secretVars = map[string]bool{
 var knownVars = []SettingField{
 	{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
 	{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
+	// Jira MCP config for the Validation tab. LocalOnly (gitignored, never encrypted)
+	// — a personal, per-user site/email/token. Not in secretVars: local-tier values
+	// are always plaintext. The token is still Secret:true for input masking.
+	{Key: "JIRA_URL", Label: "Jira site URL", Secret: false, Group: "Jira", LocalOnly: true},
+	{Key: "JIRA_USERNAME", Label: "Jira email", Secret: false, Group: "Jira", LocalOnly: true},
+	{Key: "JIRA_API_TOKEN", Label: "Jira API token", Secret: true, Group: "Jira", LocalOnly: true},
 	{Key: "ADMIN_EMAIL", Label: "Email", Secret: false, Group: "Admin"},
 	{Key: "ADMIN_PASSWORD", Label: "Password", Secret: true, Group: "Admin"},
 	{Key: "ADMIN_MFA_CODE", Label: "MFA code", Secret: true, Group: "Admin"},
@@ -96,6 +102,21 @@ type SettingField struct {
 	// re-types a secret to change it) — `Set` says whether one already exists.
 	Value string `json:"value"`
 	Set   bool   `json:"set"`
+	// LocalOnly forces this field to the "local" tier (gitignored). The panel hides
+	// the tier selector and the backend rejects any non-local write — so a personal,
+	// per-user value (e.g. the Jira config) can never be committed or encrypted.
+	LocalOnly bool `json:"localOnly"`
+}
+
+// isLocalOnlyVar reports whether a settings key is local-only (must never be
+// committed/encrypted), derived from the LocalOnly flag on knownVars.
+func isLocalOnlyVar(key string) bool {
+	for _, f := range knownVars {
+		if f.Key == key {
+			return f.LocalOnly
+		}
+	}
+	return false
 }
 
 // SettingsView is the merged settings state returned to the panel.
@@ -111,6 +132,30 @@ type SettingsView struct {
 // clone, not at a cwd-relative offset.
 func configDirFor(cwd string) string {
 	return filepath.Join(repoDir(), "config")
+}
+
+// readJiraConfig resolves the Jira MCP config (URL/username/token) from the merged
+// settings files, precedence local > secrets > project (same as ReadSettings). The
+// values are plaintext (local tier / committed default), so no decryption is needed.
+func (a *App) readJiraConfig() JiraCfg {
+	get := func(key string) string {
+		dir := configDirFor("")
+		for _, f := range []string{localFile, secretsFile, projectFile} {
+			m, err := readSettingsFile(filepath.Join(dir, f))
+			if err != nil {
+				continue
+			}
+			if v, ok := m[key]; ok {
+				return v
+			}
+		}
+		return ""
+	}
+	return JiraCfg{
+		URL:      get("JIRA_URL"),
+		Username: get("JIRA_USERNAME"),
+		Token:    get("JIRA_API_TOKEN"),
+	}
 }
 
 // readSettingsFile reads one JSON settings file into a string map. A missing or
@@ -364,6 +409,11 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 func (a *App) WriteSetting(cwd, key, value, tier string) error {
 	if tier != "project" && tier != "local" {
 		return fmt.Errorf("invalid tier %q (want project or local)", tier)
+	}
+	// A local-only field (e.g. the Jira config) must never be committed/encrypted —
+	// reject any attempt to write it to the project tier, even if the UI is bypassed.
+	if tier != "local" && isLocalOnlyVar(key) {
+		return fmt.Errorf("%q is local-only and cannot be saved to the project tier", key)
 	}
 	dir := configDirFor(cwd)
 	isSecret := secretVars[key]
