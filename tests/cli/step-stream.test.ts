@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+    jumpToLine,
     parseControlLine,
     parseLine,
     pausedLine,
@@ -69,5 +70,16 @@ describe('step-stream control channel (inbound)', () => {
         expect(parseControlLine(JSON.stringify({ type: 'nope' }))).toBeNull()
         expect(parseControlLine(JSON.stringify({ type: 'pause-set', steps: [1, 2] }))).toBeNull()
         expect(parseControlLine(JSON.stringify({ type: 'pause-set' }))).toBeNull()
+    })
+
+    it('round-trips a jump-to', () => {
+        expect(parseControlLine(jumpToLine(0))).toEqual({ type: 'jump-to', index: 0 })
+        expect(parseControlLine(jumpToLine(7))).toEqual({ type: 'jump-to', index: 7 })
+    })
+
+    it('rejects a jump-to whose index is missing or not a step index', () => {
+        for (const index of [-1, 1.5, '2', Number.NaN, undefined]) {
+            expect(parseControlLine(JSON.stringify({ type: 'jump-to', index }))).toBeNull()
+        }
     })
 })

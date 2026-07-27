@@ -670,3 +670,200 @@ describe('runEngine', () => {
         expect(onErrorHold).toHaveBeenCalledOnce()
     })
 })
+
+// --- jump-to-step (double-click a step in the GUI) ---
+//
+// consumeJump is a latch the run loop reads at each step boundary. These drive it
+// directly (the CLI's stdin channel is what sets it in production).
+describe('runEngine jump-to-step', () => {
+    // A suite whose steps append their name, so the ran-order is observable.
+    const tracedSuite = (ran: string[]): Suite => ({
+        name: 'demo',
+        description: '',
+        roles: ['admin'],
+        steps: ['one', 'two', 'three', 'four'].map(name => ({
+            name,
+            run: async ctx => {
+                ran.push(name)
+                await ctx.step(name, async () => {})
+            },
+        })),
+    })
+
+    // Fire a jump ONCE, when the loop is at `atIndex`.
+    const jumpOnceAt = (atIndex: number, target: number) => {
+        let fired = false
+        let seen = 0
+        return () => {
+            // consumeJump is called once per boundary, so count boundaries.
+            const here = seen++
+            if (!fired && here === atIndex) {
+                fired = true
+                return target
+            }
+            return undefined
+        }
+    }
+
+    it('jumps FORWARD, marking the skipped steps and running the target', async () => {
+        const ran: string[] = []
+        const d = deps({ consumeJump: jumpOnceAt(0, 2) })
+        const result = await runEngine(
+            { suite: 'demo', env: 'qa', role: 'admin' },
+            d,
+            tracedSuite(ran)
+        )
+        expect(result.ok).toBe(true)
+        // 'one' and 'two' were jumped over; the run continued from 'three'.
+        expect(ran).toEqual(['three', 'four'])
+        // Skipped steps still occupy their positions, so the GUI's positional
+        // name↔event mapping stays aligned with the suite.
+        expect(result.steps.map(s => [s.name, s.status])).toEqual([
+            ['one', 'skipped'],
+            ['two', 'skipped'],
+            ['three', 'passed'],
+            ['four', 'passed'],
+        ])
+    })
+
+    it('jumps BACKWARD, re-running the target without duplicating rows', async () => {
+        const ran: string[] = []
+        // At the boundary of step 2 ('three'), jump back to step 0 ('one').
+        let fired = false
+        let seen = 0
+        const d = deps({
+            consumeJump: () => {
+                const here = seen++
+                if (!fired && here === 2) {
+                    fired = true
+                    return 0
+                }
+                return undefined
+            },
+        })
+        const result = await runEngine(
+            { suite: 'demo', env: 'qa', role: 'admin' },
+            d,
+            tracedSuite(ran)
+        )
+        expect(result.ok).toBe(true)
+        expect(ran).toEqual(['one', 'two', 'one', 'two', 'three', 'four'])
+        // The re-run re-occupies positions 0..1 rather than appending duplicates,
+        // so the final list is exactly one row per suite step.
+        expect(result.steps.map(s => s.name)).toEqual(['one', 'two', 'three', 'four'])
+        expect(result.steps.every(s => s.status === 'passed')).toBe(true)
+    })
+
+    it('ignores an out-of-range target instead of crashing the run', async () => {
+        const ran: string[] = []
+        const d = deps({ consumeJump: jumpOnceAt(0, 99) })
+        const result = await runEngine(
+            { suite: 'demo', env: 'qa', role: 'admin' },
+            d,
+            tracedSuite(ran)
+        )
+        expect(result.ok).toBe(true)
+        expect(ran).toEqual(['one', 'two', 'three', 'four'])
+    })
+
+    it('is a no-op when the target is the step about to run', async () => {
+        const ran: string[] = []
+        const d = deps({ consumeJump: jumpOnceAt(1, 1) })
+        const result = await runEngine(
+            { suite: 'demo', env: 'qa', role: 'admin' },
+            d,
+            tracedSuite(ran)
+        )
+        expect(result.ok).toBe(true)
+        expect(ran).toEqual(['one', 'two', 'three', 'four'])
+    })
+
+    it('honors a jump latched DURING a step at the next boundary, not mid-step', async () => {
+        const ran: string[] = []
+        let latched: number | undefined
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: ['one', 'two', 'three', 'four'].map(name => ({
+                name,
+                run: async ctx => {
+                    ran.push(name)
+                    await ctx.step(name, async () => {
+                        // Mid-flight request, as if the user double-clicked while
+                        // this step was still running.
+                        if (name === 'one') latched = 3
+                    })
+                },
+            })),
+        }
+        const d = deps({
+            consumeJump: () => {
+                const t = latched
+                latched = undefined
+                return t
+            },
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        // 'one' ran to completion first — the jump did NOT interrupt it.
+        expect(ran).toEqual(['one', 'four'])
+        expect(result.steps.map(s => [s.name, s.status])).toEqual([
+            ['one', 'passed'],
+            ['two', 'skipped'],
+            ['three', 'skipped'],
+            ['four', 'passed'],
+        ])
+    })
+
+    it('jumps out of a step-failed hold when the user picks a target', async () => {
+        const ran: string[] = []
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'boom',
+                    run: async ctx => {
+                        ran.push('boom')
+                        await ctx.step('boom', async () => {
+                            throw new Error('kaboom')
+                        })
+                    },
+                },
+                {
+                    name: 'after',
+                    run: async ctx => {
+                        ran.push('after')
+                        await ctx.step('after', async () => {})
+                    },
+                },
+            ],
+        }
+        // The target is latched only when the hold is reached — mirroring the CLI,
+        // where {type:'jump-to'} both sets the latch and resolves the hold.
+        let target: number | undefined
+        const d = deps({
+            waitForResolution: async () => {
+                target = 1
+                return 'jump' as const
+            },
+            reloadSuite: vi.fn(),
+            consumeJump: () => {
+                const t = target
+                target = undefined
+                return t
+            },
+        })
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(ran).toEqual(['boom', 'after'])
+        // Jumping out of a failure doesn't reload the suite — that's retry's job.
+        expect(d.reloadSuite).not.toHaveBeenCalled()
+        // The failure row is kept: it really happened and is worth showing.
+        expect(result.steps.map(s => [s.name, s.status])).toEqual([
+            ['boom', 'failed'],
+            ['after', 'passed'],
+        ])
+    })
+})

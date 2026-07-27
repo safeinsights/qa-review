@@ -229,6 +229,15 @@ export async function giveUpStep(): Promise<void> {
     await sendToRun(JSON.stringify({ type: 'give-up' }))
 }
 
+// Relocate the run to `index` and continue from there. The engine honors this at
+// its next step boundary — a step already in flight runs to completion first, so a
+// jump requested mid-step lands when that step finishes. Jumping FORWARD marks the
+// intervening steps 'skipped' (they never ran); jumping BACKWARD re-runs from the
+// target against the live browser.
+export async function jumpToStep(index: number): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'jump-to', index }))
+}
+
 // --- Interactive authoring session (terminal + shared browser) ---
 
 // Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.

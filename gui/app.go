@@ -955,6 +955,14 @@ func pauseSetControlLine(steps []string) string {
 	return string(b)
 }
 
+func jumpToControlLine(index int) string {
+	b, _ := json.Marshal(struct {
+		Type  string `json:"type"`
+		Index int    `json:"index"`
+	}{Type: "jump-to", Index: index})
+	return string(b)
+}
+
 // emitSpawnFailure surfaces a failed process launch to the UI as an error line
 // plus a non-zero exit, so a missing tool (e.g. pnpm/claude not on a GUI app's
 // PATH) shows up instead of the run silently doing nothing.

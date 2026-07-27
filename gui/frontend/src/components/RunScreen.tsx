@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react'
-import { resumeRun } from '../lib/ipc'
-import type { ResultEnvelope } from '../lib/stepStream'
+import { useCallback, useEffect, useState } from 'react'
+import { jumpToStep, resumeRun } from '../lib/ipc'
+import { type ResultEnvelope, stepsByIndex } from '../lib/stepStream'
 import { useReportIssueMirror } from '../lib/useReportIssueMirror'
 import { useRunStream } from '../lib/useRunStream'
 import { useSnapshotSelection } from '../lib/useSnapshotSelection'
@@ -78,6 +78,44 @@ export function RunScreen({
         [onTogglePause, run.pausedAt]
     )
 
+    // A jump the engine hasn't reached yet. The engine honors a jump at its next step
+    // boundary, so when one is requested mid-step the target row shows "queued" until
+    // a new step event proves the run moved.
+    const [jumpQueuedIndex, setJumpQueuedIndex] = useState<number | null>(null)
+
+    // Double-click a step to relocate the run to it. Jumping FORWARD skips steps whose
+    // side effects later steps may depend on (a login, a created study id) — the engine
+    // can't know which, so confirm rather than let it fail confusingly downstream.
+    const jumpTo = useCallback(
+        (index: number) => {
+            const executed = stepsByIndex(run.steps).length
+            const skipped = index - executed
+            if (
+                skipped > 0 &&
+                !window.confirm(
+                    `Jump forward to step ${index + 1}, skipping ${skipped} step${
+                        skipped === 1 ? '' : 's'
+                    }?\n\n` +
+                        'Skipped steps will be marked as such and never run. Later steps ' +
+                        'may fail if they depend on work the skipped steps do (logging in, ' +
+                        'creating a study).'
+                )
+            ) {
+                return
+            }
+            setJumpQueuedIndex(index)
+            void jumpToStep(index)
+        },
+        [run.steps]
+    )
+
+    // Clear the queued marker once the run actually moves: a new step event means the
+    // engine reached a boundary and consumed the jump.
+    const stepEventCount = run.steps.length
+    useEffect(() => {
+        setJumpQueuedIndex(null)
+    }, [stepEventCount])
+
     // bundleDir (for artifacts) arrives on the result envelope; the video blob is
     // loaded here, not in RecordingPanel, so it isn't re-fetched on snapshot flips.
     const bundleDir = (run.result?.bundleDir as string | undefined) ?? null
@@ -132,6 +170,10 @@ export function RunScreen({
                         cdpPort={run.cdpPort}
                         emphasizeClaude={emphasizeClaude}
                         onOpenCompanion={() => setCompanionOpen(true)}
+                        // Jumping only means something while the engine is still
+                        // looping — on a finished run there's nothing to relocate.
+                        onJumpTo={run.running || run.browserLive ? jumpTo : undefined}
+                        jumpQueuedIndex={jumpQueuedIndex}
                     />
                     <MonitorPanel
                         result={run.result}

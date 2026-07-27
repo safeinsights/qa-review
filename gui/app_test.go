@@ -20,6 +20,14 @@ func TestControlLines(t *testing.T) {
 	if got := pauseSetControlLine(nil); got != `{"type":"pause-set","steps":null}` {
 		t.Errorf("pauseSetControlLine(nil) = %q", got)
 	}
+	// Must match jumpToLine() in src/cli/step-stream.ts — the engine's parser
+	// requires a non-negative integer `index`.
+	if got := jumpToControlLine(0); got != `{"type":"jump-to","index":0}` {
+		t.Errorf("jumpToControlLine(0) = %q", got)
+	}
+	if got := jumpToControlLine(7); got != `{"type":"jump-to","index":7}` {
+		t.Errorf("jumpToControlLine(7) = %q", got)
+	}
 }
 
 func TestSendToRunNoActiveRun(t *testing.T) {

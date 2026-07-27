@@ -74,10 +74,19 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // the user's choice: waitForResolution awaits it; {type:'retry-step'} resolves
     // 'retry' and {type:'give-up'} resolves 'giveUp'. Re-armed after each hold so
     // multiple retries work.
-    let resolutionResolve: ((d: 'retry' | 'giveUp') => void) | undefined
-    let resolutionPromise: Promise<'retry' | 'giveUp'> | undefined
+    let resolutionResolve: ((d: 'retry' | 'giveUp' | 'jump') => void) | undefined
+    let resolutionPromise: Promise<'retry' | 'giveUp' | 'jump'> | undefined
     const armResolution = () => {
-        resolutionPromise = new Promise<'retry' | 'giveUp'>(r => (resolutionResolve = r))
+        resolutionPromise = new Promise<'retry' | 'giveUp' | 'jump'>(r => (resolutionResolve = r))
+    }
+    // A latched jump target, set by {type:'jump-to'} and consumed by the run loop at
+    // its next step boundary. A step in flight can't be interrupted, so this is what
+    // makes a mid-step jump "queue up" and land when the step finishes.
+    let jumpTarget: number | undefined
+    const consumeJump = () => {
+        const t = jumpTarget
+        jumpTarget = undefined
+        return t
     }
     // Cache-bust import ONE suite's .ts source so an edited suite's new code is picked
     // up on retry (tsx transpiles it on import — no compile step). A monotonic counter
@@ -120,6 +129,7 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             const d = await resolutionPromise
             return d ?? 'giveUp'
         },
+        consumeJump,
         reloadSuite,
     }
 
@@ -145,6 +155,14 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
                     resolutionResolve?.('retry')
                 } else if (msg.type === 'give-up') {
                     resolutionResolve?.('giveUp')
+                } else if (msg.type === 'jump-to') {
+                    // Latch the target, then release whichever hold the run is in so
+                    // the loop reaches a step boundary and consumes it. Both resolves
+                    // are no-ops when nothing is pending (a freely-running suite picks
+                    // the latch up at its next boundary on its own).
+                    jumpTarget = msg.index
+                    resolutionResolve?.('jump')
+                    resumeResolve?.()
                 }
             }
             nl = stdinBuf.indexOf('\n')

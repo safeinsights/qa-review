@@ -24,6 +24,8 @@ export function StepsPanel({
     cdpPort,
     emphasizeClaude,
     onOpenCompanion,
+    onJumpTo,
+    jumpQueuedIndex,
 }: {
     stepNames: string[]
     steps: StepEnvelope[]
@@ -45,6 +47,9 @@ export function StepsPanel({
     // Emphasize the toggle when something needs attention (browser live / failed run).
     emphasizeClaude: boolean
     onOpenCompanion: () => void
+    // Double-click a step to relocate a live run to it (absent when no run is live).
+    onJumpTo?: (index: number) => void
+    jumpQueuedIndex?: number | null
 }) {
     return (
         <section style={styles.card}>
@@ -68,6 +73,8 @@ export function StepsPanel({
                 selectedIndex={selectedIndex}
                 onSelect={onSelect}
                 onAskClaude={onOpenCompanion}
+                onJumpTo={onJumpTo}
+                jumpQueuedIndex={jumpQueuedIndex}
             />
 
             <Hint

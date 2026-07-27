@@ -91,14 +91,19 @@ export function parseLine(line: string): Envelope | null {
 //   { "type": "resume" }                                    — continue a halted run
 //   { "type": "retry-step" }                                — re-run the failed step
 //   { "type": "give-up" }                                   — fail a step-failed run
+//   { "type": "jump-to", "index": 4 }                       — relocate to a step, then continue
 // pause-set carries the FULL current set (idempotent, race-free): each live toggle
 // sends the whole set, so engine and GUI never drift. retry-step / give-up resolve a
 // step-failed hold (see stepFailedLine); resume resolves a pause / error-hold.
+// jump-to latches a target the run loop honors at its next step boundary — a step
+// already in flight can't be interrupted, so a jump sent mid-step takes effect once
+// that step finishes.
 export type ControlMessage =
     | { type: 'pause-set'; steps: string[] }
     | { type: 'resume' }
     | { type: 'retry-step' }
     | { type: 'give-up' }
+    | { type: 'jump-to'; index: number }
 
 export function pauseSetLine(steps: string[]): string {
     return `${JSON.stringify({ type: 'pause-set', steps })}\n`
@@ -114,6 +119,10 @@ export function retryStepLine(): string {
 
 export function giveUpLine(): string {
     return `${JSON.stringify({ type: 'give-up' })}\n`
+}
+
+export function jumpToLine(index: number): string {
+    return `${JSON.stringify({ type: 'jump-to', index })}\n`
 }
 
 // Parse one inbound control line, or null if it isn't a valid control message.
@@ -133,6 +142,15 @@ export function parseControlLine(line: string): ControlMessage | null {
         const steps = (obj as Record<string, unknown>).steps
         if (Array.isArray(steps) && steps.every(s => typeof s === 'string')) {
             return { type: 'pause-set', steps: steps as string[] }
+        }
+    }
+    if (t === 'jump-to') {
+        // A step index, so anything but a non-negative integer is malformed. The
+        // upper bound is the engine's to check — only IT knows the live suite's
+        // length (which a retry-reload can change).
+        const index = (obj as Record<string, unknown>).index
+        if (typeof index === 'number' && Number.isInteger(index) && index >= 0) {
+            return { type: 'jump-to', index }
         }
     }
     return null

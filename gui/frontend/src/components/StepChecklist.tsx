@@ -15,6 +15,8 @@ export function StepChecklist({
     selectedIndex,
     onSelect,
     onAskClaude,
+    onJumpTo,
+    jumpQueuedIndex,
 }: {
     // Static, ordered step names (from the selected suite). Source of truth for rows.
     stepNames: string[]
@@ -30,6 +32,11 @@ export function StepChecklist({
     // Open the Claude companion drawer — offered inline beneath a failed step so the
     // trigger is right at the failure (the header toggle scrolls off on long suites).
     onAskClaude?: () => void
+    // Double-click a row to relocate a live run to it. Absent when no run is live.
+    onJumpTo?: (index: number) => void
+    // A requested jump the engine hasn't reached yet (it lands at the next step
+    // boundary), so the target row can say so instead of looking unresponsive.
+    jumpQueuedIndex?: number | null
 }) {
     // One event per executed position, in order (see stepsByIndex). Positional —
     // NOT keyed by name — so a suite with repeated step names (study-happy-path's
@@ -46,7 +53,7 @@ export function StepChecklist({
     if (rows.length === 0) return null
 
     return (
-        <div>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {rows.map((row, i) => (
                 <StepRow
                     // Rows are intentionally positional — a suite may repeat a step name
@@ -64,9 +71,11 @@ export function StepChecklist({
                     onTogglePause={onTogglePause}
                     onSelect={onSelect}
                     onAskClaude={onAskClaude}
+                    onJumpTo={onJumpTo}
+                    jumpQueued={jumpQueuedIndex === i}
                 />
             ))}
-        </div>
+        </ul>
     )
 }
 
@@ -84,6 +93,8 @@ function StepRow({
     onTogglePause,
     onSelect,
     onAskClaude,
+    onJumpTo,
+    jumpQueued,
 }: {
     name: string
     ev?: StepEnvelope
@@ -95,6 +106,8 @@ function StepRow({
     onTogglePause: (name: string) => void
     onSelect: (index: number, step: StepEnvelope) => void
     onAskClaude?: () => void
+    onJumpTo?: (index: number) => void
+    jumpQueued?: boolean
 }) {
     const status = ev?.status ?? 'pending'
     const hasShot = !!ev?.screenshot
@@ -103,8 +116,24 @@ function StepRow({
     // A step can be paused-before only while it hasn't run yet.
     const canToggle = status !== 'passed' && status !== 'failed'
     return (
-        <div
+        <li
             className="fade-up"
+            // Double-click jumps a live run here. It's an ADDITIVE shortcut layered on
+            // the row (the inner button keeps the primary click action), so the row
+            // stays a list item and gains a keyboard equivalent — shift+Enter — rather
+            // than becoming a button and swallowing the inner one.
+            onDoubleClick={onJumpTo ? () => onJumpTo(index) : undefined}
+            onKeyDown={
+                onJumpTo
+                    ? e => {
+                          if (e.shiftKey && e.key === 'Enter') {
+                              e.preventDefault()
+                              onJumpTo(index)
+                          }
+                      }
+                    : undefined
+            }
+            title={onJumpTo ? 'Double-click to jump the run to this step' : undefined}
             style={{
                 display: 'flex',
                 alignItems: 'baseline',
@@ -133,7 +162,11 @@ function StepRow({
         >
             <button
                 type="button"
-                onClick={() => {
+                onClick={e => {
+                    // detail is the click count: a double-click fires onClick TWICE
+                    // before onDoubleClick, which would toggle the pause on and back
+                    // off. Ignore every click past the first of a multi-click.
+                    if (e.detail > 1) return
                     if (canToggle) onTogglePause(name)
                 }}
                 title={canToggle ? 'Click to pause before this step' : undefined}
@@ -198,9 +231,17 @@ function StepRow({
                     {duration}
                 </span>
             ) : null}
-            {/* Right slot: a captured snapshot (click to view) takes precedence once a
-                step has run; otherwise a ⏸ marker. */}
-            {hasShot && ev ? (
+            {/* Right slot: a pending jump wins (it's the most urgent state), then a
+                captured snapshot (click to view) once a step has run, else a ⏸ marker. */}
+            {jumpQueued ? (
+                <span
+                    className="mono st-warn"
+                    title="Jumping here once the current step finishes"
+                    style={{ flex: 'none', fontSize: 11 }}
+                >
+                    ⤼ queued
+                </span>
+            ) : hasShot && ev ? (
                 <button
                     type="button"
                     title="View snapshot at this step"
@@ -272,7 +313,7 @@ function StepRow({
                     💬 Ask Claude about this
                 </button>
             ) : null}
-        </div>
+        </li>
     )
 }
 
@@ -293,6 +334,13 @@ function Mark({ status }: { status: string }) {
         return (
             <span className="st-warn mono" style={{ fontWeight: 600 }}>
                 ▸
+            </span>
+        )
+    // Jumped over — never ran, and not a failure.
+    if (status === 'skipped')
+        return (
+            <span className="mono" style={{ fontWeight: 600, color: 'var(--ink-faint)' }}>
+                ⊘
             </span>
         )
     // Not yet reached.
