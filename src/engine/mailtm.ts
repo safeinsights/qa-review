@@ -76,9 +76,14 @@ export async function activeDomain(): Promise<string> {
 let seq = 0
 
 // A collision-free-enough local part: a per-process counter + a CSPRNG suffix.
+// MUST start with "qa" — the management-app's QA endpoints run on production and
+// guard every account they touch with assertQaEmail (local part matches /^qa/i);
+// an address that doesn't start with "qa" gets a 403, so cleanup would leave the
+// created account orphaned on real data. The mailtm.test.ts "qa-prefixed" case
+// pins this.
 function uniqueLocalPart(): string {
     seq += 1
-    return `qar-signup-${seq}-${randomToken(8)}`
+    return `qa-signup-${seq}-${randomToken(8)}`
 }
 
 // Create a fresh mail.tm account and return an authenticated Inbox.

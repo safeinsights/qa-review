@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { activeDomain, createInbox, deleteInbox, extractSignupUrl } from '@/engine/mailtm'
 
+function jsonResponse(body: unknown, status: number): Response {
+    return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+    })
+}
+
 describe('mail.tm client (live)', () => {
     it('returns an active domain', async () => {
         const domain = await activeDomain()
@@ -15,6 +22,36 @@ describe('mail.tm client (live)', () => {
         expect(inbox.id).toBeTruthy()
         await deleteInbox(inbox) // must not throw
     }, 30_000)
+})
+
+describe('createInbox address (qa-prefixed)', () => {
+    // The management-app's QA endpoints run on production and reject any account
+    // whose email local part doesn't start with "qa" (assertQaEmail: /^qa/i). If a
+    // created inbox weren't qa-prefixed, cleanup would 403 and orphan a real
+    // account. Pin the prefix here so a rename of the local part trips CI, not prod.
+    // Mock fetch so this is deterministic and offline (no live mail.tm dependency).
+    it('generates a local part that starts with "qa"', async () => {
+        const realFetch = globalThis.fetch
+        globalThis.fetch = (async (url: string, init?: RequestInit) => {
+            const path = String(url)
+            if (path.includes('/token')) {
+                return jsonResponse({ token: 'tok' }, 200)
+            }
+            // POST /accounts: echo back the address it was sent, as mail.tm does —
+            // so the test exercises the real generated local part (not a stub).
+            const sent = JSON.parse(String(init?.body ?? '{}')) as { address?: string }
+            return jsonResponse({ id: 'id-1', address: sent.address }, 201)
+        }) as unknown as typeof fetch
+        try {
+            const { createInbox } = await import('@/engine/mailtm')
+            const inbox = await createInbox('example.test')
+            const localPart = inbox.address.split('@')[0]
+            // Same rule the management-app enforces (assertQaEmail).
+            expect(localPart).toMatch(/^qa/i)
+        } finally {
+            globalThis.fetch = realFetch
+        }
+    })
 })
 
 describe('extractSignupUrl', () => {
