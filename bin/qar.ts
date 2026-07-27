@@ -16,6 +16,7 @@ import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
+import { studyStateCommand } from '@/cli/commands/study-state'
 import { syncCommand } from '@/cli/commands/sync'
 import { totpCommand } from '@/cli/commands/totp'
 import { verdictPostedCommand } from '@/cli/commands/verdict'
@@ -95,6 +96,8 @@ async function main() {
             return inviteCommand(opts, await loadSettings())
         case 'fix-account':
             return fixAccountCommand(opts, await loadSettings())
+        case 'study-state':
+            return studyStateCommand(opts, await loadSettings())
         case 'jira-comment':
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-delete-comment':

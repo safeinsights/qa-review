@@ -118,6 +118,17 @@ export const COMMANDS: CommandHelp[] = [
             'touched. Prompts before writing unless --yes.',
     },
     {
+        name: 'study-state',
+        usage: 'qar study-state --study <id> [--env <env> | --pr <n>] [--status <s>] [--job-status <s>] [--result <file>] [--log <file>]',
+        summary: "Set a study's status and/or attach results, without an enclave run.",
+        details:
+            'Reaching "results are back and awaiting review" normally needs a real run ' +
+            "(minutes), and on a PR preview can't happen at all — there's no compute " +
+            'backend. Files are sent as plaintext and encrypted server-side to the ' +
+            'reviewing org, so that org needs a public key enrolled first (see ' +
+            "fix-account). Artifacts attach to the study's LATEST job.",
+    },
+    {
         name: 'jira-comment',
         usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',

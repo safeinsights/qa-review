@@ -38,8 +38,9 @@ neither is a bug, and both will look like one if you forget:
   `qar session-create-user` for a fresh user). An empty dashboard is NOT a
   regression and must not be reported as one.
 - **PR environments do not actually run code.** There's no compute backend
-  attached, so a submitted study never progresses to real results. Don't wait on a
-  run to finish or treat absent results as a failure — validate up to the point
+  attached, so a submitted study never progresses to real results on its own. If a
+  check needs a later state (results back, awaiting review, approved), set it
+  directly with `qar study-state` — see below. Otherwise validate up to the point
   where execution would begin, and say so in the verdict.
 
 ## Keeping the session smooth (IMPORTANT — read before running anything)
@@ -88,6 +89,22 @@ and print the created id as JSON so you can clean it up afterward:
   specific role.) The invite URL comes back from the API, so there is no email wait.
 - **`qar session-create-study`** — logs the session in as researcher and submits a
   full study proposal. Prints `{"studyId":"…"}`.
+- **`qar study-state --study <id> …`** — put a study into a later lifecycle state
+  WITHOUT waiting on an enclave run (which takes minutes on QA and never happens at
+  all on a PR preview). Combine any of:
+  `--status <APPROVED|ARCHIVED|CHANGE-REQUESTED|DRAFT|PENDING-REVIEW|REJECTED>`,
+  `--job-status <RUN-COMPLETE|JOB-RUNNING|…>`, `--result <file>`, `--log <file>`.
+  Omitted fields are untouched. Example — land on "results are back, awaiting review":
+
+  ```
+  qar study-state --study <id> --job-status RUN-COMPLETE --result results.csv
+  ```
+
+  Attached files are sent as PLAINTEXT and encrypted server-side to the reviewing
+  org, so that org needs a results public key enrolled — if you get
+  `no public keys enrolled`, run `qar fix-account --role reviewer --env <env>` first.
+  Artifacts attach to the study's LATEST job, so the study must already have one
+  (i.e. it was submitted).
 
 Track the printed ids and clean them up when done — see "Cleaning up created
 users/studies" below (cleanup needs an admin token you read from the browser).

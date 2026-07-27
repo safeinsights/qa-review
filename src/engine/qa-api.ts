@@ -45,6 +45,55 @@ export interface QaInviteResult {
     alreadyInvited: boolean
 }
 
+// The study lifecycle states the endpoint accepts.
+export const STUDY_STATUSES = [
+    'APPROVED',
+    'ARCHIVED',
+    'CHANGE-REQUESTED',
+    'DRAFT',
+    'PENDING-REVIEW',
+    'REJECTED',
+] as const
+export type StudyStatus = (typeof STUDY_STATUSES)[number]
+
+export const JOB_STATUSES = [
+    'CODE-APPROVED',
+    'CODE-CHANGES-REQUESTED',
+    'CODE-REJECTED',
+    'CODE-SCANNED',
+    'CODE-SUBMITTED',
+    'FILES-APPROVED',
+    'FILES-REJECTED',
+    'INITIATED',
+    'JOB-ERRORED',
+    'JOB-PACKAGING',
+    'JOB-PROVISIONING',
+    'JOB-READY',
+    'JOB-RUNNING',
+    'RUN-COMPLETE',
+] as const
+export type JobStatus = (typeof JOB_STATUSES)[number]
+
+// Artifacts attach to the study's LATEST job. Files are sent as PLAINTEXT and
+// encrypted server-side to the reviewing org — QA has no enclave to produce
+// ciphertext. That means the reviewing org must already have a public key enrolled,
+// or the endpoint answers 400 (fix with provisionUser's publicKey / `qar fix-account`).
+export interface QaStudyStateUpdate {
+    studyStatus?: StudyStatus
+    jobStatus?: JobStatus
+    // Plaintext bytes; the server wraps them in the encrypted-zip envelope.
+    result?: { name: string; content: string | Uint8Array }
+    log?: { name: string; content: string | Uint8Array }
+}
+
+export interface QaStudyStateResult {
+    studyId: string
+    studyJobId: string | null
+    studyStatus: StudyStatus
+    jobStatus: JobStatus | null
+    files: { key: 'result' | 'log'; fileType: string; name: string }[]
+}
+
 // The endpoints answer 4xx with `{ error }` (and a `details` array for a Zod failure).
 // Surface that text — "is not a QA account" or "organization with slug X not found" is
 // the actionable part, and a bare status code hides it.
@@ -57,9 +106,12 @@ async function errorFor(res: Response, what: string): Promise<Error> {
     } catch {
         detail = await res.text().catch(() => '')
     }
+    // A study has no email of its own, so its RESEARCHER's address is what the guard
+    // checks — which is why a study created by a real user is refused too.
     const hint =
         res.status === 403
-            ? ' — the endpoints only touch accounts whose email local part starts with "qa"'
+            ? ' — the endpoints only touch QA accounts (email local part starts with "qa"); ' +
+              "for a study that means its researcher's address"
             : ''
     return new Error(`${what} failed (HTTP ${res.status})${detail ? `: ${detail}` : ''}${hint}`)
 }
@@ -100,5 +152,39 @@ export class QaApiClient {
         const res = await this.send('POST', '/api/qa/invites', invite)
         if (!res.ok) throw await errorFor(res, `inviting ${invite.email}`)
         return (await res.json()) as QaInviteResult
+    }
+
+    // Drive a study (and its latest job) to a given state, optionally attaching result
+    // and/or log artifacts — without an enclave run. This is what makes "results are
+    // back and awaiting review" reachable in seconds, and reachable AT ALL on a PR
+    // preview, where no compute backend exists to produce them.
+    //
+    // Omitted fields are left untouched; setting nothing is a 400 rather than a silent
+    // no-op. Files attach to the study's LATEST job, so a study with no job is a 400.
+    async setStudyState(studyId: string, update: QaStudyStateUpdate): Promise<QaStudyStateResult> {
+        // multipart, not JSON — the point of the endpoint is attaching a file, and the
+        // statuses ride along as ordinary form fields. Content-Type is deliberately NOT
+        // set: fetch derives it from the FormData so the multipart boundary matches.
+        const form = new FormData()
+        if (update.studyStatus) form.append('studyStatus', update.studyStatus)
+        if (update.jobStatus) form.append('jobStatus', update.jobStatus)
+        for (const key of ['result', 'log'] as const) {
+            const file = update[key]
+            if (!file) continue
+            // A plain string under this key would be stored as a file containing that
+            // literal text, so it must go as a Blob.
+            form.append(key, new Blob([file.content as BlobPart]), file.name)
+        }
+
+        const res = await this.fetchImpl(
+            `${this.baseURL}/api/qa/studies/${encodeURIComponent(studyId)}/status`,
+            {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${this.authToken}` },
+                body: form,
+            }
+        )
+        if (!res.ok) throw await errorFor(res, `setting state for study ${studyId}`)
+        return (await res.json()) as QaStudyStateResult
     }
 }

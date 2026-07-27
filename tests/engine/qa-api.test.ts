@@ -142,3 +142,103 @@ describe('uniqueQaEmail', () => {
         expect(seen.size).toBe(50)
     })
 })
+
+describe('QaApiClient.setStudyState', () => {
+    const stateResult = {
+        studyId: 's1',
+        studyJobId: 'j1',
+        studyStatus: 'PENDING-REVIEW',
+        jobStatus: 'RUN-COMPLETE',
+        files: [{ key: 'result', fileType: 'ENCRYPTED-RESULT', name: 'results.csv' }],
+    }
+
+    it('PATCHes multipart form data to the status route', async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(200, stateResult))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+
+        await expect(
+            api.setStudyState('s1', { studyStatus: 'PENDING-REVIEW', jobStatus: 'RUN-COMPLETE' })
+        ).resolves.toEqual(stateResult)
+
+        const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+        expect(url).toBe(`${BASE}/api/qa/studies/s1/status`)
+        expect(init.method).toBe('PATCH')
+        const form = init.body as FormData
+        expect(form).toBeInstanceOf(FormData)
+        expect(form.get('studyStatus')).toBe('PENDING-REVIEW')
+        expect(form.get('jobStatus')).toBe('RUN-COMPLETE')
+    })
+
+    // Setting Content-Type by hand would omit the multipart boundary, and the server
+    // would fail to parse the body ("must be multipart/form-data").
+    it('lets fetch set Content-Type so the multipart boundary is generated', async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(200, stateResult))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await api.setStudyState('s1', { studyStatus: 'APPROVED' })
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+        const headers = init.headers as Record<string, string>
+        expect(headers.Authorization).toBe(`Bearer ${TOKEN}`)
+        expect(Object.keys(headers)).not.toContain('Content-Type')
+    })
+
+    // A plain string under `result` would be stored as a file containing that literal
+    // text — the server rejects it, so the content must go as a Blob with a filename.
+    it('attaches artifacts as named files, not strings', async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(200, stateResult))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await api.setStudyState('s1', {
+            result: { name: 'results.csv', content: 'a,b\n1,2\n' },
+            log: { name: 'run.log', content: 'done\n' },
+        })
+        const form = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1]
+            .body as FormData
+
+        const result = form.get('result')
+        expect(result).toBeInstanceOf(Blob)
+        expect((result as File).name).toBe('results.csv')
+        await expect((result as File).text()).resolves.toBe('a,b\n1,2\n')
+
+        const log = form.get('log')
+        expect((log as File).name).toBe('run.log')
+        await expect((log as File).text()).resolves.toBe('done\n')
+    })
+
+    it('omits fields that were not set', async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(200, stateResult))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await api.setStudyState('s1', { jobStatus: 'JOB-RUNNING' })
+        const form = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1]
+            .body as FormData
+        expect([...form.keys()]).toEqual(['jobStatus'])
+    })
+
+    it('encodes the study id in the path', async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(200, stateResult))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await api.setStudyState('a/b', { studyStatus: 'APPROVED' })
+        const [url] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+        expect(url).toBe(`${BASE}/api/qa/studies/a%2Fb/status`)
+    })
+
+    // The reviewing org must have a public key enrolled or the server can't produce a
+    // readable artifact — the error names the fix, so surface it.
+    it('surfaces the no-recipient-keys 400', async () => {
+        const fetchImpl = vi.fn(async () =>
+            jsonRes(400, {
+                error: 'reviewing org has no public keys enrolled; set one via PATCH /api/qa/users/{idOrEmail} before attaching files',
+            })
+        )
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await expect(
+            api.setStudyState('s1', { result: { name: 'r.csv', content: 'x' } })
+        ).rejects.toThrow(/no public keys enrolled/)
+    })
+
+    it("explains a 403 in terms of the study's researcher", async () => {
+        const fetchImpl = vi.fn(async () => jsonRes(403, { error: 'is not a QA study' }))
+        const api = new QaApiClient(BASE, TOKEN, fetchImpl)
+        await expect(api.setStudyState('s1', { studyStatus: 'APPROVED' })).rejects.toThrow(
+            /researcher's address/
+        )
+    })
+})
