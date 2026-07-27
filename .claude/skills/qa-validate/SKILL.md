@@ -30,6 +30,18 @@ approve actions.
 - The prompt names the **target** (`--env <name>` or `--pr <n>`) and the **Jira
   card** (e.g. `OTTER-655`). The browser is on that environment, on the login page.
 
+### If the target is a PR preview (`--pr <n>`)
+A PR preview is a fresh deployment of that branch, so two things differ from QA —
+neither is a bug, and both will look like one if you forget:
+- **No studies are preloaded.** Every account's dashboard starts EMPTY. Create
+  whatever a check needs from scratch (`qar session-create-study`, or
+  `qar session-create-user` for a fresh user). An empty dashboard is NOT a
+  regression and must not be reported as one.
+- **PR environments do not actually run code.** There's no compute backend
+  attached, so a submitted study never progresses to real results. Don't wait on a
+  run to finish or treat absent results as a failure — validate up to the point
+  where execution would begin, and say so in the verdict.
+
 ## Keeping the session smooth (IMPORTANT — read before running anything)
 
 - **Never open a new chrome instance or page.** Chrome is already running and the

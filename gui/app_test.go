@@ -360,4 +360,38 @@ func TestComposeValidationPrompt(t *testing.T) {
 			t.Fatalf("PR target not used:\n%s", p)
 		}
 	})
+
+	// A PR preview has empty dashboards and no compute backend. Without saying so,
+	// the validator reads an empty dashboard as a regression and waits on results
+	// that will never arrive.
+	t.Run("a PR target explains the empty dashboards and missing execution", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "")
+		for _, want := range []string{
+			"PR preview environment",
+			"No studies are preloaded",
+			"do NOT actually run code",
+		} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("PR caveat missing %q:\n%s", want, p)
+			}
+		}
+	})
+
+	t.Run("the PR caveat is absent on a plain env run", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "")
+		if strings.Contains(p, "PR preview environment") {
+			t.Fatalf("PR caveat should not appear for --env qa:\n%s", p)
+		}
+	})
+
+	// The user's own instructions must stay the LAST paragraph, so they aren't
+	// buried above a wall of boilerplate.
+	t.Run("user instructions still come last on a PR run", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "Check the CSV export.")
+		caveat := strings.Index(p, "PR preview environment")
+		instructions := strings.Index(p, "Additional instructions from the user:")
+		if caveat < 0 || instructions < 0 || instructions < caveat {
+			t.Fatalf("instructions should follow the PR caveat:\n%s", p)
+		}
+	})
 }

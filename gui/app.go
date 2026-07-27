@@ -559,8 +559,9 @@ func composeAuthoringPrompt(env, pr, role, instruction string) string {
 // NOT logged in — the skill infers the role from the ticket and logs in itself.
 // Any user-supplied `instructions` are appended as a separate final paragraph.
 func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
+	isPR := strings.TrimSpace(pr) != ""
 	target := "--env " + env
-	if strings.TrimSpace(pr) != "" {
+	if isPR {
 		target = "--pr " + pr
 	}
 	prompt := fmt.Sprintf(
@@ -571,11 +572,26 @@ func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
 			"acceptance criteria. Give a clear PASS/FAIL verdict.",
 		target, jiraCard,
 	)
+	if isPR {
+		prompt += "\n\n" + prEnvCaveat
+	}
 	if s := strings.TrimSpace(instructions); s != "" {
 		prompt += "\n\nAdditional instructions from the user:\n" + s
 	}
 	return prompt
 }
+
+// prEnvCaveat sets expectations that only hold on a PR preview, so the validator
+// doesn't read an empty dashboard as a regression or sit waiting on results that
+// will never arrive. A PR preview is a fresh deployment: the accounts exist but
+// their dashboards start empty, and there is no compute backend attached.
+const prEnvCaveat = "IMPORTANT — this is a PR preview environment, not QA:\n" +
+	"- No studies are preloaded. Every account's dashboard starts EMPTY, which is " +
+	"expected and is NOT a bug. Create whatever a check needs from scratch " +
+	"(`qar session-create-study`, or `qar session-create-user` for a fresh user).\n" +
+	"- PR environments do NOT actually run code. A submitted study will never " +
+	"progress to real results, so don't wait on a run to complete or treat missing " +
+	"results as a failure — validate up to the point where execution would begin."
 
 // composeCompanionPrompt is the companion Claude's first message: invoke the
 // qa-run-companion skill for the suite whose run is on screen. The browser is the
