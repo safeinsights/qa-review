@@ -92,8 +92,11 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: 'totp',
-        usage: 'qar totp --secret <base32>',
+        usage: 'qar totp (--secret <base32> | --role <role> [--env <env> | --pr <n>])',
         summary: 'Print the current 6-digit MFA code.',
+        details:
+            'With --secret, computes the code from a raw base32 seed. With --role, resolves ' +
+            "the account's second factor from the settings files (--env defaults to qa).",
     },
     {
         name: 'jira-comment',

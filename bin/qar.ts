@@ -77,7 +77,7 @@ async function main() {
         case 'mail-wait':
             return mailWaitCommand(opts)
         case 'totp':
-            return totpCommand(opts)
+            return totpCommand(opts, await loadSettings())
         case 'jira-comment':
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-delete-comment':
