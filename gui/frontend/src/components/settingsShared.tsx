@@ -1,6 +1,13 @@
-import { ActionIcon, Button, SegmentedControl, Tabs, Textarea, TextInput } from '@mantine/core'
+import { ActionIcon, Button, SegmentedControl, Textarea, TextInput } from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
-import { readSettings, revealSecret, type SettingField, writeSetting } from '../lib/ipc'
+import {
+    clearSetting,
+    readSettings,
+    revealSecret,
+    type SettingField,
+    writeSetting,
+} from '../lib/ipc'
+import type { EnvCard } from './settingsGrouping'
 
 // Shared building blocks for the settings-style panels (Settings + Accounts). Both
 // read the same merged settings view; each renders a filtered slice of the fields.
@@ -20,6 +27,10 @@ export function useSettings() {
     const [hasIdentity, setHasIdentity] = useState(false)
     const [error, setError] = useState('')
     const [savedKey, setSavedKey] = useState('')
+    // The one env selection driving the whole panel. Every env-scoped field (all
+    // account fields + the base URL) renders under it, so switching env swaps them
+    // together instead of per account.
+    const [selectedEnv, setEnv] = useState('qa')
 
     const load = useCallback(async () => {
         try {
@@ -59,119 +70,80 @@ export function useSettings() {
         }
     }
 
-    const rowProps: RowProps = { drafts, setDraft, save, savedKey, hasIdentity }
-    return { fields, hasIdentity, error, setError, rowProps }
-}
-
-// Group the fields of one account into its plain (non-env) fields plus one entry
-// per env-tabbed SECTION (e.g. "Account", "Results private key"). Each section
-// carries its envs in order, each env its fields — so one env tab can hold several
-// inputs (the Account section's email + password + MFA code + seed).
-export interface EnvTab {
-    env: string
-    fields: SettingField[]
-}
-export interface GroupCard {
-    group: string
-    plain: SettingField[]
-    sections: { section: string; envs: EnvTab[] }[]
-}
-export function toGroupCards(fields: SettingField[]): GroupCard[] {
-    const groups = [...new Set(fields.filter(f => f.group).map(f => f.group))]
-    return groups.map(group => {
-        const groupFields = fields.filter(f => f.group === group)
-        const plain = groupFields.filter(f => !f.env)
-        const sectionLabels = [...new Set(groupFields.filter(f => f.env).map(f => f.section))]
-        return {
-            group,
-            plain,
-            sections: sectionLabels.map(section => {
-                const sectionFields = groupFields.filter(f => f.env && f.section === section)
-                const envs = [...new Set(sectionFields.map(f => f.env))]
-                return {
-                    section,
-                    envs: envs.map(env => ({
-                        env,
-                        fields: sectionFields.filter(f => f.env === env),
-                    })),
-                }
-            }),
+    // Unset a field entirely (every tier). load() re-seeds the drafts, so the row
+    // comes back as "not set" with an empty input.
+    const clear = async (f: SettingField) => {
+        setError('')
+        setSavedKey('')
+        try {
+            await clearSetting(f.key)
+            await load()
+        } catch (e) {
+            setError((e as Error).message)
         }
-    })
+    }
+
+    // The envs present in the loaded fields, in first-seen order. Fall back to the
+    // first one if the selection isn't among them — on the first render `fields` is
+    // still empty, and the backend's env list shouldn't be assumed to contain "qa".
+    const envs = [...new Set(fields.filter(f => f.env).map(f => f.env))]
+    const env = envs.includes(selectedEnv) ? selectedEnv : (envs[0] ?? selectedEnv)
+    const rowProps: RowProps = { drafts, setDraft, save, clear, savedKey, hasIdentity }
+    return { fields, hasIdentity, error, setError, rowProps, env, setEnv, envs }
 }
 
 export interface RowProps {
     drafts: Record<string, Draft>
     setDraft: (key: string, patch: Partial<Draft>) => void
     save: (f: SettingField) => void
+    clear: (f: SettingField) => void
     savedKey: string
     hasIdentity: boolean
 }
 
-// One account's env-tabbed body: ONE env selector at the top drives every section
-// below (Account fields + Results private key), so switching env swaps all of that
-// account's fields together — no per-section tabs. Each section renders as a label
-// followed by that env's fields. A tab shows ✓ if the account has any value set in
-// that env (across all sections).
-export function AccountCard({ card, ...rowProps }: { card: GroupCard } & RowProps) {
-    // The union of envs across the account's sections, in first-seen order.
-    const envs = [...new Set(card.sections.flatMap(s => s.envs.map(e => e.env)))]
-    const [tab, setTab] = useState(envs[0] ?? 'qa')
-    const isSetInEnv = (env: string) =>
-        card.sections.some(s => s.envs.find(e => e.env === env)?.fields.some(f => f.set))
-
+// One card's body for the selected env: each section renders as an optional label
+// followed by its fields. The env itself is chosen once, above — this only ever
+// renders the fields it was handed.
+export function EnvCardBody({ card, ...rowProps }: { card: EnvCard } & RowProps) {
     return (
-        <Tabs value={tab} onChange={v => setTab(v ?? envs[0] ?? 'qa')} mt={6}>
-            <Tabs.List>
-                {envs.map(env => (
-                    <Tabs.Tab key={env} value={env}>
-                        {env}
-                        {isSetInEnv(env) ? ' ✓' : ''}
-                    </Tabs.Tab>
-                ))}
-            </Tabs.List>
-            {envs.map(env => (
-                <Tabs.Panel key={env} value={env} pt={10}>
-                    {card.sections.map((s, i) => {
-                        const fields = s.envs.find(e => e.env === env)?.fields ?? []
-                        if (!fields.length) return null
-                        // The first section sits directly under the env tabs — no divider
-                        // there. Later sections keep a top border to separate them.
-                        return (
-                            <div
-                                key={s.section}
-                                style={
-                                    i === 0
-                                        ? undefined
-                                        : {
-                                              borderTop: '1px solid var(--line)',
-                                              paddingTop: 12,
-                                              marginTop: 12,
-                                          }
-                                }
-                            >
-                                {/* The "Account" section heading is redundant with the card's
-                                    own "<Role> account" title, so only label multi-purpose
-                                    sections (e.g. "Results private key"). */}
-                                {s.section !== 'Account' ? (
-                                    <span style={{ fontWeight: 600 }}>{s.section}</span>
-                                ) : null}
-                                {fields.map(f => (
-                                    <FieldRow
-                                        key={f.key}
-                                        field={f}
-                                        {...rowProps}
-                                        // A single-field section (Results private key) is already
-                                        // named by the heading above — don't repeat the label.
-                                        hideLabel={fields.length === 1}
-                                    />
-                                ))}
-                            </div>
-                        )
-                    })}
-                </Tabs.Panel>
-            ))}
-        </Tabs>
+        <>
+            {card.sections.map((s, i) => {
+                if (!s.fields.length) return null
+                // The first section sits directly under the card title — no divider
+                // there. Later sections keep a top border to separate them.
+                return (
+                    <div
+                        key={s.section}
+                        style={
+                            i === 0
+                                ? undefined
+                                : {
+                                      borderTop: '1px solid var(--line)',
+                                      paddingTop: 12,
+                                      marginTop: 12,
+                                  }
+                        }
+                    >
+                        {/* The "Account" section heading is redundant with the card's own
+                            "<Role> account" title, so only label multi-purpose sections
+                            (e.g. "Results private key"). */}
+                        {s.section !== 'Account' && s.section !== 'Environment' ? (
+                            <span style={{ fontWeight: 600 }}>{s.section}</span>
+                        ) : null}
+                        {s.fields.map(f => (
+                            <FieldRow
+                                key={f.key}
+                                field={f}
+                                {...rowProps}
+                                // A single-field section (Results private key) is already
+                                // named by the heading above — don't repeat the label.
+                                hideLabel={s.fields.length === 1 && s.section !== 'Environment'}
+                            />
+                        ))}
+                    </div>
+                )
+            })}
+        </>
     )
 }
 
@@ -180,6 +152,7 @@ export function FieldRow({
     drafts,
     setDraft,
     save,
+    clear,
     savedKey,
     hasIdentity,
     hideLabel,
@@ -194,6 +167,9 @@ export function FieldRow({
     // decrypt/identity failure inline.
     const [revealed, setRevealed] = useState<string | null>(null)
     const [revealErr, setRevealErr] = useState('')
+    // Clearing is destructive and may be removing the only copy of a secret, so the
+    // button arms on the first click and only clears on the second.
+    const [confirmingClear, setConfirmingClear] = useState(false)
     const toggleReveal = async () => {
         if (revealed !== null) {
             setRevealed(null)
@@ -254,6 +230,26 @@ export function FieldRow({
             {savedKey === f.key ? 'Saved' : 'Save'}
         </Button>
     )
+    // Only offer Clear for a field that actually holds a value. onBlur disarms, so
+    // clicking away cancels rather than leaving a primed destructive button.
+    const clearButton = f.set ? (
+        <Button
+            onClick={() => {
+                if (!confirmingClear) {
+                    setConfirmingClear(true)
+                    return
+                }
+                setConfirmingClear(false)
+                clear(f)
+            }}
+            onBlur={() => setConfirmingClear(false)}
+            color="red"
+            variant={confirmingClear ? 'filled' : 'subtle'}
+            title={`Remove ${f.label} from every settings file`}
+        >
+            {confirmingClear ? 'Confirm?' : 'Clear'}
+        </Button>
+    ) : null
     return (
         <div
             style={
@@ -305,6 +301,7 @@ export function FieldRow({
                     >
                         {tierControl}
                         {saveButton}
+                        {clearButton}
                     </div>
                 </div>
             ) : (
@@ -336,6 +333,7 @@ export function FieldRow({
                     )}
                     {tierControl}
                     {saveButton}
+                    {clearButton}
                 </div>
             )}
             {revealErr ? (

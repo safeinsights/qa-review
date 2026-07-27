@@ -205,6 +205,109 @@ func TestWriteSettingMovesBetweenTiers(t *testing.T) {
 	}
 }
 
+// Clearing a field removes it from EVERY tier file, so no lower-precedence copy
+// survives. Clearing a committed secret also refreshes the keyring lock.
+func TestClearSetting(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := age.GenerateX25519Identity()
+	writeTestKeyring(t, dir, id.Recipient().String())
+	app := &App{}
+
+	// A committed (encrypted) secret, plus a stale plaintext copy of the same key
+	// in the local file — clearing must remove BOTH.
+	if err := app.WriteSetting(dir, "ADMIN_PASSWORD_QA", "pw-admin", "project"); err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(dir, "config", localFile)
+	lm, err := readSettingsFile(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lm["ADMIN_PASSWORD_QA"] = "stale-plaintext"
+	if err := writeSettingsFile(local, lm); err != nil {
+		t.Fatal(err)
+	}
+
+	lockBefore, err := os.ReadFile(filepath.Join(dir, "config", "keyring.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "config", "keyring.lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ClearSetting(dir, "ADMIN_PASSWORD_QA"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	for _, f := range []string{projectFile, secretsFile, localFile} {
+		if _, ok := readJSON(t, filepath.Join(dir, "config", f))["ADMIN_PASSWORD_QA"]; ok {
+			t.Fatalf("ADMIN_PASSWORD_QA still present in %s after clear", f)
+		}
+	}
+	// Clearing an encrypted secret rewrites the secrets file, so the lock must be
+	// refreshed to match the recipient set it was (re-)written against.
+	lockAfter, err := os.ReadFile(filepath.Join(dir, "config", "keyring.lock"))
+	if err != nil {
+		t.Fatalf("keyring.lock not refreshed after clearing a secret: %v", err)
+	}
+	if !bytes.Equal(lockBefore, lockAfter) {
+		t.Fatalf("lock fingerprint changed: %q -> %q", lockBefore, lockAfter)
+	}
+
+	// A plaintext project value clears too.
+	if err := app.WriteSetting(dir, "QA_BASE_URL", "https://qa.example", "project"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ClearSetting(dir, "QA_BASE_URL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readJSON(t, filepath.Join(dir, "config", projectFile))["QA_BASE_URL"]; ok {
+		t.Fatal("QA_BASE_URL still present after clear")
+	}
+
+	// Clearing an already-unset field is a no-op, not an error.
+	if err := app.ClearSetting(dir, "REVIEWER_EMAIL_STAGING"); err != nil {
+		t.Fatalf("clearing an unset field should be a no-op: %v", err)
+	}
+
+	// An unknown key must never be stripped out of the settings JSON.
+	if err := app.ClearSetting(dir, "NOT_A_REAL_SETTING"); err == nil {
+		t.Fatal("expected an error clearing an unknown key")
+	}
+}
+
+// Every base URL is tagged with its env so the panel can file it under the selected
+// env tab alongside that env's accounts.
+func TestBaseURLsCarryTheirEnv(t *testing.T) {
+	want := map[string]string{
+		"QA_BASE_URL":         "qa",
+		"STAGING_BASE_URL":    "staging",
+		"PRODUCTION_BASE_URL": "production",
+	}
+	got := map[string]string{}
+	for _, f := range knownVars {
+		if env, ok := want[f.Key]; ok {
+			got[f.Key] = f.Env
+			if f.Env != env {
+				t.Errorf("%s: env = %q, want %q", f.Key, f.Env, env)
+			}
+			if f.Section != "Environment" {
+				t.Errorf("%s: section = %q, want %q", f.Key, f.Section, "Environment")
+			}
+			if f.Secret {
+				t.Errorf("%s must not be secret", f.Key)
+			}
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("missing base URL fields: got %v, want keys of %v", got, want)
+	}
+}
+
 func TestWriteSecretToProjectRequiresKeyring(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QAR_REPO_DIR", dir)

@@ -11,9 +11,9 @@ export interface SettingField {
     key: string
     label: string
     secret: boolean
-    group: string // account section: "Admin" | "Researcher" | "Reviewer" | "" (ungrouped)
-    env: string // for per-env fields (results key, MFA): "qa" | "staging" | "production"; "" otherwise
-    section: string // env-tabbed sub-section label ("Results private key" | "MFA"); "" for plain fields
+    group: string // "Admin" | "Researcher" | "Reviewer" | "Jira" | "" (the base URL)
+    env: string // every account field + the base URL: "qa" | "staging" | "production"; "" only for Jira
+    section: string // sub-section label ("Account" | "Results private key" | "Environment")
     multiline: boolean // render a textarea (PEM keys) vs a one-line input (MFA code/seed)
     tier: string // "project" | "secrets" | "local" | "" (unset)
     value: string
@@ -115,6 +115,7 @@ interface WailsApp {
     ReadSettings(cwd: string): Promise<SettingsView>
     RevealSecret(cwd: string, key: string): Promise<string>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
+    ClearSetting(cwd: string, key: string): Promise<void>
     Sync(cwd: string): Promise<string>
     ResetAndSync(cwd: string): Promise<string>
     RequestAccess(cwd: string, name: string): Promise<string>
@@ -474,6 +475,12 @@ export async function revealSecret(key: string): Promise<string> {
 // Write one field to a tier ("project" commits it; "local" is a gitignored override).
 export async function writeSetting(key: string, value: string, tier: string): Promise<void> {
     await app().WriteSetting('', key, value, tier)
+}
+
+// Unset one field, removing it from every tier file. The only way to clear a value:
+// writeSetting always assigns, and the panel won't save an empty string.
+export async function clearSetting(key: string): Promise<void> {
+    await app().ClearSetting('', key)
 }
 
 // Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged".

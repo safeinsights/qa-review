@@ -76,15 +76,21 @@ var knownVars = buildKnownVars()
 
 func buildKnownVars() []SettingField {
 	fields := []SettingField{
-		{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
-		{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
-		{Key: "PRODUCTION_BASE_URL", Label: "Production base URL", Secret: false, Group: ""},
 		// Jira MCP config for the Validation tab. LocalOnly (gitignored, never
 		// encrypted) — a personal, per-user site/email/token. Not in secretVars:
 		// local-tier values are always plaintext. The token is still Secret for masking.
 		{Key: "JIRA_URL", Label: "Jira site URL", Secret: false, Group: "Jira", LocalOnly: true},
 		{Key: "JIRA_USERNAME", Label: "Jira email", Secret: false, Group: "Jira", LocalOnly: true},
 		{Key: "JIRA_API_TOKEN", Label: "Jira API token", Secret: true, Group: "Jira", LocalOnly: true},
+	}
+	// The per-env base URL. Tagged with its Env (like the account fields) so the
+	// panel can file it under the selected env rather than as a separate list of
+	// three. The label needs no env prefix — the env tab already supplies that.
+	for _, env := range envList {
+		fields = append(fields, SettingField{
+			Key: strings.ToUpper(env) + "_BASE_URL", Label: "Base URL",
+			Secret: false, Group: "", Env: env, Section: "Environment",
+		})
 	}
 	for _, ag := range accountGroups {
 		// The core account fields — one env-tabbed "Account" section per account,
@@ -119,17 +125,17 @@ type SettingField struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
 	Secret bool   `json:"secret"`
-	// Account section this field belongs to ("Admin"/"Researcher"/"Reviewer"),
-	// or "" for ungrouped fields (the base URLs).
+	// Account this field belongs to ("Admin"/"Researcher"/"Reviewer"), "Jira" for
+	// the Jira config, or "" for the account-less base URL.
 	Group string `json:"group"`
-	// For per-environment fields (results private keys, MFA code, MFA seed), the
-	// env this value is for ("qa"/"staging"/"production") — the panel renders these
-	// as sub-tabs within the account. "" for env-agnostic fields (email/password,
-	// base URLs).
+	// The env this value is for ("qa"/"staging"/"production"). EVERY account field
+	// is per-env (email, password, MFA code/seed, results key), as is the base URL.
+	// "" only for the genuinely global Jira config. The panel selects one env at the
+	// top and renders every field carrying that Env beneath it.
 	Env string `json:"env"`
-	// Label of the env-tabbed sub-section this field belongs to ("Results private
-	// key", "MFA"), letting several env-tagged fields (e.g. the MFA code + seed for
-	// one env) render together under one env tab. "" for the account's plain fields.
+	// Label of the sub-section this field belongs to within its group ("Account",
+	// "Results private key", "Environment"), letting several fields for one env
+	// render together under one heading. "" for the Jira group's plain fields.
 	Section string `json:"section"`
 	// Multiline hints the panel to render a textarea instead of a one-line input —
 	// true for the PEM results keys, false for short values (MFA code, TOTP seed).
@@ -145,6 +151,16 @@ type SettingField struct {
 	// the tier selector and the backend rejects any non-local write — so a personal,
 	// per-user value (e.g. the Jira config) can never be committed or encrypted.
 	LocalOnly bool `json:"localOnly"`
+}
+
+// isKnownVar reports whether a settings key is one the panel manages.
+func isKnownVar(key string) bool {
+	for _, f := range knownVars {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // isLocalOnlyVar reports whether a settings key is local-only (must never be
@@ -553,26 +569,69 @@ func (a *App) WriteSetting(cwd, key, value, tier string) error {
 
 	// Remove any copy of this key from the OTHER writable files so the field has
 	// exactly one home (avoids a stale lower-precedence value lingering).
-	for _, other := range []string{projectFile, secretsFile, localFile} {
-		if other == targetFile {
-			continue
+	others := make([]string, 0, 2)
+	for _, f := range []string{projectFile, secretsFile, localFile} {
+		if f != targetFile {
+			others = append(others, f)
 		}
-		path := filepath.Join(dir, other)
-		om, err := readSettingsFile(path)
-		if err != nil {
-			return err
-		}
-		if _, ok := om[key]; ok {
-			delete(om, key)
-			if err := writeSettingsFile(path, om); err != nil {
-				return err
-			}
-		}
+	}
+	if _, err := deleteKeyFrom(dir, key, others); err != nil {
+		return err
 	}
 
 	// After encrypting a secret to the keyring, refresh the lock fingerprint so the
 	// engine can tell the committed secrets match the current recipient set.
 	if targetFile == secretsFile {
+		recipients, _ := readKeyringRecipients(dir)
+		if err := writeLock(dir, recipients); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteKeyFrom removes key from each of the named settings files under dir,
+// rewriting only the ones that actually held it. Reports whether the key was
+// removed from the encrypted secrets file, so the caller knows to refresh the
+// keyring lock fingerprint.
+func deleteKeyFrom(dir, key string, files []string) (touchedSecrets bool, err error) {
+	for _, name := range files {
+		path := filepath.Join(dir, name)
+		m, err := readSettingsFile(path)
+		if err != nil {
+			return false, err
+		}
+		if _, ok := m[key]; !ok {
+			continue
+		}
+		delete(m, key)
+		if err := writeSettingsFile(path, m); err != nil {
+			return false, err
+		}
+		if name == secretsFile {
+			touchedSecrets = true
+		}
+	}
+	return touchedSecrets, nil
+}
+
+// ClearSetting unsets one field entirely, removing it from ALL three tier files so
+// no lower-precedence copy survives to be picked up. This is the only way to unset
+// a value from the UI — WriteSetting always assigns, and the panel refuses to save
+// an empty string. Clearing a committed secret refreshes the keyring lock, exactly
+// as writing one does.
+func (a *App) ClearSetting(cwd, key string) error {
+	// Only fields the panel knows about — never let an arbitrary key be stripped
+	// out of the settings JSON.
+	if !isKnownVar(key) {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	dir := configDirFor(cwd)
+	touchedSecrets, err := deleteKeyFrom(dir, key, []string{projectFile, secretsFile, localFile})
+	if err != nil {
+		return err
+	}
+	if touchedSecrets {
 		recipients, _ := readKeyringRecipients(dir)
 		if err := writeLock(dir, recipients); err != nil {
 			return err
