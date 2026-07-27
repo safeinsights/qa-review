@@ -99,6 +99,25 @@ export const COMMANDS: CommandHelp[] = [
             "the account's second factor from the settings files (--env defaults to qa).",
     },
     {
+        name: 'invite',
+        usage: 'qar invite (--role researcher|reviewer | --org <slug>) [--email <addr>] [--admin]',
+        summary: 'Mint an invite via the QA API. Prints {"inviteUrl","email",…}.',
+        details:
+            'Returns the invite URL directly — no inbox, no waiting on email. The invited ' +
+            'role is implied by the org. A generated address always starts with "qa" (the ' +
+            'API refuses anything else). The signup SUITE still uses the real UI + email.',
+    },
+    {
+        name: 'fix-account',
+        usage: 'qar fix-account --role <role> [--env <env> | --pr <n>] [--password] [--key] [--yes]',
+        summary: 'Reconcile a shared account with settings (password / results key).',
+        details:
+            'Pushes the password and/or the PUBLIC half of the stored results private key ' +
+            'onto the account, fixing drift that would otherwise wrap results to a key we ' +
+            "can't unwrap. Naming neither flag pushes both. Org memberships are never " +
+            'touched. Prompts before writing unless --yes.',
+    },
+    {
         name: 'jira-comment',
         usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',

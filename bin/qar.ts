@@ -1,6 +1,8 @@
 import { parseArgs } from '@/cli/args'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
+import { fixAccountCommand } from '@/cli/commands/fix-account'
+import { inviteCommand } from '@/cli/commands/invite'
 import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
@@ -22,7 +24,18 @@ import { loadSettings } from '@/engine/settings'
 
 // `help` MUST be a boolean: otherwise `qar session --help` parses `--help` as a
 // key expecting a value, silently launches a session, and reports nothing.
-const BOOLEANS = ['json', 'headed', 'screencast', 'help']
+const BOOLEANS = [
+    'json',
+    'headed',
+    'screencast',
+    'help',
+    // invite / fix-account flags: valueless switches, so the parser must not swallow
+    // the following argument as their value.
+    'admin',
+    'password',
+    'key',
+    'yes',
+]
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)
@@ -78,6 +91,10 @@ async function main() {
             return mailWaitCommand(opts)
         case 'totp':
             return totpCommand(opts, await loadSettings())
+        case 'invite':
+            return inviteCommand(opts, await loadSettings())
+        case 'fix-account':
+            return fixAccountCommand(opts, await loadSettings())
         case 'jira-comment':
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-delete-comment':

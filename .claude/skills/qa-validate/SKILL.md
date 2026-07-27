@@ -69,11 +69,11 @@ on the SAME browser you're validating in** (the one streamed in the Validation p
 and print the created id as JSON so you can clean it up afterward:
 
 - **`qar session-create-user --role researcher|reviewer`** — logs the session in as
-  admin, invites a fresh mail.tm address into the org implying the role, waits for the
-  invite email, and completes the full signup. Prints `{"userId":"…","email":"…"}`.
+  admin, mints an invite through the QA API for the org implying the role, and
+  completes the full signup from its URL. Prints `{"userId":"…","email":"…"}`.
   (The invited role is the org: researcher→openstax-lab, reviewer→openstax. It ends
   logged in as the NEW user — run `qar session-login --role <r>` if you then need a
-  specific role.) The full chain is slow (invite email alone ~2 min); it waits.
+  specific role.) The invite URL comes back from the API, so there is no email wait.
 - **`qar session-create-study`** — logs the session in as researcher and submits a
   full study proposal. Prints `{"studyId":"…"}`.
 
@@ -87,9 +87,18 @@ The underlying flows live in `src/engine/flows/{signup,study}.ts` (exact
 `getByRole`/`getByLabel` names, the study-id URL pattern, the Lexical fields);
 `src/suites/{signup,study-happy-path}.ts` are the suites they came from. For the
 page-free bits, these pre-approved `qar` helpers exist too:
-- `qar mail-inbox` → prints a fresh mail.tm email address.
-- `qar mail-wait --address <addr>` → waits for the invite email, prints the signup URL.
+- `qar invite --role researcher|reviewer` → mints an invite via the QA API and prints
+  `{"inviteUrl":"…","email":"…"}` — no inbox, no email wait. Prefer this over the
+  mail helpers for any user you need to CREATE.
 - `qar totp --secret <base32>` → prints the current 6-digit MFA code.
+- `qar mail-inbox` / `qar mail-wait --address <addr>` → the real-email path (fresh
+  mail.tm address; wait for the invite email and print its signup URL). Only needed
+  when you are specifically testing that invitation emails are delivered — the
+  `signup` suite covers that flow end to end.
+
+If a shared account's password or results key has drifted from settings (login fails,
+or results won't decrypt), `qar fix-account --role <r> --env <e>` pushes the settings
+values back onto the account. It prompts before writing.
 
 ## Posting findings to Jira (button-driven or on request)
 When the user presses **Validated** / **Rejected** (or asks you in the session):

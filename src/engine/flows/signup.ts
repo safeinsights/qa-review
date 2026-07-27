@@ -1,7 +1,8 @@
 import type { Page } from '@playwright/test'
 import { loginAs } from '../auth'
 import type { Message } from '../mailtm'
-import { activeDomain, createInbox, extractSignupUrl, waitForMessage } from '../mailtm'
+import { randomToken } from '../mailtm'
+import { QaApiClient } from '../qa-api'
 import { totp } from '../totp'
 import type { EnvConfig } from '../types'
 
@@ -168,11 +169,26 @@ export interface CreatedUser {
     email: string
 }
 
-// End-to-end "create a brand-new user from scratch" on a single held page, for
-// ad-hoc validation: log in as admin (invites require admin), create a fresh mail.tm
-// inbox, invite that address into the org implying `role`, wait for the invite email,
-// and complete the full signup (create-account → MFA → recovery → security key).
-// Returns the new user's SafeInsights DB id + email (for cleanup / later reference).
+// A collision-free-enough address for an API-minted invite. MUST start with "qa" —
+// the management-app's QA endpoints guard every account they touch with assertQaEmail
+// (local part matches /^qa/i), so a non-qa address is refused with a 403 and, worse,
+// couldn't be cleaned up afterwards. No inbox is ever created for it: the invite URL
+// comes back from the API, so nothing is delivered here.
+let inviteSeq = 0
+export function uniqueQaEmail(): string {
+    inviteSeq += 1
+    return `qa-invite-${inviteSeq}-${randomToken(8)}@qa.safeinsights.org`
+}
+
+// End-to-end "create a brand-new user from scratch" on a single held page, for ad-hoc
+// validation: log in as admin (the invite API needs an SI-admin session JWT), mint an
+// invite through the QA API, and complete the full signup from its URL (create-account
+// → MFA → recovery → security key). Returns the new user's SafeInsights DB id + email.
+//
+// The invite URL comes straight from the API rather than from an inbox, so this no
+// longer waits ~2min on email delivery. The signup SUITE deliberately keeps the real
+// UI-invite + real-email path — that flow is the thing it exists to test.
+//
 // Ends logged in AS THE NEW USER (completeSignup lands on their dashboard); callers
 // that need admin authority afterwards should loginAs('admin') themselves.
 export async function createUserViaInvite(
@@ -180,12 +196,16 @@ export async function createUserViaInvite(
     env: EnvConfig,
     role: InvitedRole
 ): Promise<CreatedUser> {
-    await loginAs(page, env, 'admin')
-    const inbox = await createInbox(await activeDomain())
-    await inviteUser(page, env.baseURL, inbox.address, role)
-    const message = await waitForMessage(inbox, isInviteEmail, INVITE_EMAIL_TIMEOUT_MS)
-    const userId = await completeSignup(page, extractSignupUrl(message))
-    return { userId, email: inbox.address }
+    // loginAs returns the Clerk session JWT the /api/qa endpoints authorize with.
+    const token = await loginAs(page, env, 'admin')
+    if (!token) {
+        throw new Error('could not read an admin Clerk session token — the QA invite API needs one')
+    }
+    const email = uniqueQaEmail()
+    const api = new QaApiClient(env.baseURL, token)
+    const invite = await api.createInvite({ email, orgSlug: ORG_FOR_ROLE[role] })
+    const userId = await completeSignup(page, invite.inviteUrl)
+    return { userId, email }
 }
 
 // Read the base32 TOTP secret shown on the authenticator-app setup page. The secret

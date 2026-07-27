@@ -13,7 +13,7 @@ const API = 'https://api.mail.tm'
 // a byte is only accepted if it falls in the largest whole multiple of the alphabet
 // (0..251 for 36 symbols); 252..255 are discarded and redrawn.
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
-function randomToken(len: number): string {
+export function randomToken(len: number): string {
     const limit = 256 - (256 % ALPHABET.length) // 252 for a 36-char alphabet
     let out = ''
     while (out.length < len) {
