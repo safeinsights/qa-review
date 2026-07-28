@@ -1,4 +1,5 @@
 import { parseArgs } from '@/cli/args'
+import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
@@ -8,6 +9,7 @@ import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
 import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
+import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { runCommand } from '@/cli/commands/run'
@@ -72,6 +74,10 @@ async function main() {
             return migrateCommand(opts)
         case 'request-access':
             return requestAccessCommand(opts)
+        case 'access-status':
+            return accessStatusCommand(opts)
+        case 'open-access-pr':
+            return openAccessPrCommand(opts)
         case 'rekey':
             return rekeyCommand()
         case 'set-secret':

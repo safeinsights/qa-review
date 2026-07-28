@@ -41,6 +41,18 @@ export const COMMANDS: CommandHelp[] = [
         summary: 'Generate a local age identity and open a keyring PR.',
     },
     {
+        name: 'access-status',
+        usage: 'qar access-status [--json]',
+        summary: 'Report the state of your keyring access request.',
+        details:
+            'States: no-identity, no-branch, branch-no-pr, pr-open, pr-closed, merged-awaiting-rekey, ready.',
+    },
+    {
+        name: 'open-access-pr',
+        usage: 'qar open-access-pr',
+        summary: 'Open (or report) the pull request for an already-pushed access branch.',
+    },
+    {
         name: 'rekey',
         usage: 'qar rekey',
         summary: 'Re-encrypt all secrets to the current keyring (reviewer step).',
