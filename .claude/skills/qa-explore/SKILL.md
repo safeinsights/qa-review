@@ -30,6 +30,9 @@ the suite to a file and verifying it passes. You run **interactively in a termin
 This runs in a permission-scoped terminal the QA staffer watches. To avoid
 needless permission prompts and noise:
 - **Never prefix a command with `cd`** — you are already in `$QAR_REPO_DIR`.
+- **Write scratch files under `.tmp/`** (screenshots, notes — anything that isn't
+  the suite itself). It's gitignored; files written elsewhere pollute the user's
+  `git status`. The suite you author is NOT scratch — it belongs in `src/suites/`.
   A compound like `cd … && qar …` does NOT match the pre-approved allowlist,
   so it forces a permission prompt. Run `qar …` directly.
 - **One command per Bash call.** Don't chain with `&&`, `;`, or pipes when you can

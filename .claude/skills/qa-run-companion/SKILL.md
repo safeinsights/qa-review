@@ -72,6 +72,10 @@ suite already exists and the engine is driving the run.
   per Bash call (chained/piped commands fall outside the allowlist and prompt).
   Pre-approved: `pnpm qar …`, `qar …`, `pnpm typecheck`, `pnpm test`, and read-only
   `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit and the chrome-devtools MCP.
+- Write any scratch file (a saved screenshot, notes) under `.tmp/` — it's
+  gitignored, so it won't pollute the user's `git status`. The run's own
+  screenshots under `<bundleDir>/screenshots/` are READ-ONLY evidence; never write
+  into the bundle.
 - Be quiet: do the work, then give a short plain-language result. Don't paste raw
   JSON step lines or long logs.
 

@@ -55,6 +55,11 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - Stop if unit tests, `pnpm typecheck`, or lint fail — fix before proceeding.
 - Ask before committing work.
 - Don't commit planning/scratch files unless explicitly told to.
+- **Session scratch goes in `.tmp/`** (gitignored). Every skill — qa-explore,
+  qa-validate, qa-run-companion, pr-review — writes screenshots, draft Jira comment
+  bodies, and review payloads there. Before this, each session picked its own
+  directory (`.qa-validation-shots/`, `/tmp/claude/`), so output either polluted
+  `git status` or went to a path that didn't exist.
 
 ## Architecture (one-liners)
 
@@ -315,7 +320,7 @@ private to the PR author until a human clicks Submit — so the caveat authorize
 posting without asking, but requires surfacing the returned `html_url`. A draft
 nobody can find is a draft that never happened. Neither the caveat nor the skill may
 APPROVE or REQUEST CHANGES. The skill also inherits `qa-validate`'s PTY rules
-(one command per Bash call, no `cd`, `$TMPDIR` for scratch) because it runs in that
+(one command per Bash call, no `cd`, `.tmp/` for scratch) because it runs in that
 same allowlisted session — a pipe or redirect turns an allowlisted `gh …` into a
 non-matching compound and prompts the user mid-review.
 

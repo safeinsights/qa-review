@@ -34,7 +34,8 @@ This skill often runs inside the Validation session's PTY, which pre-approves
 - **One command per Bash call.** A pipe or `&&` falls outside the allowlist and
   prompts the user. Where a step below needs a pipe, it is already split.
 - **Never prefix a command with `cd`** — you are already in the repo dir.
-- **Scratch files go in `$TMPDIR`**, not `/tmp/claude`. Write the review payload
+- **Scratch files go in `.tmp/`** in the repo (gitignored; `mkdir -p .tmp` first),
+  not `/tmp/claude` — that path doesn't exist. Write the review payload
   with the `Write` tool rather than shell redirection — redirection turns an
   allowlisted `gh …` into a non-matching compound command.
 
@@ -97,7 +98,7 @@ This skill often runs inside the Validation session's PTY, which pre-approves
    POST time, which costs a round trip and a payload rewrite.
 
 5. **Build a JSON payload.** Write it with the `Write` tool to
-   `$TMPDIR/pr-review-<number>.json`:
+   `.tmp/pr-review-<number>.json`:
    ```json
    {
      "commit_id": "<head-sha>",
@@ -116,7 +117,7 @@ This skill often runs inside the Validation session's PTY, which pre-approves
    only to the PR author/owner of the token, with nothing visible to other reviewers
    until the user clicks Submit on github.com.
    ```bash
-   gh api -X POST repos/<owner>/<repo>/pulls/<number>/reviews --input $TMPDIR/pr-review-<number>.json
+   gh api -X POST repos/<owner>/<repo>/pulls/<number>/reviews --input .tmp/pr-review-<number>.json
    ```
    On success the response includes `"state": "PENDING"` and an `html_url`.
 

@@ -48,6 +48,8 @@ neither is a bug, and both will look like one if you forget:
 - **Never open a new chrome instance or page.** Chrome is already running and the
   `qar` command will use the existing session.
 - **Never prefix a command with `cd`** — you are already in `$QAR_REPO_DIR`.
+- **Write every scratch file under `.tmp/`** (screenshots, verdict bodies, notes).
+  It's gitignored; files written anywhere else pollute the user's `git status`.
 - **One command per Bash call.** Chained/piped commands fall outside the allowlist
   and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `pnpm typecheck`,
   `pnpm test`, and read-only `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit
@@ -131,13 +133,17 @@ values back onto the account. It prompts before writing.
 
 ## Posting findings to Jira (button-driven or on request)
 When the user presses **Validated** / **Rejected** (or asks you in the session):
-1. Capture a screenshot of the relevant screen(s) with the chrome-devtools MCP to a
-   local file path.
+1. Capture a screenshot of the relevant screen(s) with the chrome-devtools MCP,
+   saving to **`.tmp/`** in the repo (create it with `mkdir -p .tmp` if needed).
+   Everything you write during a session — screenshots, the verdict `.md` below —
+   goes there: it's gitignored, so session output never shows up as untracked noise
+   in the user's `git status`. Never scatter files at the repo root.
 2. **Confirm with the user before writing to Jira.**
 3. **Post the comment with `qar jira-comment`** — NOT `jira_add_comment`. Write the
-   verdict (what you tested, the result, the reasoning) to a local `.md` file, then:
+   verdict (what you tested, the result, the reasoning) to a `.md` file under
+   `.tmp/`, then:
    ```
-   qar jira-comment --issue <CARD> --body-file <path.md> --images <a.png,b.png>
+   qar jira-comment --issue <CARD> --body-file .tmp/<name>.md --images .tmp/a.png,.tmp/b.png
    ```
    It uploads each screenshot, resolves its media id, and posts ONE comment with the
    images **embedded inline**. Images append after the body; put `{{image:1}}` /
