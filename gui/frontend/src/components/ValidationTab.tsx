@@ -2,9 +2,11 @@ import { Alert, Button, Select, Textarea, TextInput } from '@mantine/core'
 import { useViewportSize } from '@mantine/hooks'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+    checkPrCI,
     onSessionEnded,
     onSessionLog,
     onSessionReady,
+    type PrCIStatus,
     type SessionKind,
     startValidationSession,
     stopSession,
@@ -16,13 +18,67 @@ import { LiveBrowser } from './LiveBrowser'
 import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
 import { VerdictPanel } from './VerdictPanel'
-import { isPrNumber, parseJiraCard, parsePrNumber } from './validationInputs'
+import { ciBlocks, isPrNumber, parseJiraCard, parsePrNumber } from './validationInputs'
 
 // This tab owns "validation" sessions; a session-ready of any other kind means the
 // other tab (or the run companion) holds the single shared PTY + browser.
 const MY_KIND: SessionKind = 'validation'
 
 const ENVS = ['qa', 'staging', 'production']
+
+// Debounce for the CI probe: each one shells out to `gh`, so we wait for the PR
+// input to settle rather than firing per keystroke.
+const CI_PROBE_DEBOUNCE_MS = 400
+
+// Reads the PR's continuous-integration/* checks whenever the PR number settles,
+// so the tester is warned that the preview deployment is mid-build BEFORE pressing
+// Start (Go re-checks and is the real gate). Returns null while there's no PR to
+// check or a probe is in flight for a changed number — callers treat null as "no
+// verdict yet", which never blocks.
+function usePrCIStatus(prNumber: string): { status: PrCIStatus | null; checking: boolean } {
+    const [status, setStatus] = useState<PrCIStatus | null>(null)
+    const [checking, setChecking] = useState(false)
+
+    useEffect(() => {
+        if (!/^\d+$/.test(prNumber)) {
+            setStatus(null)
+            setChecking(false)
+            return
+        }
+        // Ignore a resolved probe whose PR is no longer the one in the box —
+        // `gh` calls can return out of order and a stale verdict would gate the
+        // Start button on the wrong PR.
+        let current = true
+        setChecking(true)
+        const timer = setTimeout(async () => {
+            try {
+                const result = await checkPrCI(prNumber)
+                if (current) setStatus(result)
+            } catch (e) {
+                // A probe failure is not evidence the deployment is stale, so it
+                // must not block: report it as "unknown", which never gates.
+                if (current) setStatus({ state: 'unknown', warning: String(e), checks: null })
+            } finally {
+                if (current) setChecking(false)
+            }
+        }, CI_PROBE_DEBOUNCE_MS)
+
+        return () => {
+            current = false
+            clearTimeout(timer)
+        }
+    }, [prNumber])
+
+    return { status, checking }
+}
+
+// The colour + heading for each blocking CI state. "unknown" and "ok" never reach
+// here — the alert only renders when ciBlocks() is true.
+const CI_ALERT: Record<string, { color: string; title: string }> = {
+    pending: { color: 'yellow', title: 'CI is still running on this PR' },
+    failed: { color: 'red', title: 'CI failed on this PR' },
+    none: { color: 'yellow', title: 'CI has not reported on this PR yet' },
+}
 
 // "Validate a Jira ticket": Claude drives the shared logged-out browser (via the
 // chrome-devtools MCP) to check a ticket's acceptance criteria, then posts the
@@ -45,6 +101,10 @@ export function ValidationTab() {
     const hasPr = isPrNumber(pr)
     // Validating by PR alone is allowed; the ticket is then inferred from the PR.
     const canStart = !!(card || prNumber)
+    // A PR whose deployment checks aren't green means the preview URL isn't a build
+    // of the code under review. Warn, and make starting anyway a deliberate act.
+    const { status: ciStatus, checking: ciChecking } = usePrCIStatus(prNumber)
+    const ciBlocked = ciBlocks(ciStatus?.state)
 
     const [active, setActive] = useState(false)
     const [starting, setStarting] = useState(false)
@@ -99,14 +159,16 @@ export function ValidationTab() {
         }
     }, [])
 
-    const start = async () => {
+    // `force` comes from the "Start anyway" button, shown only once a blocking CI
+    // status has been surfaced — so bypassing the gate is always a read-then-choose.
+    const start = async (force = false) => {
         setError('')
         setStarting(true)
         setActive(true)
         setConsoleLines([])
         setActiveCard(card)
         try {
-            const started = await startValidationSession(env, prNumber, card, instructions)
+            const started = await startValidationSession(env, prNumber, card, instructions, force)
             sessionToken.current = started.token
             setActiveCard(started.jiraCard)
         } catch (e) {
@@ -149,6 +211,9 @@ export function ValidationTab() {
                 setInstructions={setInstructions}
                 start={start}
                 canStart={canStart}
+                ciStatus={ciStatus}
+                ciBlocked={ciBlocked}
+                ciChecking={ciChecking}
                 error={error}
             />
         )
@@ -181,6 +246,9 @@ function SessionSetup({
     setInstructions,
     start,
     canStart,
+    ciStatus,
+    ciBlocked,
+    ciChecking,
     error,
 }: {
     env: string
@@ -192,8 +260,11 @@ function SessionSetup({
     setJiraCard: (v: string) => void
     instructions: string
     setInstructions: (v: string) => void
-    start: () => void
+    start: (force?: boolean) => void
     canStart: boolean
+    ciStatus: PrCIStatus | null
+    ciBlocked: boolean
+    ciChecking: boolean
     error: string
 }) {
     return (
@@ -264,20 +335,27 @@ function SessionSetup({
                     maxRows={6}
                     mt="md"
                 />
-                <div style={{ display: 'flex', marginTop: 16 }}>
+                <CIWarning status={ciStatus} isVisible={ciBlocked} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
+                    {ciChecking ? (
+                        <span className="st-dim" style={{ fontSize: 12 }}>
+                            Checking CI…
+                        </span>
+                    ) : null}
                     <Button
-                        onClick={start}
-                        disabled={!canStart}
-                        color="teal"
+                        onClick={() => start(ciBlocked)}
+                        disabled={!canStart || ciChecking}
+                        color={ciBlocked ? 'orange' : 'teal'}
+                        variant={ciBlocked ? 'outline' : 'filled'}
                         radius="md"
                         size="md"
                         style={{
                             marginLeft: 'auto',
-                            boxShadow: '0 6px 18px rgba(12,107,94,0.22)',
+                            boxShadow: ciBlocked ? undefined : '0 6px 18px rgba(12,107,94,0.22)',
                         }}
                         leftSection={<span aria-hidden>▶</span>}
                     >
-                        Start validation
+                        {ciBlocked ? 'Start anyway' : 'Start validation'}
                     </Button>
                 </div>
             </div>
@@ -287,6 +365,27 @@ function SessionSetup({
                 </Alert>
             ) : null}
         </div>
+    )
+}
+
+// The "CI isn't green" banner. A PR preview (prN.qa.safeinsights.org) is built by
+// the Jenkins continuous-integration/* checks, so until they finish green the URL
+// serves the previous commit or nothing at all — and a pass recorded against that
+// is a validation of the wrong code.
+function CIWarning({ status, isVisible }: { status: PrCIStatus | null; isVisible: boolean }) {
+    if (!isVisible || !status) return null
+    const alert = CI_ALERT[status.state]
+    if (!alert) return null
+
+    return (
+        <Alert color={alert.color} title={alert.title} mt="md">
+            {status.warning}
+            {status.checks?.length ? (
+                <div className="mono st-dim" style={{ fontSize: 11, marginTop: 6 }}>
+                    {status.checks.join(', ')}
+                </div>
+            ) : null}
+        </Alert>
     )
 }
 
