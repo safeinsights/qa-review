@@ -450,21 +450,45 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 	return token, info.CdpPort, nil
 }
 
+// ValidationStart is what StartValidationSession hands back: the session token
+// plus the Jira card the session is actually about. The card matters to the
+// caller because it may have been INFERRED from the PR (the tester gave only a PR
+// number) — the GUI needs the resolved key to enable the Verdict button and to
+// match the "verdict-posted" event. Empty means "unknown, Claude will work it out".
+type ValidationStart struct {
+	Token    string `json:"token"`
+	JiraCard string `json:"jiraCard"`
+}
+
 // StartValidationSession boots a "validate a Jira ticket" session: the same shared
 // logged-out browser as authoring, but the MCP config ALSO carries the Jira
 // (uvx mcp-atlassian) server, and the opening prompt invokes qa-validate. Claude
 // reads the ticket + PR, logs in via `qar session-login`, drives the shared browser
 // via chrome-devtools MCP to check the acceptance criteria, and posts the verdict.
-func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (string, error) {
+//
+// Either `pr` or `jiraCard` is required (the UI enforces it too). Given only a PR,
+// we infer the card from it up front so the Verdict button works for the whole
+// session; if inference fails the session still starts and the prompt asks Claude
+// to identify the ticket from the PR.
+func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (ValidationStart, error) {
+	if strings.TrimSpace(pr) == "" && strings.TrimSpace(jiraCard) == "" {
+		return ValidationStart{}, errors.New("a PR number or a Jira card is required")
+	}
+	// Infer BEFORE spawning the browser: a failed lookup is then just a missing
+	// card, not an orphaned session we'd have to tear down.
+	if strings.TrimSpace(jiraCard) == "" {
+		jiraCard = inferJiraCard(pr)
+	}
+
 	token, cdpPort, err := a.startSessionBrowser("validation", env, pr)
 	if err != nil {
-		return "", err
+		return ValidationStart{}, err
 	}
 
 	mcpPath, err := writeValidationMcpConfig(cdpPort, a.readJiraConfig())
 	if err != nil {
 		a.StopSession()
-		return "", err
+		return ValidationStart{}, err
 	}
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
@@ -481,14 +505,14 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (st
 	}
 	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
 		a.StopSession()
-		return "", err
+		return ValidationStart{}, err
 	}
 	a.startVerdictWatch()
 	go func() {
 		time.Sleep(2 * time.Second)
 		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard, instructions))
 	}()
-	return token, nil
+	return ValidationStart{Token: token, JiraCard: jiraCard}, nil
 }
 
 // startVerdictWatch polls the verdict rendezvous file for the duration of the
@@ -543,67 +567,7 @@ func (a *App) stopVerdictWatcher() {
 	}
 }
 
-// composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
-// with the env/role/instruction. The browser is launched but NOT logged in — login
-// is deferred, so the skill logs in as `role` on start via `qar session-login`.
-func composeAuthoringPrompt(env, pr, role, instruction string) string {
-	target := "--env " + env
-	if strings.TrimSpace(pr) != "" {
-		target = "--pr " + pr
-	}
-	return fmt.Sprintf("/qa-explore The browser is open (not yet logged in) against %s. Log in as %s (run `qar session-login --role %s`), then carry out this instruction: %s", target, role, role, instruction)
-}
-
-// composeValidationPrompt is the validation Claude's first message: invoke the
-// qa-validate skill with the env/PR target + Jira card. The browser is open but
-// NOT logged in — the skill infers the role from the ticket and logs in itself.
-// Any user-supplied `instructions` are appended as a separate final paragraph.
-func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
-	isPR := strings.TrimSpace(pr) != ""
-	target := "--env " + env
-	if isPR {
-		target = "--pr " + pr
-	}
-	prompt := fmt.Sprintf(
-		"/qa-validate The browser is open (not yet logged in) against %s. Validate Jira "+
-			"ticket %s: read the ticket (jira-atlassian MCP) and its PR (gh) to learn what "+
-			"changed, infer the role and log in via `qar session-login --role <role>` (ask "+
-			"me if unclear), then drive the browser via the chrome-devtools MCP to verify the "+
-			"acceptance criteria. Give a clear PASS/FAIL verdict.",
-		target, jiraCard,
-	)
-	if isPR {
-		prompt += "\n\n" + prEnvCaveat
-	}
-	if s := strings.TrimSpace(instructions); s != "" {
-		prompt += "\n\nAdditional instructions from the user:\n" + s
-	}
-	return prompt
-}
-
-// prEnvCaveat sets expectations that only hold on a PR preview, so the validator
-// doesn't read an empty dashboard as a regression or sit waiting on results that
-// will never arrive. A PR preview is a fresh deployment: the accounts exist but
-// their dashboards start empty, and there is no compute backend attached.
-const prEnvCaveat = "IMPORTANT — this is a PR preview environment, not QA:\n" +
-	"- No studies are preloaded. Every account's dashboard starts EMPTY, which is " +
-	"expected and is NOT a bug. Create whatever a check needs from scratch " +
-	"(`qar session-create-study`, or `qar session-create-user` for a fresh user).\n" +
-	"- PR environments do NOT actually run code. A submitted study will never " +
-	"progress to real results, so don't wait on a run to complete or treat missing " +
-	"results as a failure — validate up to the point where execution would begin."
-
-// composeCompanionPrompt is the companion Claude's first message: invoke the
-// qa-run-companion skill for the suite whose run is on screen. The browser is the
-// live run browser (driven by the engine; Claude drives it only when idle).
-func composeCompanionPrompt(suite string) string {
-	return fmt.Sprintf(
-		"/qa-run-companion You are attached to a live run of the '%s' suite. "+
-			"Read <bundleDir>/run-state.json for the run's steps and result. "+
-			"Only drive the browser when the run is paused or errored.",
-		suite,
-	)
-}
+// The compose*Prompt helpers (and their markdown templates) live in prompts.go.
 
 // companionClaudeArgs builds the claude flags for the run companion. Same scoped
 // allowlist as authoring (browser MCP + qar + file edit under the repo); the MCP
@@ -1678,6 +1642,77 @@ func runTool(name string, args ...string) (string, error) {
 		return out, err
 	}
 	return strings.SplitN(out, "\n", 2)[0], nil
+}
+
+// managementAppSlug is the repo whose PR numbers the validation screen accepts —
+// a PR preview URL (prN.qa.safeinsights.org) is a deployment of THIS repo, not of
+// qa-review. It's also where we look up a PR to infer its Jira card.
+const managementAppSlug = "safeinsights/management-app"
+
+// jiraBoards are the Jira project keys we recognize in a PR. Matching against a
+// KNOWN board list (the approach versionista uses) rather than a generic
+// `\w+-\d+` pattern is what makes this safe: the team's branches and titles are
+// full of ticket-shaped noise — "fixes-2026", "node-7", "haiku-4", "pages-6" all
+// appear in management-app history — and a generic pattern turns each into a
+// bogus card that sends the validator chasing a ticket that doesn't exist.
+// Anchoring on real boards also lets the match be case-insensitive and accept a
+// space separator, so "otter 644" and "OTTER-644" both resolve.
+// SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
+// still resolve, and normalizeJiraKey maps it back to the real board.
+var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP"}
+
+var jiraKeyRE = regexp.MustCompile(
+	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)
+
+// normalizeJiraKey renders a matched key canonically: uppercase board, hyphen
+// separator, and the SHRMP typo corrected to SHRIMP.
+func normalizeJiraKey(board, number string) string {
+	board = strings.ToUpper(board)
+	if board == "SHRMP" {
+		board = "SHRIMP"
+	}
+	return board + "-" + number
+}
+
+// inferJiraCardFrom scans a PR's title, head branch, and body (in that order of
+// preference) for a Jira key. Title and branch are where our team actually puts
+// it; the body is scanned last because it often quotes OTHER tickets ("related to
+// OTTER-99"), so a body match is the least trustworthy. Returns "" when nothing
+// matches a known board — the caller then lets Claude work the ticket out from
+// the PR, which is far better than acting on a wrong guess.
+func inferJiraCardFrom(title, branch, body string) string {
+	for _, field := range []string{title, branch, body} {
+		if m := jiraKeyRE.FindStringSubmatch(field); m != nil {
+			return normalizeJiraKey(m[1], m[2])
+		}
+	}
+	return ""
+}
+
+// inferJiraCard looks up PR `pr` in the management-app repo and pulls a Jira key
+// out of it, so a tester can validate by PR number alone. Any failure (offline, gh
+// unauthenticated, no key anywhere) yields "" — the caller degrades to telling
+// Claude to work the card out from the PR itself, which is strictly better than
+// blocking the session on a lookup we don't control.
+func inferJiraCard(pr string) string {
+	pr = strings.TrimSpace(pr)
+	if pr == "" {
+		return ""
+	}
+	out, err := runToolFull("gh", "pr", "view", pr, "--repo", managementAppSlug,
+		"--json", "title,headRefName,body")
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Title       string `json:"title"`
+		HeadRefName string `json:"headRefName"`
+		Body        string `json:"body"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return ""
+	}
+	return inferJiraCardFrom(v.Title, v.HeadRefName, v.Body)
 }
 
 // accessPROpen reports whether an access PR opened BY THIS USER (head branch

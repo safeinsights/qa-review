@@ -16,13 +16,13 @@ import { LiveBrowser } from './LiveBrowser'
 import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
 import { VerdictPanel } from './VerdictPanel'
+import { isPrNumber, parseJiraCard, parsePrNumber } from './validationInputs'
 
 // This tab owns "validation" sessions; a session-ready of any other kind means the
 // other tab (or the run companion) holds the single shared PTY + browser.
 const MY_KIND: SessionKind = 'validation'
 
 const ENVS = ['qa', 'staging', 'production']
-const ROLES = ['admin', 'researcher', 'reviewer']
 
 // "Validate a Jira ticket": Claude drives the shared logged-out browser (via the
 // chrome-devtools MCP) to check a ticket's acceptance criteria, then posts the
@@ -31,10 +31,20 @@ const ROLES = ['admin', 'researcher', 'reviewer']
 export function ValidationTab() {
     const [env, setEnv] = useState('qa')
     const [pr, setPr] = useState('')
-    const [role, setRole] = useState('admin')
     const [jiraCard, setJiraCard] = useState('')
     const [instructions, setInstructions] = useState('')
+    // The card the LIVE session is about. Usually what was typed, but with a PR and
+    // no card Go infers the key from the PR and returns it — the Verdict button and
+    // the verdict-posted match both key off this, not off the raw input.
+    const [activeCard, setActiveCard] = useState('')
     const card = parseJiraCard(jiraCard)
+    // Both inputs accept a pasted URL; everything downstream gets the parsed value.
+    const prNumber = parsePrNumber(pr)
+    // A PR overrides the env, so the Env selector locks — but only once the input is
+    // a real number, not on a half-typed URL or a typo.
+    const hasPr = isPrNumber(pr)
+    // Validating by PR alone is allowed; the ticket is then inferred from the PR.
+    const canStart = !!(card || prNumber)
 
     const [active, setActive] = useState(false)
     const [starting, setStarting] = useState(false)
@@ -94,8 +104,11 @@ export function ValidationTab() {
         setStarting(true)
         setActive(true)
         setConsoleLines([])
+        setActiveCard(card)
         try {
-            sessionToken.current = await startValidationSession(env, pr, card, instructions)
+            const started = await startValidationSession(env, prNumber, card, instructions)
+            sessionToken.current = started.token
+            setActiveCard(started.jiraCard)
         } catch (e) {
             setError(String(e) + (logBuf.current ? `\n${logBuf.current}` : ''))
             setActive(false)
@@ -129,13 +142,13 @@ export function ValidationTab() {
                 setEnv={setEnv}
                 pr={pr}
                 setPr={setPr}
-                role={role}
-                setRole={setRole}
+                hasPr={hasPr}
                 jiraCard={jiraCard}
                 setJiraCard={setJiraCard}
                 instructions={instructions}
                 setInstructions={setInstructions}
                 start={start}
+                canStart={canStart}
                 error={error}
             />
         )
@@ -143,7 +156,7 @@ export function ValidationTab() {
 
     return (
         <LiveSession
-            card={card}
+            card={activeCard}
             starting={starting}
             screencastPort={screencastPort}
             consoleLines={consoleLines}
@@ -153,40 +166,34 @@ export function ValidationTab() {
     )
 }
 
-// Accept either a bare Jira key (OTTER-123) or a full URL
-// (e.g. https://openstax.atlassian.net/browse/OTTER-123?focused=…) and return the key.
-function parseJiraCard(input: string): string {
-    const m = input.match(/[A-Z][A-Z0-9]+-\d+/i)
-    return m ? m[0].toUpperCase() : input.trim()
-}
-
-// The setup form: pick env/PR/role, enter the Jira card + optional instructions,
-// then start the session.
+// The setup form: pick the env, then give a Jira card and/or a PR number (either
+// alone is enough) plus optional instructions, and start the session. There is no
+// role picker — the role is inferred from the ticket by the qa-validate skill.
 function SessionSetup({
     env,
     setEnv,
     pr,
     setPr,
-    role,
-    setRole,
+    hasPr,
     jiraCard,
     setJiraCard,
     instructions,
     setInstructions,
     start,
+    canStart,
     error,
 }: {
     env: string
     setEnv: (v: string) => void
     pr: string
     setPr: (v: string) => void
-    role: string
-    setRole: (v: string) => void
+    hasPr: boolean
     jiraCard: string
     setJiraCard: (v: string) => void
     instructions: string
     setInstructions: (v: string) => void
     start: () => void
+    canStart: boolean
     error: string
 }) {
     return (
@@ -211,30 +218,12 @@ function SessionSetup({
                         flexWrap: 'wrap',
                     }}
                 >
-                    <Field label="Env">
+                    <Field label={hasPr ? 'Env (from PR)' : 'Env'}>
                         <Select
                             data={ENVS}
                             value={env}
                             onChange={v => v && setEnv(v)}
-                            disabled={!!pr}
-                            allowDeselect={false}
-                            w={110}
-                            comboboxProps={{ withinPortal: true }}
-                        />
-                    </Field>
-                    <Field label="PR #">
-                        <TextInput
-                            value={pr}
-                            onChange={e => setPr(e.currentTarget.value)}
-                            placeholder="optional"
-                            w={90}
-                        />
-                    </Field>
-                    <Field label="Role">
-                        <Select
-                            data={ROLES}
-                            value={role}
-                            onChange={v => v && setRole(v)}
+                            disabled={hasPr}
                             allowDeselect={false}
                             w={110}
                             comboboxProps={{ withinPortal: true }}
@@ -244,11 +233,25 @@ function SessionSetup({
                         <TextInput
                             value={jiraCard}
                             onChange={e => setJiraCard(e.currentTarget.value)}
-                            placeholder="OTTER-123 or a full Jira URL"
+                            placeholder="OTTER-123 or a Jira URL"
                             style={{ flex: 1 }}
-                            miw={340}
+                            miw={240}
                         />
                     </Field>
+                    <Field label="PR" grow>
+                        <TextInput
+                            value={pr}
+                            onChange={e => setPr(e.currentTarget.value)}
+                            placeholder="839 or a GitHub PR URL"
+                            style={{ flex: 1 }}
+                            miw={240}
+                        />
+                    </Field>
+                </div>
+                <div className="st-dim" style={{ fontSize: 12, marginTop: 8 }}>
+                    Give a Jira card, a PR, or both — either accepts a pasted URL. With only a PR,
+                    the ticket is inferred from its title, branch, or description. A PR runs against
+                    its own preview deployment, so it overrides the env.
                 </div>
                 <Textarea
                     label="Additional instructions"
@@ -264,7 +267,7 @@ function SessionSetup({
                 <div style={{ display: 'flex', marginTop: 16 }}>
                     <Button
                         onClick={start}
-                        disabled={!jiraCard.trim()}
+                        disabled={!canStart}
                         color="teal"
                         radius="md"
                         size="md"

@@ -89,7 +89,7 @@ interface WailsApp {
         pr: string,
         jiraCard: string,
         instructions: string
-    ): Promise<string>
+    ): Promise<{ token: string; jiraCard: string }>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -264,12 +264,17 @@ export async function startRunCompanion(cdpPort: number, suite: string): Promise
 // Start a Validation session: Go launches the shared (logged-out) browser + claude
 // in a PTY, with the Jira MCP added. The GUI receives `session-ready` + `pty-output`
 // events, same as authoring. Returns the session token (see stopSessionIfOwner).
+// Starts a validation session. Either `pr` or `jiraCard` must be non-empty (Go
+// enforces it too). Returns the session token AND the Jira card the session is
+// about — with a PR and no card, Go infers the key from the PR, so the resolved
+// card comes back here for the Verdict button. An empty `jiraCard` in the result
+// means it couldn't be inferred and Claude will identify it from the PR.
 export async function startValidationSession(
     env: string,
     pr: string,
     jiraCard: string,
     instructions: string
-): Promise<string> {
+): Promise<{ token: string; jiraCard: string }> {
     return app().StartValidationSession(env, pr, jiraCard, instructions)
 }
 
