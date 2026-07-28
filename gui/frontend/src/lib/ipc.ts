@@ -35,10 +35,24 @@ export interface DoctorCheck {
     docURL: string
 }
 
+export type AccessState =
+    | 'no-identity'
+    | 'no-branch'
+    | 'branch-no-pr'
+    | 'pr-open'
+    | 'pr-closed'
+    | 'merged-awaiting-rekey'
+    | 'ready'
+
 export interface KeyringAccess {
     hasIdentity: boolean
     isRecipient: boolean
     note: string
+    state: AccessState | ''
+    branch: string
+    prNumber: number
+    prURL: string
+    githubReachable: boolean
 }
 
 // One tool's resolution result in the debug report: whether it was found on the
@@ -122,6 +136,7 @@ interface WailsApp {
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
     CheckKeyringAccess(cwd: string): Promise<KeyringAccess>
+    OpenAccessPr(cwd: string): Promise<string>
     HelpDocs(): Promise<HelpDoc[]>
 }
 
@@ -510,6 +525,12 @@ export async function resetAndSync(): Promise<string> {
 // Generate identity + open a keyring PR via `qar request-access`.
 export async function requestAccess(name: string): Promise<string> {
     return app().RequestAccess('', name)
+}
+
+// Open a pull request for an already-pushed access branch (the retry path for a
+// request whose push succeeded but whose PR creation didn't).
+export async function openAccessPr(): Promise<string> {
+    return app().OpenAccessPr('')
 }
 
 // Re-encrypt all secrets to the current keyring.

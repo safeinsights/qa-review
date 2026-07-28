@@ -1,7 +1,8 @@
-import { Alert, Button, Group, Loader, Modal, Text, TextInput } from '@mantine/core'
-import { useEffect, useState } from 'react'
-import { checkKeyringAccess, type KeyringAccess, requestAccess } from '../lib/ipc'
+import { Modal, Text } from '@mantine/core'
+import { useEffect } from 'react'
+import { checkKeyringAccess, type KeyringAccess } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
+import { AccessRequestStatus } from './AccessRequestStatus'
 
 // Hard gate on encryption access: before showing the app, pull the latest keyring
 // + secrets and confirm the local identity is a recipient (can decrypt shared
@@ -42,20 +43,6 @@ function RequestAccessGateModal({
     checkError: string | null
     onRetry: () => void
 }) {
-    const [name, setName] = useState('')
-    const request = useAsyncAction(async () => {
-        const out = await requestAccess(name.trim())
-        return out || 'Access requested — a teammate will review, rekey, and merge your PR.'
-    })
-
-    const submit = () => {
-        if (!name.trim()) return
-        void request.run()
-    }
-
-    const requested = request.result !== null
-    const note = access?.note
-
     return (
         <Modal
             opened
@@ -67,70 +54,12 @@ function RequestAccessGateModal({
             centered
             size="lg"
         >
-            <Text size="sm" mb={12}>
-                The runner decrypts shared account passwords and MFA codes with your personal key.
-                Your key{' '}
-                {access?.hasIdentity ? "isn't in the team keyring yet" : "hasn't been created yet"},
-                so requesting access will {access?.hasIdentity ? '' : 'generate your key and '}open
-                a pull request for a teammate to approve.
-            </Text>
-
-            {note ? (
-                <Text size="xs" mb={8} className="mono st-dim">
-                    {note}
+            <AccessRequestStatus access={access} checking={checking} onRetry={onRetry} />
+            {checkError ? (
+                <Text size="xs" c="red" mt={10}>
+                    {checkError}
                 </Text>
             ) : null}
-
-            {!requested ? (
-                <>
-                    <Group align="flex-end">
-                        <TextInput
-                            label="Your name"
-                            placeholder="Ada Lovelace"
-                            value={name}
-                            onChange={e => setName(e.currentTarget.value)}
-                            style={{ flex: 1 }}
-                        />
-                        <Button onClick={submit} loading={request.busy} color="teal">
-                            Request access
-                        </Button>
-                    </Group>
-                    {request.error ? (
-                        <Alert color="red" mt="sm">
-                            {request.error}
-                        </Alert>
-                    ) : null}
-                </>
-            ) : (
-                <>
-                    <Alert color="teal" mb="sm">
-                        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                            {request.result}
-                        </Text>
-                    </Alert>
-                    <Text size="sm" mb={8}>
-                        Once a teammate has merged your access PR, retry to pull the updated keyring
-                        and continue.
-                    </Text>
-                </>
-            )}
-
-            <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Button
-                    onClick={onRetry}
-                    loading={checking}
-                    variant={requested ? 'filled' : 'default'}
-                    color="teal"
-                >
-                    {checking ? 'Checking…' : 'Retry — I have access'}
-                </Button>
-                {checking ? <Loader size="xs" /> : null}
-                {checkError ? (
-                    <Text size="xs" c="red" style={{ flex: 1 }}>
-                        {checkError}
-                    </Text>
-                ) : null}
-            </div>
         </Modal>
     )
 }
