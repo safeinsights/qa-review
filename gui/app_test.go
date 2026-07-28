@@ -331,6 +331,75 @@ func TestParseAccessStatusRejectsGarbage(t *testing.T) {
 	}
 }
 
+// TestAccessStatusNonFatalFallback pins the task's central safety requirement: a
+// user with a pending access request must never be told they have no request just
+// because `qar access-status` failed to run or produced garbage. accessStatus must
+// swallow both failure modes into a note, never an error, so CheckKeyringAccess can
+// still return the local decrypt-based answer.
+func TestAccessStatusNonFatalFallback(t *testing.T) {
+	origOutput := accessStatusOutput
+	t.Cleanup(func() { accessStatusOutput = origOutput })
+
+	t.Run("engine command fails to run", func(t *testing.T) {
+		accessStatusOutput = func() ([]byte, error) {
+			return nil, errors.New("exec: \"qar\": executable file not found in $PATH")
+		}
+		a := &App{}
+		status, note := a.accessStatus()
+		if note == "" {
+			t.Fatal("expected a non-empty note when the engine command fails")
+		}
+		if status != (engineAccessStatus{}) {
+			t.Fatalf("expected a zero-value status on failure, got %+v", status)
+		}
+	})
+
+	t.Run("engine exits non-zero", func(t *testing.T) {
+		accessStatusOutput = func() ([]byte, error) {
+			return []byte(""), &exec.ExitError{}
+		}
+		a := &App{}
+		status, note := a.accessStatus()
+		if note == "" {
+			t.Fatal("expected a non-empty note when the engine exits non-zero")
+		}
+		if status != (engineAccessStatus{}) {
+			t.Fatalf("expected a zero-value status on failure, got %+v", status)
+		}
+	})
+
+	t.Run("engine prints unparsable output", func(t *testing.T) {
+		accessStatusOutput = func() ([]byte, error) {
+			return []byte("not json"), nil
+		}
+		a := &App{}
+		status, note := a.accessStatus()
+		if note == "" {
+			t.Fatal("expected a non-empty note when the engine output can't be parsed")
+		}
+		if status != (engineAccessStatus{}) {
+			t.Fatalf("expected a zero-value status on parse failure, got %+v", status)
+		}
+	})
+
+	t.Run("engine prints valid JSON", func(t *testing.T) {
+		accessStatusOutput = func() ([]byte, error) {
+			return []byte(`{"state":"pr-open","branch":"access/ada","pr":{"number":21,"state":"OPEN","url":"https://x/pull/21"},"githubReachable":true,"note":""}`), nil
+		}
+		a := &App{}
+		status, note := a.accessStatus()
+		if note != "" {
+			t.Fatalf("expected no note on success, got %q", note)
+		}
+		if status.State != "pr-open" || status.Branch != "access/ada" || !status.GithubReachable {
+			t.Fatalf("fields not folded through: %+v", status)
+		}
+		if status.PR == nil || status.PR.Number != 21 {
+			t.Fatalf("expected PR 21, got %+v", status.PR)
+		}
+	})
+}
+
 func containsStr(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

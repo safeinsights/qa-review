@@ -1202,11 +1202,18 @@ func parseAccessStatus(raw []byte) (engineAccessStatus, error) {
 	return s, nil
 }
 
+// accessStatusOutput runs the engine's access-status and returns its stdout. A var
+// (not a direct engineCmd call) so tests can substitute a stub that fails or returns
+// garbage, to pin accessStatus's non-fatal fallback without shelling out for real.
+var accessStatusOutput = func() ([]byte, error) {
+	return engineCmd("access-status").Output()
+}
+
 // accessStatus shells the engine's access-status. A failure is NON-FATAL: the gate
 // still renders from the local decrypt check, with a note. Never let this turn an
 // existing request into "no request".
 func (a *App) accessStatus() (engineAccessStatus, string) {
-	out, err := engineCmd("access-status").Output()
+	out, err := accessStatusOutput()
 	if err != nil {
 		return engineAccessStatus{}, "Couldn't check your access request status."
 	}
