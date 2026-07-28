@@ -6,6 +6,7 @@ import {
     addMember,
     fingerprint,
     isInDrift,
+    type Member,
     readKeyring,
     readLock,
     recipients,
@@ -64,5 +65,31 @@ describe('keyring', () => {
         writeLock(dir, fingerprint(recipients(readKeyring(dir))))
         expect(readLock(dir)).toBe(fingerprint(['age1a']))
         expect(isInDrift(dir)).toBe(false)
+    })
+})
+
+const ada: Member = {
+    name: 'Ada Lovelace',
+    publicKey: 'age1ada',
+    email: 'ada@x.com',
+    addedDate: '2026-07-28',
+}
+
+describe('addMember', () => {
+    it('adds a new member', () => {
+        expect(addMember([], ada)).toHaveLength(1)
+    })
+
+    // Re-running request-access must not error: that error is what pushed users
+    // into renaming themselves and filing a duplicate access PR.
+    it('is a no-op when the same name and key are re-added', () => {
+        const next = addMember([ada], { ...ada, addedDate: '2026-08-01' })
+        expect(next).toEqual([ada])
+    })
+
+    it('still rejects a different key under a taken name', () => {
+        expect(() => addMember([ada], { ...ada, publicKey: 'age1other' })).toThrow(
+            /already in the keyring/
+        )
     })
 })

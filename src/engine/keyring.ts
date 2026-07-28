@@ -39,9 +39,14 @@ export function recipients(members: Member[]): string[] {
     return members.map(m => m.publicKey)
 }
 
-// Add a member, rejecting a duplicate name. Returns a new array (pure).
+// Add a member. Re-adding the SAME name with the SAME key is a no-op (returns the
+// list unchanged) so a repeated access request doesn't error — erroring here is
+// what drove users to rename themselves and open a second PR. A different key
+// under a taken name is still a genuine conflict.
 export function addMember(members: Member[], member: Member): Member[] {
-    if (members.some(m => m.name === member.name)) {
+    const existing = members.find(m => m.name === member.name)
+    if (existing) {
+        if (existing.publicKey === member.publicKey) return members
         throw new Error(`"${member.name}" is already in the keyring (names must be unique)`)
     }
     return [...members, member]

@@ -34,13 +34,13 @@ describe('request-access', () => {
         expect(calls.some(c => c[0] === 'checkout')).toBe(true)
     })
 
-    it('rejects a duplicate name', async () => {
+    it('is idempotent for the same person', async () => {
         const dir = tmpDir()
         const git = async () => ''
         await requestAccess({ dir, name: 'Jane', email: 'a@x.com', date: '2026-06-30', git })
-        await expect(
-            requestAccess({ dir, name: 'Jane', email: 'b@x.com', date: '2026-06-30', git })
-        ).rejects.toThrow(/already in the keyring/)
+        await requestAccess({ dir, name: 'Jane', email: 'a@x.com', date: '2026-06-30', git })
+        const keyring = JSON.parse(fs.readFileSync(path.join(dir, 'keyring.json'), 'utf8'))
+        expect(keyring).toHaveLength(1)
     })
 
     it('reuses an existing identity instead of generating a new one', async () => {
