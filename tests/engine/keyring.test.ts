@@ -102,4 +102,22 @@ describe('addMember', () => {
         expect(next).toHaveLength(1)
         expect(next[0]).toMatchObject({ name: 'Ada L', publicKey: ada.publicKey })
     })
+
+    // The byKey rename branch must not bypass the name-uniqueness guard: renaming
+    // Ada's key to "Bob" while a DIFFERENT member already owns that name is the
+    // same "two people collide on a name" conflict as the append path, just
+    // approached from the rename side. Without this check it silently produced
+    // two rows both named "Bob" (one holding Ada's key, one Bob's) — a corrupted
+    // human-facing roster, even though recipients()/decryption are unaffected.
+    it('still rejects a rename that collides with a DIFFERENT member already holding that name', () => {
+        const bob: Member = {
+            name: 'Bob',
+            publicKey: 'age1bob',
+            email: 'bob@x.com',
+            addedDate: '2026-07-28',
+        }
+        expect(() => addMember([ada, bob], { ...ada, name: 'Bob' })).toThrow(
+            /already in the keyring/
+        )
+    })
 })

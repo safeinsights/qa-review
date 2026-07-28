@@ -56,6 +56,17 @@ export function addMember(members: Member[], member: Member): Member[] {
     const byKey = members.find(m => m.publicKey === member.publicKey)
     if (byKey) {
         if (byKey.name === member.name) return members
+        // Renaming must not bypass the name-uniqueness guard: if some OTHER member
+        // (different key) already holds this name, renaming here would produce two
+        // rows sharing one name — the same "two people collide on a name" conflict
+        // the append path below already guards against, just approached from the
+        // rename side.
+        const collision = members.find(
+            m => m.name === member.name && m.publicKey !== member.publicKey
+        )
+        if (collision) {
+            throw new Error(`"${member.name}" is already in the keyring (names must be unique)`)
+        }
         return members.map(m =>
             m.publicKey === member.publicKey ? { ...m, name: member.name } : m
         )
