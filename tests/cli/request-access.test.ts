@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { requestAccess } from '@/cli/commands/request-access'
+import { requestAccess, resolveRequestAccessName } from '@/cli/commands/request-access'
 
 function tmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'reqaccess-'))
@@ -64,5 +64,34 @@ describe('request-access', () => {
         })
         expect(second.publicKey).toBe(first.publicKey)
         expect(second.created).toBe(false)
+    })
+})
+
+// Regression coverage for a bug where the GUI passes `--name ''` (meaning "derive
+// it") through Go's `RequestAccess`, which always sends the flag literally even
+// when empty. `??` doesn't fall through on '' (only null/undefined), so an empty
+// string used to be treated as an explicit name and reach the engine unresolved,
+// erroring instead of resubmitting. Pinning both branches of the fallback here so
+// a future "simplification" back to `??` is caught immediately.
+describe('resolveRequestAccessName', () => {
+    it('falls back to the resolver when --name is an empty string', async () => {
+        const name = await resolveRequestAccessName({ name: '' }, async () => 'Ada Lovelace')
+        expect(name).toBe('Ada Lovelace')
+    })
+
+    it('throws the "required" error when --name is empty and the resolver also yields nothing', async () => {
+        await expect(resolveRequestAccessName({ name: '' }, async () => '')).rejects.toThrow(
+            'request-access: --name "Your Name" is required (git user.name is unset)'
+        )
+    })
+
+    it('uses the explicit --name and never calls the resolver', async () => {
+        let resolverCalled = false
+        const name = await resolveRequestAccessName({ name: 'Explicit Name' }, async () => {
+            resolverCalled = true
+            return 'Should Not Be Used'
+        })
+        expect(name).toBe('Explicit Name')
+        expect(resolverCalled).toBe(false)
     })
 })

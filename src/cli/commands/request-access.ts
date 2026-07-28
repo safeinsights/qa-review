@@ -67,15 +67,30 @@ export async function requestAccess(
     return { publicKey, created, branch }
 }
 
-// CLI wrapper: resolves name/email/date, runs requestAccess, then opens a PR via
-// `gh` (falling back to printed instructions if gh is unavailable).
-export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
-    // An empty string is not a meaningful name (e.g. the GUI sends '' to mean
-    // "derive it"), so treat it the same as an absent flag, not as an explicit value.
-    const name = opts.name || (await safeGitConfigName())
+// Injectable so a test can pin both branches of the fallback without shelling
+// out to git. Default resolves via `git config user.name`.
+export type NameResolver = () => Promise<string>
+
+// Resolves the --name flag against a name resolver (default: git config user.name).
+// An empty string is not a meaningful explicit name (the GUI sends '' to mean
+// "derive it"), so it is treated the same as an absent flag, not as an explicit
+// value — `||`, not `??`, since parseArgs always yields a string and '' is the
+// one falsy value opts.name can take.
+export async function resolveRequestAccessName(
+    opts: Record<string, string>,
+    resolveName: NameResolver = safeGitConfigName
+): Promise<string> {
+    const name = opts.name || (await resolveName())
     if (!name) {
         throw new Error('request-access: --name "Your Name" is required (git user.name is unset)')
     }
+    return name
+}
+
+// CLI wrapper: resolves name/email/date, runs requestAccess, then opens a PR via
+// `gh` (falling back to printed instructions if gh is unavailable).
+export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
+    const name = await resolveRequestAccessName(opts)
     const email = opts.email ?? (await safeGitConfigEmail())
     const date = new Date().toISOString().slice(0, 10)
     const { branch, created } = await requestAccess({ dir: configDir(), name, email, date })
