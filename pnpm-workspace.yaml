@@ -10,13 +10,16 @@ packages: []
 overrides:
     vite: '^6.4.3'
 
-# pnpm 11 refuses to run a dependency's postinstall unless it is listed here, and
-# a bare `pnpm install` FAILS on unapproved ones (ERR_PNPM_IGNORED_BUILDS) rather
-# than warning. Approval is otherwise stored as local machine state, so a
-# developer who ran `pnpm approve-builds` sees green while CI — which always
-# starts clean — fails. Listing them makes the decision explicit and reviewable.
+# pnpm 11 refuses to run a dependency's postinstall unless it is approved here,
+# and a bare `pnpm install` FAILS on unapproved ones (ERR_PNPM_IGNORED_BUILDS)
+# rather than warning. Approval is otherwise stored as per-machine state under
+# $HOME, so a developer who once ran `pnpm approve-builds` sees green while CI —
+# which always starts clean — fails. Listing them makes it explicit and reviewable.
+#
+# The key is `allowBuilds` (a map), NOT pnpm 10's `onlyBuiltDependencies` (a
+# list): pnpm 11 silently ignores the old key and still fails the install.
 #   esbuild        downloads its platform-specific binary; unusable without it
 #   @clerk/shared  first-party package setup (scripts/postinstall.mjs)
-onlyBuiltDependencies:
-    - esbuild
-    - '@clerk/shared'
+allowBuilds:
+    esbuild: true
+    '@clerk/shared': true

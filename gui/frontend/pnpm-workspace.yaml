@@ -16,3 +16,11 @@ overrides:
     vite: '^6.4.3'
     postcss: '^8.5.18'
     esbuild: '^0.25.0'
+
+# pnpm 11 FAILS the install (ERR_PNPM_IGNORED_BUILDS) on any unapproved
+# postinstall. esbuild arrives transitively via vite and downloads its
+# platform-specific binary, so vite is unusable without it. The key is
+# `allowBuilds` (a map), NOT pnpm 10's `onlyBuiltDependencies` (a list) — pnpm 11
+# silently ignores the old key and still fails.
+allowBuilds:
+    esbuild: true
