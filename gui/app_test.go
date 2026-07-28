@@ -311,6 +311,26 @@ func TestDebugReportProbesTools(t *testing.T) {
 	}
 }
 
+func TestParseAccessStatus(t *testing.T) {
+	raw := []byte(`{"state":"pr-open","branch":"access/ada","publicKey":"age1x","name":"Ada","pr":{"number":21,"state":"OPEN","url":"https://x/pull/21"},"githubReachable":true,"note":""}`)
+	got, err := parseAccessStatus(raw)
+	if err != nil {
+		t.Fatalf("parseAccessStatus: %v", err)
+	}
+	if got.State != "pr-open" || got.Branch != "access/ada" {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+	if got.PR == nil || got.PR.Number != 21 {
+		t.Fatalf("expected PR 21, got %+v", got.PR)
+	}
+}
+
+func TestParseAccessStatusRejectsGarbage(t *testing.T) {
+	if _, err := parseAccessStatus([]byte("not json")); err == nil {
+		t.Fatal("expected an error for malformed engine output")
+	}
+}
+
 func containsStr(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
