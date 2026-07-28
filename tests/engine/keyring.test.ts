@@ -92,4 +92,14 @@ describe('addMember', () => {
             /already in the keyring/
         )
     })
+
+    // The rename path: same key (same person), different name. Before the fix,
+    // addMember only checked uniqueness by name, so this silently APPENDED a
+    // second entry — one public key controlling two keyring rows, which is the
+    // exact duplicate the request-access branch selection bug also produced.
+    it('updates the existing entry in place when the same key reappears under a new name', () => {
+        const next = addMember([ada], { ...ada, name: 'Ada L' })
+        expect(next).toHaveLength(1)
+        expect(next[0]).toMatchObject({ name: 'Ada L', publicKey: ada.publicKey })
+    })
 })

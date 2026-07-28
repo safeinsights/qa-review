@@ -43,10 +43,25 @@ export function recipients(members: Member[]): string[] {
 // list unchanged) so a repeated access request doesn't error — erroring here is
 // what drove users to rename themselves and open a second PR. A different key
 // under a taken name is still a genuine conflict.
+//
+// Also dedupe on publicKey: the same key can appear under a DIFFERENT name (git
+// config was edited between requests, or the caller passed an explicit --name
+// that differs from what's on file). Since a key uniquely identifies a person's
+// request, that must UPDATE the existing entry's name in place rather than
+// appending a second entry — two entries sharing one key is exactly the
+// duplicate-request bug this file exists to prevent. The reverse guard (a
+// different key under a taken name throws) is unchanged: that protects two
+// different people from colliding on a name.
 export function addMember(members: Member[], member: Member): Member[] {
+    const byKey = members.find(m => m.publicKey === member.publicKey)
+    if (byKey) {
+        if (byKey.name === member.name) return members
+        return members.map(m =>
+            m.publicKey === member.publicKey ? { ...m, name: member.name } : m
+        )
+    }
     const existing = members.find(m => m.name === member.name)
     if (existing) {
-        if (existing.publicKey === member.publicKey) return members
         throw new Error(`"${member.name}" is already in the keyring (names must be unique)`)
     }
     return [...members, member]

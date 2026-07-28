@@ -65,6 +65,38 @@ describe('request-access', () => {
         expect(second.publicKey).toBe(first.publicKey)
         expect(second.created).toBe(false)
     })
+
+    // The core bug this branch exists to kill: same key, two different names
+    // (e.g. git user.name was edited, or the first request used an explicit
+    // --name). Before the fix, the branch was derived fresh from opts.name every
+    // time, so the second call computed a DIFFERENT slug and pushed a second
+    // branch — and the keyring ended up with two entries sharing one public key.
+    // The stored identity metadata must win: same key -> same branch, always.
+    it('reuses the first branch when a later request uses a different name for the same key', async () => {
+        const dir = tmpDir()
+        const git = async () => ''
+        const first = await requestAccess({
+            dir,
+            name: 'Ada Lovelace',
+            email: 'a@x.com',
+            date: '2026-06-30',
+            git,
+        })
+        const second = await requestAccess({
+            dir,
+            name: 'Ada L',
+            email: 'a@x.com',
+            date: '2026-07-01',
+            git,
+        })
+        expect(second.publicKey).toBe(first.publicKey)
+        expect(second.branch).toBe(first.branch)
+        expect(second.branch).toBe('access/ada-lovelace')
+
+        const keyring = JSON.parse(fs.readFileSync(path.join(dir, 'keyring.json'), 'utf8'))
+        expect(keyring).toHaveLength(1)
+        expect(keyring[0].publicKey).toBe(first.publicKey)
+    })
 })
 
 // Regression coverage for a bug where the GUI passes `--name ''` (meaning "derive

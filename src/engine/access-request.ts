@@ -1,6 +1,6 @@
 import * as fs from 'node:fs'
 import { identityPath, readIdentity } from '@/engine/identity'
-import { configDir } from '@/engine/settings'
+import { configDir, publicKeyFromIdentity } from '@/engine/settings'
 
 export function slugForName(name: string): string {
     return name
@@ -43,12 +43,23 @@ export function readIdentityMeta(dir: string = configDir()): IdentityMeta | null
 
 // Rewrite the comment header, preserving the secret key line verbatim. Used when
 // an identity predates the metadata header, or when the branch changes.
-export function writeIdentityMeta(dir: string, meta: { name: string; branch: string }): void {
+//
+// The public key is always DERIVED from the secret (never read back from the
+// existing header): readIdentityMeta returns null on a headerless file, so
+// `existing?.publicKey` would be undefined there and a `?? ''` fallback would
+// write a blank `# public key: ` line — which then makes readIdentityMeta keep
+// returning null forever, even though the secret still works. Deriving from the
+// secret is always correct and never depends on a header that may not exist yet.
+export async function writeIdentityMeta(
+    dir: string,
+    meta: { name: string; branch: string }
+): Promise<void> {
     const secret = readIdentity(dir)
     if (!secret) throw new Error('writeIdentityMeta: no identity file to update')
-    const existing = readIdentityMeta(dir)
+    const publicKey = await publicKeyFromIdentity(secret)
+    if (!publicKey) throw new Error('writeIdentityMeta: could not derive a public key')
     const header = [
-        `# public key: ${existing?.publicKey ?? ''}`,
+        `# public key: ${publicKey}`,
         `# name: ${meta.name}`,
         `# branch: ${meta.branch}`,
     ]

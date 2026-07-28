@@ -40,7 +40,7 @@ export async function createIdentity(
     const existing = readIdentity(dir)
     if (existing) {
         const publicKey = await publicKeyFromIdentity(existing)
-        if (meta) writeIdentityMeta(dir, meta)
+        if (meta) await writeIdentityMeta(dir, meta)
         return { publicKey, created: false }
     }
     const secret = await generateIdentity()

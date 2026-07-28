@@ -8,7 +8,8 @@ import {
     slugForName,
     writeIdentityMeta,
 } from '@/engine/access-request'
-import { createIdentity } from '@/engine/identity'
+import { createIdentity, identityPath } from '@/engine/identity'
+import { generateIdentity, publicKeyFromIdentity } from '@/engine/settings'
 
 function tmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'access-meta-'))
@@ -60,12 +61,41 @@ describe('identity metadata', () => {
             .readFileSync(path.join(dir, 'age-identity.txt'), 'utf8')
             .split('\n')
             .find(l => l.startsWith('AGE-SECRET-KEY-'))
-        writeIdentityMeta(dir, { name: 'Ada Lovelace', branch: 'access/ada-lovelace' })
+        await writeIdentityMeta(dir, { name: 'Ada Lovelace', branch: 'access/ada-lovelace' })
         const after = fs
             .readFileSync(path.join(dir, 'age-identity.txt'), 'utf8')
             .split('\n')
             .find(l => l.startsWith('AGE-SECRET-KEY-'))
         expect(after).toBe(before)
         expect(readIdentityMeta(dir)?.name).toBe('Ada Lovelace')
+    })
+
+    // readIdentityMeta returns null when the `# public key:` header line is
+    // missing (hand-created file, restored from backup, bare secret line). Before
+    // the fix, writeIdentityMeta fell back to `existing?.publicKey ?? ''` in that
+    // case and wrote a BLANK header line, permanently corrupting the file even
+    // though the secret still decrypts fine. The public key must be derived from
+    // the secret itself, not read back from a header that may not exist.
+    it('derives the public key from the secret when the identity file has no header at all', async () => {
+        const dir = tmpDir()
+        const secret = await generateIdentity()
+        const expectedPublicKey = await publicKeyFromIdentity(secret)
+        fs.mkdirSync(dir, { recursive: true })
+        // Bare secret line, no comment header — simulates a hand-created/restored file.
+        fs.writeFileSync(identityPath(dir), `${secret}\n`, { mode: 0o600 })
+        expect(readIdentityMeta(dir)).toBeNull()
+
+        await writeIdentityMeta(dir, { name: 'Restored User', branch: 'access/restored-user' })
+
+        const meta = readIdentityMeta(dir)
+        expect(meta?.publicKey).toBe(expectedPublicKey)
+        expect(meta?.name).toBe('Restored User')
+        expect(meta?.branch).toBe('access/restored-user')
+        const rewritten = fs
+            .readFileSync(identityPath(dir), 'utf8')
+            .split('\n')
+            .find(l => l.startsWith('AGE-SECRET-KEY-'))
+        expect(rewritten).toBe(secret)
+        expect(fs.statSync(identityPath(dir)).mode & 0o777).toBe(0o600)
     })
 })

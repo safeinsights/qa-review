@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { openAccessPr } from '@/cli/commands/open-access-pr'
-import { branchForName } from '@/engine/access-request'
+import { branchForName, readIdentityMeta } from '@/engine/access-request'
 import { createIdentity } from '@/engine/identity'
 import { addMember, readKeyring, writeKeyring } from '@/engine/keyring'
 import { repoDir } from '@/engine/paths'
@@ -30,8 +30,19 @@ export async function requestAccess(
     opts: RequestAccessOptions
 ): Promise<{ publicKey: string; created: boolean; branch: string }> {
     const git = opts.git ?? realGit
-    const branch = branchForName(opts.name)
-    const { publicKey, created } = await createIdentity(opts.dir, { name: opts.name, branch })
+
+    // An identity file's stored branch/name (if any) is the source of truth for
+    // WHICH branch this key's request lives on. Deriving the branch fresh from
+    // opts.name every time meant a later request under a different name (e.g. git
+    // config was edited, or the first request used an explicit --name) computed a
+    // DIFFERENT slug and pushed a second branch + a second keyring entry sharing
+    // the same key. Once a request exists for this key, its branch never moves —
+    // an explicit --name still updates the keyring entry's display name, but is
+    // not allowed to fork a second branch for the same person.
+    const existingMeta = readIdentityMeta(opts.dir)
+    const name = existingMeta?.name ?? opts.name
+    const branch = existingMeta?.branch ?? branchForName(opts.name)
+    const { publicKey, created } = await createIdentity(opts.dir, { name, branch })
 
     const next = addMember(readKeyring(opts.dir), {
         name: opts.name,

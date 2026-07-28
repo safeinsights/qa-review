@@ -9,9 +9,30 @@ export type GhRunner = (args: string[]) => Promise<string>
 
 const realGh: GhRunner = async args => (await execFileAsync('gh', args, { cwd: repoDir() })).stdout
 
+// Never let a malformed/empty `gh pr list` response surface as a confusing parse
+// error — an empty result here just means "fall through to rethrowing the
+// original `gh pr create` failure".
+function safeParsePrs(listed: string): Array<{ number: number; url: string }> {
+    try {
+        const parsed = JSON.parse(listed || '[]') as unknown
+        return Array.isArray(parsed) ? (parsed as Array<{ number: number; url: string }>) : []
+    } catch {
+        return []
+    }
+}
+
 // Create the access PR, or report the one that already exists. `gh pr create`
 // fails when a PR is already open for the branch; that is the SUCCESS path here —
 // treating it as an error is what made a pending request look like a failed one.
+//
+// ANY `gh pr create` failure falls through to a `gh pr list --head` lookup, rather
+// than gating that fallback on matching gh's error wording (`/already exists/i`).
+// Message-matching is brittle — a gh version bump that rewords the error silently
+// turns a healthy "already open" case back into a thrown failure. The lookup
+// itself is the authoritative check ("is there actually a PR for this branch?"),
+// so it's safe to always attempt; a genuine failure (auth, network, ...) still
+// surfaces because the list will be empty and the ORIGINAL error is rethrown, not
+// a confusing secondary one from the list call.
 export async function openAccessPr(opts: {
     branch: string
     name: string
@@ -33,8 +54,6 @@ export async function openAccessPr(opts: {
         ])
         return { url: out.trim(), created: true }
     } catch (e) {
-        const message = e instanceof Error ? e.message : String(e)
-        if (!/already exists/i.test(message)) throw e
         const listed = await gh([
             'pr',
             'list',
@@ -44,8 +63,8 @@ export async function openAccessPr(opts: {
             'open',
             '--json',
             'number,url',
-        ])
-        const prs = JSON.parse(listed || '[]') as Array<{ number: number; url: string }>
+        ]).catch(() => '')
+        const prs = safeParsePrs(listed)
         if (prs.length === 0) throw e
         return { url: prs[0].url, created: false }
     }
