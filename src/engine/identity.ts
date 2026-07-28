@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { writeIdentityMeta } from '@/engine/access-request'
 import { configDir, generateIdentity, publicKeyFromIdentity } from '@/engine/settings'
 
 export const IDENTITY_FILE = 'age-identity.txt'
@@ -29,18 +30,25 @@ export function readIdentity(dir: string = configDir()): string | null {
 }
 
 // Create a new identity file if none exists. Returns its public key and whether
-// it was freshly created. Never overwrites an existing identity.
+// it was freshly created. Never overwrites an existing identity — but DOES record
+// name/branch metadata on a file that lacks it, so a pre-metadata identity gains a
+// request record without regenerating the key.
 export async function createIdentity(
-    dir: string = configDir()
+    dir: string = configDir(),
+    meta?: { name: string; branch: string }
 ): Promise<{ publicKey: string; created: boolean }> {
     const existing = readIdentity(dir)
     if (existing) {
-        return { publicKey: await publicKeyFromIdentity(existing), created: false }
+        const publicKey = await publicKeyFromIdentity(existing)
+        if (meta) writeIdentityMeta(dir, meta)
+        return { publicKey, created: false }
     }
     const secret = await generateIdentity()
     const publicKey = await publicKeyFromIdentity(secret)
     const p = identityPath(dir)
     fs.mkdirSync(path.dirname(p), { recursive: true })
-    fs.writeFileSync(p, `# public key: ${publicKey}\n${secret}\n`, { mode: 0o600 })
+    const header = [`# public key: ${publicKey}`]
+    if (meta) header.push(`# name: ${meta.name}`, `# branch: ${meta.branch}`)
+    fs.writeFileSync(p, `${header.join('\n')}\n${secret}\n`, { mode: 0o600 })
     return { publicKey, created: true }
 }
