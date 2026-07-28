@@ -38,13 +38,25 @@ export interface AccessStatus {
 // True only when EVERY encrypted secret decrypts — matching loadSettings(), which
 // throws on the first one it can't. A single undecryptable secret still fails a run,
 // so "one worked" would be a false green.
+//
+// `checkable` is tri-state: false = genuinely nothing to test (no file, or no
+// encrypted values in it) — the caller treats this as vacuously ready. null = the
+// file exists but couldn't be read/parsed — unlike "nothing to test", this must NOT
+// resolve to ready, or a corrupt secrets file would report access as granted right
+// up until the user's next run hits "Cannot decrypt". true = at least one encrypted
+// value was tried.
 async function allSecretsDecrypt(
     dir: string,
     identity: string
-): Promise<{ canDecrypt: boolean; checkable: boolean }> {
+): Promise<{ canDecrypt: boolean; checkable: boolean | null }> {
     const p = path.join(dir, SECRETS_FILE)
     if (!fs.existsSync(p)) return { canDecrypt: false, checkable: false }
-    const secrets = JSON.parse(fs.readFileSync(p, 'utf8') || '{}') as Record<string, string>
+    let secrets: Record<string, string>
+    try {
+        secrets = JSON.parse(fs.readFileSync(p, 'utf8') || '{}') as Record<string, string>
+    } catch {
+        return { canDecrypt: false, checkable: null }
+    }
     let tried = false
     for (const value of Object.values(secrets)) {
         if (!isEncryptedValue(value)) continue
@@ -81,12 +93,34 @@ export async function resolveAccessStatus(opts: {
 
     const name = meta.name ?? opts.identityName ?? ''
     const branch = meta.branch ?? (name ? branchForName(name) : '')
-    const status: AccessStatus = { ...base, publicKey: meta.publicKey, name, branch }
+    let status: AccessStatus = { ...base, publicKey: meta.publicKey, name, branch }
 
     const identity = readIdentity(opts.dir)
-    const inKeyring = readKeyring(opts.dir).some(m => m.publicKey === meta.publicKey)
+    let inKeyring = false
+    try {
+        inKeyring = readKeyring(opts.dir).some(m => m.publicKey === meta.publicKey)
+    } catch {
+        // Can't determine membership from a corrupt keyring.json — fall through to the
+        // branch/PR path rather than claim ready/merged-awaiting-rekey on a guess. This
+        // is a local read failure, not a GitHub one, so githubReachable stays true. The
+        // note carries forward through whatever branch/PR state is resolved below.
+        status = {
+            ...status,
+            note: "Couldn't read the local keyring — showing branch/PR state only.",
+        }
+    }
     if (inKeyring && identity) {
         const { canDecrypt, checkable } = await allSecretsDecrypt(opts.dir, identity)
+        if (checkable === null) {
+            // Unreadable secrets file: cannot confirm decryption, so do not report
+            // ready — that would be a false green the user only discovers on their
+            // next run.
+            return {
+                ...status,
+                state: 'merged-awaiting-rekey',
+                note: "Couldn't read the local secrets file — treating your access as not yet confirmed.",
+            }
+        }
         if (canDecrypt || !checkable) return { ...status, state: 'ready' }
         return { ...status, state: 'merged-awaiting-rekey' }
     }

@@ -114,4 +114,39 @@ describe('resolveAccessStatus', () => {
         expect(status.githubReachable).toBe(false)
         expect(status.note).toMatch(/GitHub/i)
     })
+
+    // A corrupt local keyring.json must degrade to the branch/PR path, not throw
+    // and not silently claim ready/merged-awaiting-rekey on unknown membership.
+    it.each([
+        ['invalid JSON', 'not json'],
+        ['a JSON object instead of an array', '{"oops":true}'],
+    ])(
+        'does not throw on a keyring.json containing %s — falls through to branch/PR state',
+        async (_label, contents) => {
+            const dir = tmpDir()
+            await seedIdentity(dir)
+            fs.writeFileSync(path.join(dir, 'keyring.json'), contents)
+            const status = await resolveAccessStatus({
+                dir,
+                git: async () => 'abc123\trefs/heads/access/ada-lovelace',
+                gh: noGh,
+            })
+            expect(status.state).toBe('branch-no-pr')
+            expect(status.note).toMatch(/keyring/i)
+        }
+    )
+
+    // A corrupt settings.secrets.json must never resolve to 'ready' — that would be
+    // a false green the user only discovers when a real run fails to decrypt.
+    it('does not report ready (or throw) when settings.secrets.json is corrupt', async () => {
+        const dir = tmpDir()
+        const publicKey = await seedIdentity(dir)
+        writeKeyring(dir, [
+            { name: 'Ada Lovelace', publicKey, email: 'a@x.com', addedDate: '2026-07-28' },
+        ])
+        fs.writeFileSync(path.join(dir, 'settings.secrets.json'), 'not json')
+        const status = await resolveAccessStatus({ dir, git: noGit, gh: noGh })
+        expect(status.state).not.toBe('ready')
+        expect(status.note).toMatch(/secrets/i)
+    })
 })
