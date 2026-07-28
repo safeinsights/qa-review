@@ -1,6 +1,15 @@
 import path from 'node:path'
-import { faker } from '@faker-js/faker'
-import type { Locator } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect } from '@playwright/test'
+import {
+    beginProposal,
+    chooseOrgAndCaptureId,
+    fillProposal,
+    generateStudyContent,
+    openProposalDashboard,
+    type StudyContent,
+    submitProposal,
+} from '../engine/flows/study'
 import { repoDir } from '../engine/paths'
 import type { RunContext, Suite } from './types'
 
@@ -9,7 +18,7 @@ import type { RunContext, Suite } from './types'
 //
 //   researcher: create study
 //   reviewer:   approve proposal
-//   researcher: route to /code, launch IDE (best-effort), upload code, submit
+//   researcher: route to /code, launch IDE, upload code, submit
 //   reviewer:   request code changes (round 1)
 //   researcher: resubmit code (round 2 == the re-run: a fresh job)
 //   reviewer:   approve code (round 2)
@@ -21,15 +30,14 @@ import type { RunContext, Suite } from './types'
 // Selectors mirror management-app/tests/study-flow.spec.ts. The suite logs in as
 // researcher first (roles/--role), then switches accounts itself.
 //
-// The IDE launch opens an external Coder workspace in a new window and is treated
-// as NON-FATAL — a Coder hiccup must never sink the lifecycle trace.
+// The IDE launch opens an external Coder workspace in a new window and is REQUIRED:
+// the button must appear, the popup must open, and it must load, or the step fails.
 //
 // Requires the reviewer's results-decryption private key to approve results:
 // set the Reviewer "Results private key" for the target env (qa/staging) in the
 // Settings panel. The key is per-account AND per-env; env.ts resolves the one
 // matching the running env (PR previews reuse qa) into ctx.resultsKey.
 
-const RESEARCHER_DASH = '/openstax-lab/dashboard'
 const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
 const CODE_CRITERIA_KEYS = [
@@ -48,10 +56,14 @@ const RESULTS_POLL_INTERVAL_MS = 15_000
 // key box (or error) to actually render before deciding the results aren't ready
 // yet. Covers the reload + SPA hydration so a not-yet-rendered box isn't missed.
 const RESULTS_RENDER_WAIT_MS = 8_000
+// Short settle after isReactHydrated before clicking the "Proceed to step 3"
+// next/link button: the App Router route entry for the /agreements segment wires
+// up just after initial hydration, and a click in that gap no-ops silently.
+const PROCEED_NAV_SETTLE_MS = 500
 
 // Shared per-run state threaded between steps via ctx.state. `study` is the
-// generated content; `studyId` is captured at Step 2 and reused by every later
-// step. Helpers read them off ctx.state (cast at the use site).
+// generated content; `studyId` is captured in Step 1 (the moment the study record
+// is created) and reused by every later step. Helpers read them off ctx.state.
 function content(ctx: RunContext): StudyContent {
     return ctx.state.study as StudyContent
 }
@@ -72,110 +84,53 @@ export const studyHappyPathSuite: Suite = {
                 // Realistic-but-clearly-synthetic study + review content (faker).
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
-                await ctx.step('Open the researcher org dashboard', async () => {
-                    await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASH}`, {
-                        waitUntil: 'domcontentloaded',
-                    })
-                    await ctx.page
-                        .getByRole('link', { name: /Propose New Study/i })
-                        .first()
-                        .waitFor({ state: 'visible' })
+                await ctx.step(async () => {
+                    await openProposalDashboard(ctx.page, ctx.baseURL)
                 })
             },
         },
         {
             name: 'Start a new study proposal',
-            run: async ctx => {
-                await ctx.step('Start a new study proposal', async () => {
-                    await ctx.page
-                        .getByRole('link', { name: /Propose New Study/i })
-                        .first()
-                        .click()
-                    await ctx.page.waitForURL(/\/study\/request$/)
-                })
-            },
+            run: ctx =>
+                ctx.step(async () => {
+                    await beginProposal(ctx.page)
+                }),
         },
         {
-            name: 'Step 1: choose org and language',
+            name: 'Step 1: choose org and language, then capture the study id',
             run: async ctx => {
-                await ctx.step('Step 1: choose org and language', async () => {
-                    const orgSelect = ctx.page.getByTestId('org-select')
-                    await orgSelect.click()
-                    await ctx.page
-                        .getByRole('option', { name: /openstax/i })
-                        .first()
-                        .click()
-                    const rRadio = ctx.page.getByRole('radio', { name: 'R', exact: true })
-                    await rRadio.waitFor({ state: 'visible' })
-                    await rRadio.click()
-                    await ctx.page.getByRole('button', { name: /Proceed to Step 2/i }).click()
+                await ctx.step(async () => {
+                    // Proceeding to Step 2 creates the study record. Capture + track
+                    // its id the instant it exists, so no created study is untracked.
+                    const studyId = await chooseOrgAndCaptureId(ctx.page)
+                    ctx.state.studyId = studyId
+                    ctx.trackStudy(studyId)
                 })
-            },
-        },
-        {
-            name: 'Reach Step 2 and capture the study id',
-            run: async ctx => {
-                const studyId = await ctx.step(
-                    'Reach Step 2 and capture the study id',
-                    async () => {
-                        await ctx.page.waitForURL(/\/study\/[0-9a-f-]+\/proposal$/i)
-                        const match = ctx.page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
-                        if (!match)
-                            throw new Error(
-                                `Could not find study id in proposal URL: ${ctx.page.url()}`
-                            )
-                        return match[1]
-                    }
-                )
-                // Track for cleanup BEFORE anything else can fail — the study exists now.
-                ctx.state.studyId = studyId
-                ctx.trackStudy(studyId)
             },
         },
         {
             name: 'Step 2: fill the proposal',
-            run: async ctx => {
-                await ctx.step('Step 2: fill the proposal', async () => {
-                    const study = content(ctx)
-                    await ctx.page.getByLabel('Study Title').fill(study.title)
-                    await ctx.page.getByPlaceholder('Select dataset(s) of interest').click()
-                    await ctx.page.getByRole('option').first().click()
-                    await fillLexical(ctx, 'Research question(s)', study.researchQuestion)
-                    await fillLexical(ctx, 'Project summary', study.summary)
-                    await fillLexical(ctx, 'Impact', study.impact)
-                    const pi = ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
-                    await pi.click()
-                    await ctx.page.getByRole('option').first().click()
-                })
-            },
+            run: ctx =>
+                ctx.step(async () => {
+                    await fillProposal(ctx.page, content(ctx))
+                }),
         },
         {
             name: 'Submit the initial request',
-            run: async ctx => {
-                await ctx.step('Submit the initial request', async () => {
-                    await ctx.page.getByRole('button', { name: /Submit initial request/i }).click()
-                    await ctx.page
-                        .getByRole('button', { name: /Yes, submit initial request/i })
-                        .click()
-                    await ctx.page
-                        .getByText(/successfully submitted/i)
-                        .waitFor({ state: 'visible' })
-                })
-            },
+            run: ctx =>
+                ctx.step(async () => {
+                    await submitProposal(ctx.page)
+                }),
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
         {
             name: 'Switch to the reviewer account',
-            run: async ctx => {
-                await ctx.step('Switch to the reviewer account', async () => {
-                    await ctx.loginAs('reviewer')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
         {
             name: 'Reviewer approves the proposal',
-            run: async ctx => {
-                await ctx.step('Reviewer approves the proposal', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await gotoReview(ctx, id(ctx))
                     const feedback = ctx.page
                         .getByTestId('review-feedback-section')
@@ -189,100 +144,235 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.getByRole('button', { name: /^Submit review$/i }).click()
                     await confirmDialog(ctx, /^Yes, submit review$/i)
                     await ctx.page.getByText(/Approved on/).waitFor({ state: 'visible' })
-                })
-            },
+                }),
         },
         // ---- Researcher: route to code upload, launch IDE, upload + submit ----
         {
             name: 'Switch back to the researcher account',
-            run: async ctx => {
-                await ctx.step('Switch back to the researcher account', async () => {
-                    await ctx.loginAs('researcher')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
             name: 'Route to the code upload page',
-            run: async ctx => {
-                await ctx.step('Route to the code upload page', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await ctx.page.goto(
                         `${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/submitted`,
                         {
                             waitUntil: 'domcontentloaded',
                         }
                     )
-                    await clickAndWaitForURL(
-                        ctx,
-                        ctx.page.getByRole('link', { name: /Proceed to step 3/i }),
-                        /\/agreements\/researcher(\?.*)?$/
+                    // Advance step-by-step, waiting for a distinctive element on each
+                    // destination page: clicking "Proceed to step 3" lands on the agreements
+                    // page, whose own "Proceed to Step 4" button is the arrival signal;
+                    // clicking that lands on /code, signalled by "Upload your files".
+                    //
+                    // The "Proceed to step 3" anchor is server-rendered, so it is visible
+                    // (and click-actionable) before the SPA finishes hydrating — a click that
+                    // lands in that window is swallowed by the not-yet-mounted router and the
+                    // page stays on /submitted. Wait for the app's hydration flag before the
+                    // single click; a click on the hydrated page navigates reliably, so if it
+                    // then fails to advance that is a real app bug this step should surface.
+                    // Tight timeout on purpose: a healthy page hydrates in ~1s, so if the
+                    // flag isn't set within a few seconds that is a real slow-hydration
+                    // problem we want surfaced, not absorbed by the 30s default.
+                    await ctx.page.waitForFunction(
+                        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true,
+                        undefined,
+                        { timeout: 5_000 }
                     )
-                    await clickAndWaitForURL(
-                        ctx,
-                        ctx.page.getByRole('button', { name: /Proceed to Step 4/i }),
-                        /\/code$/
-                    )
+                    // "Proceed to step 3" is a Mantine <Button component={next/link}>: its
+                    // onClick preventDefaults the native anchor navigation and relies on the
+                    // App Router's router.push. isReactHydrated flips true at initial
+                    // hydration, but the client route entry for the /agreements segment wires
+                    // up slightly later — a click in that gap is consumed while router.push
+                    // no-ops, so the page silently stays on /submitted (no error). There's no
+                    // exposed "route ready" signal to await, so settle briefly after
+                    // hydration before the single click.
+                    const proceedToStep3 = ctx.page.getByRole('link', {
+                        name: /Proceed to step 3/i,
+                    })
+                    await proceedToStep3.waitFor({ state: 'visible' })
+                    await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
+                    await proceedToStep3.click()
+                    const proceedToStep4 = ctx.page.getByRole('button', {
+                        name: /Proceed to Step 4/i,
+                    })
+                    await proceedToStep4.waitFor({ state: 'visible' })
+                    await proceedToStep4.click()
                     await ctx.page.getByText('Upload your files').waitFor({ state: 'visible' })
-                })
-            },
+                }),
         },
         {
-            name: 'Launch the IDE (best-effort)',
-            run: async ctx => {
-                await ctx.step('Launch the IDE (best-effort)', async () => {
-                    await launchIdeBestEffort(ctx)
-                })
-            },
+            name: 'Launch the IDE',
+            // Click "Edit files in IDE" and require the external Coder IDE to open and
+            // load the code-server workspace. The button is an anchor that normally
+            // opens Coder in a NEW TAB (target=_blank). Under CDP-attached Chrome that
+            // new tab does not reliably surface as a `page` event on ctx.page's context,
+            // so waiting for one hangs. Instead we CTRL/CMD-CLICK (Shift here), which
+            // suppresses target=_blank and forces the navigation to happen in the SAME
+            // tab (ctx.page). The button must be present, the workspace must provision
+            // and navigate here, its "Continue to launch IDE" OIDC re-auth + Clerk
+            // sign-in must complete, and the code-server workbench must actually render.
+            // Any of these failing FAILS the step — the IDE launch is part of the
+            // researcher lifecycle we assert, not a best-effort nicety.
+            run: ctx =>
+                ctx.step(async () => {
+                    const btn = ctx.page
+                        .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
+                        .first()
+                    await btn.waitFor({ state: 'visible' })
+                    // On a cold workspace the app provisions the whole code-server
+                    // environment FIRST ("Launching IDE" + a progress bar) and only then
+                    // navigates. Ctrl/Cmd-click keeps that navigation in THIS tab. We
+                    // don't wait on a Coder URL — the destination markers below (the
+                    // "Continue to launch IDE" control or the workbench) are the real
+                    // proof of arrival, and provisioning can take minutes.
+                    await btn.click({ modifiers: ['Shift'] })
+                    // Coder's OIDC uses prompt=login, so launching lands on Coder's
+                    // "session expired / Continue to launch IDE" page — a LINK (not a
+                    // button) to the OIDC callback — even though the app session is live.
+                    // Follow it, which redirects through Clerk's hosted sign-in. On a warm
+                    // session it may skip straight to the workbench, so only click Continue
+                    // if it renders.
+                    const continueControl = ctx.page
+                        .getByRole('link', { name: /Continue to launch IDE/i })
+                        .or(ctx.page.getByRole('button', { name: /Continue to launch IDE/i }))
+                    const workbench = ctx.page.locator('.monaco-workbench')
+                    // Cold-workspace provisioning can take minutes; this race (not a
+                    // URL wait) is now the arrival gate, so give it the full budget.
+                    const seen = await Promise.race([
+                        continueControl
+                            .first()
+                            .waitFor({ state: 'visible', timeout: 300_000 })
+                            .then(() => 'continue')
+                            .catch(() => null),
+                        workbench
+                            .first()
+                            .waitFor({ state: 'visible', timeout: 300_000 })
+                            .then(() => 'workbench')
+                            .catch(() => null),
+                    ])
+                    if (seen === 'continue') {
+                        await continueControl.first().click()
+                    }
+                    // Complete Coder's Clerk-hosted OIDC sign-in as the current role (no-op
+                    // if the workbench is already up), then require the code-server
+                    // workbench to actually render — a Coder URL alone isn't proof the IDE
+                    // loaded.
+                    await signInToCoder(ctx, ctx.page)
+                    await workbench.first().waitFor({ state: 'visible', timeout: 300_000 })
+                    // The IDE is left OPEN on ctx.page; a later step navigates back to /code.
+                }),
+        },
+        {
+            name: 'Run main.r in the IDE',
+            // Run main.R inside the open code-server IDE: open the file from the
+            // Explorer, click the editor toolbar's "Run Source" action, then prove it
+            // produced output by opening the generated results.csv and asserting it
+            // contains a numeric value.
+            //   - The Explorer shows the file as `main.R`; the toolbar action is an
+            //     <a role=button> with aria-label "Run Source (⇧⌘S)".
+            //   - Sourcing runs the file in an "R Interactive" terminal and writes
+            //     results.csv to the workspace root (via write.csv). The Explorer doesn't
+            //     auto-refresh for files the extension writes, so we click "Refresh
+            //     Explorer" and poll until it appears.
+            //   - Opening results.csv renders its rows as Monaco `.view-line`s; we require
+            //     at least one line to contain a digit (the sample writes a header plus a
+            //     count, e.g. 345).
+            run: ctx =>
+                ctx.step(async () => {
+                    await ctx.page.getByRole('treeitem', { name: 'main.R' }).click()
+                    await ctx.page
+                        .getByRole('tab', { name: /main\.R/i })
+                        .waitFor({ state: 'visible' })
+                    await ctx.page.getByRole('button', { name: /Run Source/i }).click()
+                    // Sourcing spins up (or reuses) the R Interactive terminal; require it.
+                    await ctx.page.getByText('R Interactive').first().waitFor({ state: 'visible' })
+
+                    const resultsFile = ctx.page.getByRole('treeitem', { name: 'results.csv' })
+                    await expect(async () => {
+                        await ctx.page.getByRole('button', { name: 'Refresh Explorer' }).click()
+                        await expect(resultsFile).toBeVisible()
+                    }).toPass()
+
+                    await resultsFile.click()
+                    await ctx.page
+                        .getByRole('tab', { name: /results\.csv/i })
+                        .waitFor({ state: 'visible' })
+                    // Monaco renders each CSV row as a .view-line; require a numeric value.
+                    const numericRow = ctx.page
+                        .locator('.view-lines .view-line')
+                        .filter({ hasText: /\d/ })
+                    await expect(numericRow.first()).toBeVisible()
+                }),
+        },
+        {
+            name: 'Return to the code upload page',
+            run: ctx =>
+                ctx.step(async () => {
+                    await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/code`, {
+                        waitUntil: 'domcontentloaded',
+                    })
+                    // Files already exist (uploaded via the IDE run), so the page renders the
+                    // "Review files" management view rather than the empty-state "Upload your
+                    // files" prompt. The "Study code" heading anchors both states.
+                    await ctx.page
+                        .getByRole('heading', { name: 'Study code' })
+                        .waitFor({ state: 'visible' })
+                }),
         },
         {
             name: 'Upload the study code (round 1)',
-            run: async ctx => {
-                await ctx.step('Upload the study code (round 1)', async () => {
-                    await uploadCode(ctx)
-                })
-            },
+            run: ctx =>
+                ctx.step(async () => {
+                    await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
+                    await ctx.page
+                        .getByRole('cell', { name: 'main.r', exact: true })
+                        .waitFor({ state: 'visible' })
+                    await ctx.page
+                        .getByRole('cell', { name: 'code.r', exact: true })
+                        .waitFor({ state: 'visible' })
+                }),
         },
         {
             name: 'Submit the study code (round 1)',
-            run: async ctx => {
-                await ctx.step('Submit the study code (round 1)', async () => {
-                    await submitCode(ctx)
-                })
-            },
+            run: ctx =>
+                ctx.step(async () => {
+                    // The fixed AppShell footer intercepts pointer events on the button.
+                    await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+                    await ctx.page.getByRole('button', { name: /Submit code/i }).click()
+                    await ctx.page.getByRole('button', { name: 'Yes, submit study code' }).click()
+                    // Code submission redirects to CodePostSubmissionView; wait on its banner.
+                    await ctx.page
+                        .getByTestId('code-under-review-banner')
+                        .waitFor({ state: 'visible' })
+                }),
         },
         // ---- Reviewer: request code changes (round 1) ----
         {
             name: 'Switch to the reviewer account',
-            run: async ctx => {
-                await ctx.step('Switch to the reviewer account', async () => {
-                    await ctx.loginAs('reviewer')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
         {
             name: 'Reviewer requests code changes',
-            run: async ctx => {
-                await ctx.step('Reviewer requests code changes', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await openCodeReview(ctx, id(ctx))
                     await setCodeCriteria(ctx, 'no')
                     await ctx.page.getByTestId('code-review-decision-needs-clarification').click()
                     await typeCodeFeedback(ctx, content(ctx).changeRequestFeedback)
                     await submitCodeReview(ctx, /Change requested on/)
-                })
-            },
+                }),
         },
         // ---- Researcher: resubmit code (round 2 == the re-run) ----
         {
             name: 'Switch back to the researcher account',
-            run: async ctx => {
-                await ctx.step('Switch back to the researcher account', async () => {
-                    await ctx.loginAs('researcher')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
             name: 'Resubmit the study code (round 2 / re-run)',
-            run: async ctx => {
-                await ctx.step('Resubmit the study code (round 2 / re-run)', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await ctx.page.goto(
                         `${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/resubmit`,
                         {
@@ -296,50 +386,45 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByLabel(/Resubmission Note/i)
                         .fill(content(ctx).resubmissionNote)
-                    // The fixed AppShell footer intercepts pointer events on the submit button.
+                    // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /^Resubmit study code$/i }).click()
                     await ctx.page
                         .getByRole('button', { name: /^Yes, resubmit study code$/i })
                         .click()
-                    await ctx.page.waitForURL('**/view')
-                })
-            },
+                    // Resubmit lands on the study view; the "Edit study code" heading
+                    // is gone once submitted, so wait for that heading to detach as the
+                    // signal the resubmit navigated away from the edit form.
+                    await ctx.page
+                        .getByRole('heading', { name: /Edit study code/i })
+                        .waitFor({ state: 'hidden' })
+                }),
         },
         // ---- Reviewer: approve code (round 2) ----
         {
             name: 'Switch to the reviewer account',
-            run: async ctx => {
-                await ctx.step('Switch to the reviewer account', async () => {
-                    await ctx.loginAs('reviewer')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
         {
             name: 'Reviewer approves the code',
-            run: async ctx => {
-                await ctx.step('Reviewer approves the code', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await openCodeReview(ctx, id(ctx))
                     await setCodeCriteria(ctx, 'yes')
                     await ctx.page.getByTestId('code-review-decision-approve').click()
                     await typeCodeFeedback(ctx, content(ctx).codeApprovalFeedback)
                     await submitCodeReview(ctx, /Approved on/)
-                })
-            },
+                }),
         },
         // ---- qa runs the job; wait for results, then decrypt + approve ----
         {
             name: 'Wait for the run to complete and produce results',
-            run: async ctx => {
-                await ctx.step('Wait for the run to complete and produce results', async () => {
-                    await waitForResults(ctx, id(ctx))
-                })
-            },
+            run: ctx => ctx.step(() => waitForResults(ctx, id(ctx))),
         },
         {
             name: 'Reviewer decrypts and views the results',
-            run: async ctx => {
-                await ctx.step('Reviewer decrypts and views the results', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     const key = ctx.resultsKey
                     if (!key) {
                         throw new Error(
@@ -355,16 +440,39 @@ export const studyHappyPathSuite: Suite = {
                     // actually rendered the decrypted output, not just that a View
                     // button exists. The decrypted-file table lists several rows
                     // (the results output plus code-run / security / packaging logs);
-                    // each has its own "View" button, so we must open the one on the
-                    // results row rather than blindly taking the first View button.
-                    await openResultsPreview(ctx)
-                    await verifyResultsModalHasContent(ctx)
+                    // each has its own "View" button, so we open the one on the results
+                    // row (its "File Type" cell reads "Results"; log rows read "… Log")
+                    // rather than blindly taking the first View button.
+                    const resultsRow = ctx.page
+                        .getByRole('row')
+                        .filter({ has: ctx.page.getByRole('cell', { name: 'results' }) })
+                        .first()
+                    const viewButton = resultsRow.getByRole('button', { name: 'View' })
+                    await viewButton.waitFor({ state: 'visible', timeout: 20_000 })
+                    await viewButton.click()
+                    // Assert the open results-preview modal actually rendered the decrypted
+                    // output. The results file is a CSV, previewed as a mantine-datatable
+                    // grid whose rows the app builds from the CSV — so a successful decrypt
+                    // shows data rows, while a decrypt-but-empty/garbled result shows a
+                    // header-only (or empty) grid. Wait for a populated data row and confirm
+                    // it carries content, rather than a specific value so it survives
+                    // run-to-run data changes.
+                    const dialog = ctx.page.getByRole('dialog')
+                    await dialog.waitFor({ state: 'visible', timeout: 20_000 })
+                    const firstRow = dialog.locator('table tbody tr').first()
+                    await firstRow.waitFor({ state: 'visible', timeout: 15_000 })
+                    const text = (await firstRow.innerText())?.trim() ?? ''
+                    if (!text) {
+                        const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
+                        throw new Error(
+                            `Results preview modal rendered an empty grid row. Modal text:\n${modalText}`
+                        )
+                    }
                     // Close the preview so it doesn't overlay the Approve button.
                     // The Mantine modal's close control is an icon-only CloseButton
                     // with no accessible name (no aria-label/title/text), so a
                     // name-based role locator can't find it — target the stable
                     // Mantine class instead, and fall back to Escape.
-                    const dialog = ctx.page.getByRole('dialog')
                     const closeButton = dialog.locator('.mantine-Modal-close')
                     if (await closeButton.count()) {
                         await closeButton.first().click()
@@ -372,105 +480,94 @@ export const studyHappyPathSuite: Suite = {
                         await ctx.page.keyboard.press('Escape')
                     }
                     await dialog.waitFor({ state: 'hidden' }).catch(() => {})
-                })
-            },
+                }),
         },
         {
             name: 'Reviewer approves the results',
-            run: async ctx => {
-                await ctx.step('Reviewer approves the results', async () => {
+            run: ctx =>
+                ctx.step(async () => {
+                    await ctx.page.getByRole('button', { name: /Approve/ }).click()
+                    // Approving results redirects to the reviewer dashboard.
                     await ctx.page
-                        .getByRole('button', { name: /^Approve$/i })
-                        .last()
-                        .click()
-                    await ctx.page.waitForURL('**/dashboard')
-                })
-            },
+                        .locator('text=Review Studies')
+                        .first()
+                        .waitFor({ state: 'visible' })
+                }),
         },
         // ---- Researcher: confirm the approved results are visible ----
         {
             name: 'Switch back to the researcher account',
-            run: async ctx => {
-                await ctx.step('Switch back to the researcher account', async () => {
-                    await ctx.loginAs('researcher')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
             name: 'Researcher sees the approved results',
-            run: async ctx => {
-                await ctx.step('Researcher sees the approved results', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/view`, {
                         waitUntil: 'domcontentloaded',
                     })
                     await ctx.page
                         .getByText(/results of your study have been approved/i)
                         .waitFor({ state: 'visible' })
-                })
-            },
+                }),
         },
         {
             name: 'Switch to the admin account for cleanup authority',
             // End as admin so guaranteed teardown cleanup runs with delete
             // authority: the /api/qa DELETE endpoints require isSiAdmin, which the
             // researcher and reviewer accounts lack (a reviewer-session cleanup 401s).
-            run: async ctx => {
-                await ctx.step('Switch to the admin account for cleanup authority', async () => {
-                    await ctx.loginAs('admin')
-                })
-            },
+            run: ctx => ctx.step(() => ctx.loginAs('admin')),
+        },
+        {
+            name: 'Verify the study is deleted',
+            // Delete the study via the QA cleanup API and ASSERT it succeeded, so a
+            // cleanup failure fails the run loudly instead of being swallowed by the
+            // engine's best-effort teardown (which folds a failed delete into a
+            // non-fatal 'cleanup' category). The engine's later teardown delete of
+            // the same id then harmlessly 404s.
+            run: ctx =>
+                ctx.step(async () => {
+                    await deleteStudyAndVerify(ctx, id(ctx))
+                }),
         },
     ],
 }
 
-// --- helpers (mirror management-app/tests/study-flow.spec.ts) ---
+// Delete a study through the QA cleanup API using the admin's Clerk session token
+// (read from the page), assert a 2xx, then confirm a repeat delete reports it gone
+// (404). Throws on anything else so cleanup problems surface as a failed step.
+async function deleteStudyAndVerify(ctx: RunContext, studyId: string): Promise<void> {
+    const token = await ctx.page.evaluate(async () => {
+        const clerk = (
+            window as unknown as {
+                Clerk?: { session?: { getToken(): Promise<string | null> } }
+            }
+        ).Clerk
+        return (await clerk?.session?.getToken()) ?? ''
+    })
+    if (!token) throw new Error('Could not read admin Clerk token to verify study cleanup')
 
-interface StudyContent {
-    title: string
-    researchQuestion: string
-    summary: string
-    impact: string
-    proposalFeedback: string
-    changeRequestFeedback: string
-    resubmissionNote: string
-    codeApprovalFeedback: string
-}
+    const del = () =>
+        ctx.page.request.delete(`${ctx.baseURL}/api/qa/studies/${studyId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        })
 
-// Realistic-but-synthetic study + review text via faker, using English-word
-// generators (not the Latin faker.lorem). The title keeps `tag` (the
-// unique-per-run suffix) so the study row stays findable and traceable.
-function generateStudyContent(tag: string): StudyContent {
-    const topic = faker.commerce.productName().toLowerCase()
-    const cohort = faker.helpers.arrayElement([
-        'first-year',
-        'transfer',
-        'STEM',
-        'part-time',
-        'online',
-    ])
-    const outcome = faker.helpers.arrayElement([
-        'course completion',
-        'assessment scores',
-        'time-on-task',
-        'retention',
-        'engagement',
-    ])
-    // Join 2–3 English-ish sentences into one paragraph; up to `paras` paragraphs.
-    const para = () =>
-        faker.helpers.multiple(() => faker.hacker.phrase(), { count: { min: 2, max: 3 } }).join(' ')
-    const body = (paras: number) =>
-        faker.helpers.multiple(para, { count: { min: 1, max: paras } }).join('\n\n')
-    return {
-        title: `${faker.company.catchPhraseNoun()} and ${outcome} (QA ${tag})`,
-        researchQuestion: `How does ${topic} relate to ${outcome} among ${cohort} students? ${faker.hacker.phrase()}`,
-        summary: body(2),
-        impact: `This work informs ${faker.company.buzzPhrase()}. ${faker.hacker.phrase()}`,
-        proposalFeedback: `Approving this initial request. ${body(1)}`,
-        changeRequestFeedback: `Requesting revisions before approval. ${body(1)}`,
-        resubmissionNote: `Addressed reviewer feedback. ${body(1)}`,
-        codeApprovalFeedback: `Code approved and ready to run. ${body(1)}`,
+    const res = await del()
+    if (!res.ok()) {
+        throw new Error(`QA cleanup DELETE study ${studyId} failed: HTTP ${res.status()}`)
+    }
+    // Confirm it's actually gone: a second delete finds nothing (404).
+    const again = await del()
+    if (again.status() !== 404) {
+        throw new Error(
+            `Study ${studyId} still present after delete (repeat DELETE returned ${again.status()}, expected 404)`
+        )
     }
 }
+
+// --- helpers (mirror management-app/tests/study-flow.spec.ts) ---
+// StudyContent, generateStudyContent, and fillLexical now live in
+// ../engine/flows/study (shared with ad-hoc validation suites).
 
 // The two code files the app accepts, resolved against the cloned repo (NOT the
 // engine bundle location) via repoDir(), which honors QAR_REPO_DIR at runtime.
@@ -480,34 +577,10 @@ function fixtureFiles(): string[] {
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]
 }
 
-// Fill a Lexical contenteditable field by aria-label: click to focus, then type.
-async function fillLexical(ctx: RunContext, ariaLabel: string, text: string): Promise<void> {
-    const field = ctx.page.locator(`[aria-label="${ariaLabel}"]`)
-    await field.click()
-    await ctx.page.keyboard.type(text)
-}
-
 async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
     await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, {
         waitUntil: 'domcontentloaded',
     })
-}
-
-// Click a nav control and wait for the URL to match. On the PR preview the app is
-// client-rendered and a click can land before the SPA router is ready (so the
-// navigation never fires); retry the click once with a generous per-attempt
-// budget before giving up.
-async function clickAndWaitForURL(ctx: RunContext, target: Locator, urlRe: RegExp): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-        await target.click()
-        const navigated = await ctx.page
-            .waitForURL(urlRe, { timeout: 45_000 })
-            .then(() => true)
-            .catch(() => false)
-        if (navigated) return
-    }
-    // One last wait so the caller gets the real timeout error if it truly never navigated.
-    await ctx.page.waitForURL(urlRe, { timeout: 15_000 })
 }
 
 // Confirm in the modal and wait for it to close. On the live preview the confirm
@@ -585,41 +658,90 @@ async function submitCodeReview(ctx: RunContext, doneRegex: RegExp): Promise<voi
     await ctx.page.getByText(doneRegex).waitFor({ state: 'visible' })
 }
 
-async function uploadCode(ctx: RunContext): Promise<void> {
-    await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
-    await ctx.page.getByRole('cell', { name: 'main.r', exact: true }).waitFor({ state: 'visible' })
-    await ctx.page.getByRole('cell', { name: 'code.r', exact: true }).waitFor({ state: 'visible' })
+// Complete Coder's Clerk-hosted OIDC sign-in as the current role, on the IDE popup
+// page. Coder uses prompt=login, so launching the IDE always lands on Clerk's hosted
+// sign-in (accounts.dev) — a DIFFERENT form from the app's embedded one (auth.ts):
+// it's the staged flow email -> Continue -> password -> Continue -> SMS MFA code.
+// Uses ctx.account (the currently signed-in role's creds), so the secret is typed by
+// the engine, never surfaced. No-ops if the workbench is already up (warm session
+// that skipped the login). A missing expected control FAILS the step.
+async function signInToCoder(ctx: RunContext, ide: Page): Promise<void> {
+    const workbench = ide.locator('.monaco-workbench')
+    const emailField = ide.getByLabel(/Email address/i)
+    // Either the IDE is already loaded (no login needed) or the Clerk email step is
+    // up. Wait for whichever appears before deciding.
+    await Promise.race([
+        workbench
+            .first()
+            .waitFor({ state: 'visible', timeout: 60_000 })
+            .catch(() => {}),
+        emailField
+            .first()
+            .waitFor({ state: 'visible', timeout: 60_000 })
+            .catch(() => {}),
+    ])
+    if (
+        await workbench
+            .first()
+            .isVisible()
+            .catch(() => false)
+    )
+        return
+    if (
+        !(await emailField
+            .first()
+            .isVisible()
+            .catch(() => false))
+    ) {
+        throw new Error(
+            `IDE did not open: expected the Coder/Clerk sign-in or the code-server ` +
+                `workbench, but neither rendered. URL: ${ide.url()}`
+        )
+    }
+    // Email -> Continue.
+    await emailField.first().fill(ctx.account.email)
+    await ide.getByRole('button', { name: /^Continue$/i }).click()
+    // Password -> Continue. Clerk labels the field "Password"; the primary button is
+    // "Continue" on the hosted flow.
+    const passwordField = ide.getByLabel(/^Password$/i)
+    await passwordField.waitFor({ state: 'visible', timeout: 60_000 })
+    await passwordField.fill(ctx.account.password)
+    await ide.getByRole('button', { name: /^Continue$/i }).click()
+    // SMS MFA: the same fixed second-factor code the app login uses. Clerk renders a
+    // one-time-code input (a row of single-char boxes or one combined field); fill it
+    // and, if a submit button is shown rather than auto-advancing, click it.
+    await fillCoderMfa(ide, ctx.account.mfaCode)
+    // The verified login redirects back to Coder; the workbench assertion in the
+    // caller confirms code-server actually rendered.
 }
 
-async function submitCode(ctx: RunContext): Promise<void> {
-    // The fixed AppShell footer intercepts pointer events on the submit button.
-    await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await ctx.page.getByRole('button', { name: /Submit code/i }).click()
-    await ctx.page.getByRole('button', { name: 'Yes, submit study code' }).click()
-    // Code submission redirects to CodePostSubmissionView; wait on its banner.
-    await ctx.page.getByTestId('code-under-review-banner').waitFor({ state: 'visible' })
-}
-
-// Click "Launch IDE" and, if it opens a new window, screenshot then close it.
-// NON-FATAL: a popup block, a Coder stub, or a same-window branch on qa must never
-// fail the lifecycle trace — the IDE provisions an external service we don't own.
-async function launchIdeBestEffort(ctx: RunContext): Promise<void> {
-    try {
-        const btn = ctx.page.getByRole('button', { name: /Launch IDE|Edit files in IDE/i }).first()
-        if (!(await btn.isVisible().catch(() => false))) return
-        const [popup] = await Promise.all([
-            ctx.page
-                .context()
-                .waitForEvent('page', { timeout: 60_000 })
-                .catch(() => null),
-            btn.click(),
-        ])
-        if (popup) {
-            await popup.waitForLoadState('domcontentloaded').catch(() => {})
-            await popup.close().catch(() => {})
+// Enter the SMS MFA code on Clerk's hosted verification step, on the IDE popup page.
+// The code input is a segmented OTP field: try the per-digit inputs first, else a
+// single combined field.
+async function fillCoderMfa(ide: Page, code: string): Promise<void> {
+    const otpInputs = ide.locator('input[inputmode="numeric"], input[autocomplete="one-time-code"]')
+    await otpInputs.first().waitFor({ state: 'visible', timeout: 60_000 })
+    const count = await otpInputs.count()
+    if (count > 1) {
+        const digits = code.split('')
+        for (let i = 0; i < digits.length && i < count; i++) {
+            await otpInputs.nth(i).fill(digits[i])
         }
-    } catch {
-        // Swallow — the IDE is an external service and must not fail the run.
+    } else {
+        await otpInputs.first().fill(code)
+    }
+    // Some Clerk configs auto-submit on the last digit; others need a click.
+    const submit = ide.getByRole('button', { name: /^(Continue|Verify)/i })
+    if (
+        await submit
+            .first()
+            .isVisible()
+            .catch(() => false)
+    ) {
+        await submit
+            .first()
+            .click()
+            .catch(() => {})
     }
 }
 
@@ -669,42 +791,4 @@ async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
         `Timed out after ${RESULTS_TIMEOUT_MS / 60_000}min waiting for run results on study ${studyId}. ` +
             `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`
     )
-}
-
-// Open the preview modal for the RESULTS file specifically. The decrypted-file
-// table (a plain <table>) lists the results output alongside run logs (Code Run
-// Log, Security Scan Log, Packaging Error Log); every row has its own "View"
-// button. The results row is the one whose "File Type" cell reads "Results"
-// (see management-app logLabel()) — the log rows carry a "… Log" label instead.
-// We scope the View click to that row so we preview the actual output, not a log.
-async function openResultsPreview(ctx: RunContext): Promise<void> {
-    const resultsRow = ctx.page
-        .getByRole('row')
-        .filter({ has: ctx.page.getByRole('cell', { name: 'results' }) })
-        .first()
-    const viewButton = resultsRow.getByRole('button', { name: 'View' })
-    await viewButton.waitFor({ state: 'visible', timeout: 20_000 })
-    await viewButton.click()
-}
-
-// Assert the open results-preview modal actually rendered the decrypted output.
-// The results file is a CSV, previewed as a mantine-datatable grid whose rows the
-// app builds from the CSV — so a successful decrypt shows data rows, while a
-// decrypt-but-empty/garbled result would show a header-only (or empty) grid. We
-// wait for at least one populated data row and confirm it carries some content,
-// rather than asserting a specific value so it survives run-to-run data changes.
-async function verifyResultsModalHasContent(ctx: RunContext): Promise<void> {
-    const dialog = ctx.page.getByRole('dialog')
-    await dialog.waitFor({ state: 'visible', timeout: 20_000 })
-    // The CSV parses + DataTable hydrates a moment after the modal opens; wait for
-    // a body row to render, then confirm the grid holds non-empty cell text.
-    const firstRow = dialog.locator('table tbody tr').first()
-    await firstRow.waitFor({ state: 'visible', timeout: 15_000 })
-    const text = (await firstRow.innerText())?.trim() ?? ''
-    if (!text) {
-        const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
-        throw new Error(
-            `Results preview modal rendered an empty grid row. Modal text:\n${modalText}`
-        )
-    }
 }

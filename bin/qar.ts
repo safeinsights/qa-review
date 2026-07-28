@@ -1,22 +1,60 @@
 import { parseArgs } from '@/cli/args'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
+import { fixAccountCommand } from '@/cli/commands/fix-account'
+import { inviteCommand } from '@/cli/commands/invite'
+import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
+import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { runCommand } from '@/cli/commands/run'
 import { sessionCommand } from '@/cli/commands/session'
+import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
+import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
+import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
+import { studyStateCommand } from '@/cli/commands/study-state'
 import { syncCommand } from '@/cli/commands/sync'
+import { totpCommand } from '@/cli/commands/totp'
+import { verdictPostedCommand } from '@/cli/commands/verdict'
+import { commandHelp, topLevelHelp, unknownCommandMessage } from '@/cli/help'
 import { loadSettings } from '@/engine/settings'
 
-const BOOLEANS = ['json', 'headed', 'screencast']
+// `help` MUST be a boolean: otherwise `qar session --help` parses `--help` as a
+// key expecting a value, silently launches a session, and reports nothing.
+const BOOLEANS = [
+    'json',
+    'headed',
+    'screencast',
+    'help',
+    // invite / fix-account flags: valueless switches, so the parser must not swallow
+    // the following argument as their value.
+    'admin',
+    'password',
+    'key',
+    'yes',
+]
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)
     const opts = parseArgs(rest, { booleans: BOOLEANS })
+
+    if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+        console.log(topLevelHelp())
+        return
+    }
+    if (opts.help) {
+        const text = commandHelp(subcommand)
+        if (!text) {
+            console.error(unknownCommandMessage(subcommand))
+            process.exit(1)
+        }
+        console.log(text)
+        return
+    }
     // `list` and `codegen` don't touch credentials; the rest resolve config from
     // the layered settings files (replacing the old dotenv-loaded .env).
     switch (subcommand) {
@@ -42,10 +80,32 @@ async function main() {
             return syncCommand()
         case 'session':
             return sessionCommand(opts, await loadSettings())
+        case 'session-login':
+            return sessionLoginCommand(opts)
+        case 'session-create-user':
+            return sessionCreateUserCommand(opts)
+        case 'session-create-study':
+            return sessionCreateStudyCommand()
+        case 'mail-inbox':
+            return mailInboxCommand()
+        case 'mail-wait':
+            return mailWaitCommand(opts)
+        case 'totp':
+            return totpCommand(opts, await loadSettings())
+        case 'invite':
+            return inviteCommand(opts, await loadSettings())
+        case 'fix-account':
+            return fixAccountCommand(opts, await loadSettings())
+        case 'study-state':
+            return studyStateCommand(opts, await loadSettings())
+        case 'jira-comment':
+            return jiraCommentCommand(opts, await loadSettings())
+        case 'jira-delete-comment':
+            return jiraDeleteCommentCommand(opts, await loadSettings())
+        case 'verdict-posted':
+            return verdictPostedCommand(opts)
         default:
-            console.error(
-                `Unknown command "${subcommand ?? ''}". Use: run | login | cleanup | codegen | list | migrate | request-access | rekey | set-secret | sync | session`
-            )
+            console.error(unknownCommandMessage(subcommand))
             process.exit(1)
     }
 }

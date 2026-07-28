@@ -12,3 +12,11 @@ config/age-identity.txt
 *.log
 .worktrees/
 .DS_Store
+# Scratch for the Claude sessions: screenshots, draft Jira comment bodies, PR
+# review payloads. The skills all write here so session output lands in ONE known
+# place instead of each session inventing its own dir.
+.tmp/
+# Older spellings sessions used before .tmp/ was the convention. Deliberately a
+# directory glob, not a blanket *.png: docs/images/ and gui/build/appicon.png are
+# tracked, and an extension rule would silently hide edits to them.
+.qa-valid*/

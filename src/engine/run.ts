@@ -61,6 +61,12 @@ export interface RunDeps {
     shouldPause?: (stepName: string) => boolean
     waitForResume?: () => Promise<void>
     onPaused?: (stepName: string) => void
+    // Jump-to-step control. Read at the TOP of each step iteration: if a target is
+    // latched, the loop relocates there and continues from it. Returns the target
+    // index and clears the latch (so it fires once), or undefined for "no jump".
+    // A step already in flight can't be interrupted — there's no cancellation in the
+    // engine — so a jump requested mid-step is honored when that step finishes.
+    consumeJump?: () => number | undefined
     // Hold-open-on-failure control. When a run FAILS (a step throws / login fails
     // / the browser won't open) AND this hook is wired, the engine fires
     // onErrorHold and then blocks on waitForResume — keeping the browser alive so
@@ -82,7 +88,9 @@ export interface RunDeps {
         error: string
         failureCategory: FailureCategory
     }) => void
-    waitForResolution?: () => Promise<'retry' | 'giveUp'>
+    // 'jump' means a jump-to arrived while the run was held on a failed step: the
+    // loop consumes the latched target instead of retrying this index.
+    waitForResolution?: () => Promise<'retry' | 'giveUp' | 'jump'>
     // Reload ONE suite from disk and return the fresh Suite (or throw on a load
     // error). Called on retry so an edited suite's new code is picked up. Injected so
     // tests fake it; production is a cache-busting dynamic import of the .ts (tsx).
@@ -102,6 +110,87 @@ function categorize(error: Error): FailureCategory {
     // A failed web-first assertion / visibility wait reads as a real app issue.
     if (m.includes('visible') || m.includes('expect') || m.includes('tobe')) return 'app-assertion'
     return 'tool-crash'
+}
+
+// Validate a latched jump target and do the recorder bookkeeping so the run can
+// continue from it. Returns the target index, or undefined when there's nothing to
+// do (no request, already there, or out of range).
+//
+// The two directions need OPPOSITE bookkeeping to keep the GUI's positional step
+// list aligned (it maps suite step names onto executed positions by index):
+//   BACKWARD — the target already ran, so drop its rows and everything after;
+//              re-running re-occupies them instead of appending duplicates.
+//   FORWARD  — nothing ran for the skipped steps, so emit a 'skipped' event per step
+//              to occupy their positions. Without these the checklist would shift and
+//              light up the wrong rows.
+//
+// `fromRan` says whether step `from` already produced a row: false at a step boundary
+// (it hasn't run yet, so a forward jump skips it too), true when jumping out of a
+// FAILED step (its failure row is real and must be preserved, not overwritten).
+export function applyJumpTo(
+    target: number | undefined,
+    ctx: {
+        from: number
+        fromRan: boolean
+        steps: Suite['steps']
+        events: StepEvent[]
+        recorder: Recorder
+        stepStartPositions: number[]
+        onRunState?: (state: RunState) => void
+    }
+): number | undefined {
+    const { from, fromRan, steps, events, recorder, stepStartPositions } = ctx
+    // Bounds are checked HERE (not at parse time) because a retry-reload can change
+    // the live suite's length. An out-of-range target is ignored, not fatal.
+    if (target === undefined || target === from) return undefined
+    if (!Number.isInteger(target) || target < 0 || target >= steps.length) return undefined
+    if (target < from) {
+        const position = stepStartPositions[target] ?? 0
+        truncateEventsToPosition(events, position)
+        recorder.dropFrom(position)
+    } else {
+        for (let s = fromRan ? from + 1 : from; s < target; s++) {
+            recorder.step(steps[s].name, 'skipped')
+        }
+    }
+    ctx.onRunState?.(buildRunState(events))
+    return target
+}
+
+// One step boundary: consume a latched jump, else run the pause gate and check for a
+// jump once more on resume (the GUI releases a pause by resuming, so a jump requested
+// while parked arrives here). Returns the index to relocate to, or undefined to run
+// the step as normal.
+async function stepBoundary(
+    i: number,
+    deps: {
+        stepName: string
+        applyJump: (from: number) => number | undefined
+        shouldPause?: (stepName: string) => boolean
+        onPaused?: (stepName: string) => void
+        waitForResume?: () => Promise<void>
+    }
+): Promise<number | undefined> {
+    const jump = deps.applyJump(i)
+    if (jump !== undefined) return jump
+    if (!deps.shouldPause?.(deps.stepName)) return undefined
+    deps.onPaused?.(deps.stepName)
+    await deps.waitForResume?.()
+    return deps.applyJump(i)
+}
+
+// Await the user's decision on a failed step and translate it into what the run loop
+// should do: 'giveUp' (fail the run), 'retry' (re-run this index), 'hold' (a jump with
+// no valid target — keep holding), or a number (jump to that index).
+async function resolveStepFailure(
+    waitForResolution: () => Promise<'retry' | 'giveUp' | 'jump'>,
+    i: number,
+    applyJump: (from: number, fromRan: boolean) => number | undefined
+): Promise<'giveUp' | 'retry' | 'hold' | number> {
+    const decision = await waitForResolution()
+    if (decision !== 'jump') return decision
+    const target = applyJump(i, true)
+    return target ?? 'hold'
 }
 
 export async function runEngine(
@@ -233,11 +322,29 @@ export async function runEngine(
             const lines = consoleBuf.splice(0)
             return lines.length ? lines : undefined
         }
+        // Tracks the currently signed-in role so ctx.account stays correct across
+        // mid-run loginAs() switches. Starts as the role the run logged in with.
+        let currentRole = req.role
+        // The name of the step whose run() is currently executing, so a body may
+        // call ctx.step(action) WITHOUT repeating the step's name. Set by the step
+        // loop before each step.run(ctx); the ctx.step closure reads the live value.
+        let currentStepName = ''
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
             tag,
-            async step(name, action) {
+            // Getter so it reflects the LATEST loginAs() switch, not the role at
+            // ctx-construction time.
+            get account() {
+                const a = env.accounts[currentRole]
+                return { email: a.email, password: a.password, mfaCode: a.mfaCode }
+            },
+            async step<T>(a: string | (() => Promise<T>), b?: () => Promise<T>): Promise<T> {
+                // Overloaded: step(action) records under the enclosing step's name;
+                // step(name, action) uses the explicit name.
+                const name: string = typeof a === 'function' ? currentStepName : a
+                const action: () => Promise<T> =
+                    typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
                 try {
                     const out = await action()
@@ -284,6 +391,8 @@ export async function runEngine(
                 if (!handle) throw new Error('loginAs called before the browser was opened')
                 // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
                 const newToken = await deps.login(handle, env, role, recorder.bundleDir)
+                // Track the switch so ctx.account now returns the new role's creds.
+                currentRole = role
                 // Keep id-based cleanup authorized as the now-current user.
                 ;(cleanup as unknown as { authToken: string }).authToken = newToken
             },
@@ -296,7 +405,10 @@ export async function runEngine(
         // more than once; each opens a position). Captured before a step runs so a
         // retry can truncate the recorder/run-state back to exactly this step's rows.
         const executedPositions = () =>
-            events.reduce((n, e) => n + (e.status === 'running' ? 1 : 0), 0)
+            events.reduce(
+                (n, e) => n + (e.status === 'running' || e.status === 'skipped' ? 1 : 0),
+                0
+            )
 
         // Run the suite's steps in order. The pause gate sits BEFORE each step so
         // the browser idles at the boundary — the user can interact with the live
@@ -306,20 +418,53 @@ export async function runEngine(
         // steps AFTER a fixed one also pick up the edit. Indexed (not for-of) so the
         // retry can re-run the same position after reloading.
         let liveSuite = suite
-        for (let i = 0; i < liveSuite.steps.length; i++) {
-            let step = liveSuite.steps[i]
-            if (deps.shouldPause?.(step.name)) {
-                deps.onPaused?.(step.name)
-                await deps.waitForResume?.()
+        // Recorder position each step index began at, so a BACKWARD jump can truncate
+        // to the target's rows exactly as a retry does for the current step.
+        const stepStartPositions: number[] = []
+
+        const applyJump = (from: number, fromRan: boolean): number | undefined =>
+            applyJumpTo(deps.consumeJump?.(), {
+                from,
+                fromRan,
+                steps: liveSuite.steps,
+                events,
+                recorder,
+                stepStartPositions,
+                onRunState: deps.onRunState,
+            })
+        // The step boundary: honor a latched jump, then the pause gate, then check for
+        // a jump ONE more time (the GUI releases a pause by resuming, so a jump sent
+        // while parked lands here). Returns a jump target to relocate to, or undefined
+        // to run the step at `i`.
+        const atBoundary = (i: number) =>
+            stepBoundary(i, {
+                stepName: liveSuite.steps[i].name,
+                applyJump: from => applyJump(from, false),
+                shouldPause: deps.shouldPause,
+                onPaused: deps.onPaused,
+                waitForResume: deps.waitForResume,
+            })
+
+        steps: for (let i = 0; i < liveSuite.steps.length; i++) {
+            const jump = await atBoundary(i)
+            if (jump !== undefined) {
+                i = jump - 1 // the loop's i++ lands us on `jump`
+                continue
             }
+            let step = liveSuite.steps[i]
             // Recorder position where THIS step begins — the truncation point for a
             // retry (so the failed step's rows are dropped and the retry re-occupies
             // them instead of appending duplicates).
             const positionAtStepStart = executedPositions()
+            stepStartPositions[i] = positionAtStepStart
             // Inner retry loop for this index. Breaks out on success; a 'giveUp' or a
             // run without the retry deps rethrows to the outer catch (existing behavior).
             for (;;) {
                 try {
+                    // So a body may call ctx.step(action) without repeating the name.
+                    // Set inside the retry loop so a reloaded step records under its
+                    // (possibly renamed) name.
+                    currentStepName = step.name
                     await step.run(ctx)
                     break
                 } catch (cause) {
@@ -334,11 +479,18 @@ export async function runEngine(
                         failureCategory: categorize(cause as Error),
                     })
                     // Browser HELD OPEN here — the companion inspects/edits, then the
-                    // user chooses retry or give up.
-                    const decision = await deps.waitForResolution()
-                    if (decision === 'giveUp') {
+                    // user chooses retry, give up, or jumps to another step. A jump
+                    // KEEPS the failed step's rows (the failure is real and worth
+                    // showing); an invalid target holds so the user can choose again.
+                    const outcome = await resolveStepFailure(deps.waitForResolution, i, applyJump)
+                    if (outcome === 'giveUp') {
                         stepFailureResolved = true
                         throw cause
+                    }
+                    if (outcome === 'hold') continue
+                    if (typeof outcome === 'number') {
+                        i = outcome - 1 // the outer loop's i++ lands us on `outcome`
+                        continue steps
                     }
                     // Retry: reload the (possibly edited) suite. A compile error keeps
                     // the browser held so the user can fix the edit and retry again.

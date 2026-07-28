@@ -20,6 +20,14 @@ func TestControlLines(t *testing.T) {
 	if got := pauseSetControlLine(nil); got != `{"type":"pause-set","steps":null}` {
 		t.Errorf("pauseSetControlLine(nil) = %q", got)
 	}
+	// Must match jumpToLine() in src/cli/step-stream.ts — the engine's parser
+	// requires a non-negative integer `index`.
+	if got := jumpToControlLine(0); got != `{"type":"jump-to","index":0}` {
+		t.Errorf("jumpToControlLine(0) = %q", got)
+	}
+	if got := jumpToControlLine(7); got != `{"type":"jump-to","index":7}` {
+		t.Errorf("jumpToControlLine(7) = %q", got)
+	}
 }
 
 func TestSendToRunNoActiveRun(t *testing.T) {
@@ -326,4 +334,155 @@ func TestDebugMarkdownFormatsNotFound(t *testing.T) {
 	if !strings.Contains(md, "✗ claude — not found") {
 		t.Fatalf("not-found line wrong:\n%s", md)
 	}
+}
+
+// Inferring the Jira card from a PR is what lets a tester validate by PR number
+// alone. The field ORDER matters: title and branch are where the team puts the key,
+// while a body often quotes other tickets ("related to OTTER-99").
+func TestInferJiraCardFrom(t *testing.T) {
+	cases := []struct {
+		name                string
+		title, branch, body string
+		want                string
+	}{
+		{"from the title", "OTTER-640 add CSV export", "feature/csv", "", "OTTER-640"},
+		{"from the branch", "Add CSV export", "nas/OTTER-641-csv", "", "OTTER-641"},
+		{"from the description as a last resort", "Add CSV export", "csv", "Implements OTTER-642.", "OTTER-642"},
+		{"the title wins over the branch and description", "OTTER-1 a", "x/OTTER-2", "OTTER-3", "OTTER-1"},
+		{"the branch wins over the description", "Add CSV export", "x/OTTER-2", "OTTER-3", "OTTER-2"},
+		{"lowercase is normalized", "otter-644 fix", "", "", "OTTER-644"},
+		{"a space separator is accepted", "OTTER 645 add export", "", "", "OTTER-645"},
+		{"a second board is recognized", "SHRIMP-263 tweak", "", "", "SHRIMP-263"},
+		{"the SHRMP typo maps to SHRIMP", "SHRMP-249 tweak", "", "", "SHRIMP-249"},
+		{"a Jira URL in the description resolves", "Add export", "csv", "See https://openstax.atlassian.net/browse/OTTER-646", "OTTER-646"},
+		{"no key anywhere", "Add CSV export", "csv-export", "no ticket here", ""},
+		{"all fields empty", "", "", "", ""},
+
+		// Ticket-SHAPED noise that actually occurs in management-app history. A
+		// generic \w+-\d+ pattern turns each of these into a bogus card, which
+		// would send the validator chasing a ticket that doesn't exist.
+		{"a bare PR-ish number is not a key", "Fix flake", "fix-1234", "see #1234", ""},
+		{"'fixes-2026' is not a key", "fixes-2026 cleanup", "", "", ""},
+		{"'node-7' is not a key", "bump to node-7", "", "", ""},
+		{"'haiku-4' is not a key", "use haiku-4", "", "", ""},
+		{"'pages-6' is not a key", "pages-6 layout", "", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := inferJiraCardFrom(c.title, c.branch, c.body); got != c.want {
+				t.Fatalf("inferJiraCardFrom(%q,%q,%q) = %q, want %q",
+					c.title, c.branch, c.body, got, c.want)
+			}
+		})
+	}
+}
+
+func TestInferJiraCardNoPR(t *testing.T) {
+	// A blank PR must not shell out to gh at all.
+	if got := inferJiraCard("   "); got != "" {
+		t.Fatalf("blank PR should infer nothing, got %q", got)
+	}
+}
+
+func TestComposeValidationPrompt(t *testing.T) {
+	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
+		if !strings.Contains(p, "/qa-validate") || !strings.Contains(p, "OTTER-1") {
+			t.Fatalf("base prompt missing:\n%s", p)
+		}
+		if !strings.Contains(p, "\n\nAdditional instructions from the user:\nFocus on the mobile layout.") {
+			t.Fatalf("instructions not appended as a paragraph:\n%s", p)
+		}
+	})
+
+	t.Run("omits the instructions paragraph when blank/whitespace", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "   ")
+		if strings.Contains(p, "Additional instructions") {
+			t.Fatalf("blank instructions should not add a paragraph:\n%s", p)
+		}
+	})
+
+	t.Run("a PR target overrides env", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "")
+		if !strings.Contains(p, "--pr 42") || strings.Contains(p, "--env qa") {
+			t.Fatalf("PR target not used:\n%s", p)
+		}
+	})
+
+	// Validating by PR alone: the card couldn't be inferred, so Claude is told to
+	// identify the ticket from the PR rather than being handed a key.
+	t.Run("with no card, asks Claude to identify the ticket from the PR", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "", "")
+		for _, want := range []string{
+			"/qa-validate",
+			"Validate PR 42 of safeinsights/management-app",
+			"identify the Jira ticket",
+		} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("by-PR prompt missing %q:\n%s", want, p)
+			}
+		}
+	})
+
+	t.Run("the by-PR prompt still carries the PR caveat and instructions", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "", "Check the CSV export.")
+		caveat := strings.Index(p, "PR preview environment")
+		instructions := strings.Index(p, "Additional instructions from the user:")
+		if caveat < 0 || instructions < 0 || instructions < caveat {
+			t.Fatalf("caveat/instructions wrong on a by-PR prompt:\n%s", p)
+		}
+	})
+
+	// A PR preview has empty dashboards and no compute backend. Without saying so,
+	// the validator reads an empty dashboard as a regression and waits on results
+	// that will never arrive.
+	t.Run("a PR target explains the empty dashboards and missing execution", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "")
+		for _, want := range []string{
+			"PR preview environment",
+			"No studies are preloaded",
+			"do NOT actually run code",
+		} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("PR caveat missing %q:\n%s", want, p)
+			}
+		}
+	})
+
+	// The caveat names the PR + repo so the validator hands `pr-review` an explicit
+	// target. A bare `gh pr view 839` would resolve against the qa-review checkout
+	// the session runs in, not the repo actually under test.
+	t.Run("the PR caveat names the PR and repo for the pr-review skill", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "839", "OTTER-1", "")
+		for _, want := range []string{
+			"deployment of PR 839 of safeinsights/management-app",
+			"/pr-review 839 --repo safeinsights/management-app",
+			"show the user the returned review URL",
+		} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("PR caveat missing %q:\n%s", want, p)
+			}
+		}
+		if strings.Contains(p, "{{") {
+			t.Fatalf("unsubstituted placeholder in the PR caveat:\n%s", p)
+		}
+	})
+
+	t.Run("the PR caveat is absent on a plain env run", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "")
+		if strings.Contains(p, "PR preview environment") {
+			t.Fatalf("PR caveat should not appear for --env qa:\n%s", p)
+		}
+	})
+
+	// The user's own instructions must stay the LAST paragraph, so they aren't
+	// buried above a wall of boilerplate.
+	t.Run("user instructions still come last on a PR run", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "42", "OTTER-1", "Check the CSV export.")
+		caveat := strings.Index(p, "PR preview environment")
+		instructions := strings.Index(p, "Additional instructions from the user:")
+		if caveat < 0 || instructions < 0 || instructions < caveat {
+			t.Fatalf("instructions should follow the PR caveat:\n%s", p)
+		}
+	})
 }

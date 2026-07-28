@@ -23,6 +23,11 @@ import type { Suite } from '@/suites/types'
 
 export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const role = (opts.role ?? 'admin') as Role
+    // `--suite-file <path>` runs a Suite from an arbitrary .ts file (an ad-hoc
+    // validation suite) via suiteOverride, so it's NEVER registered / listed. Its
+    // `name` comes from the loaded Suite. Otherwise `--suite <name>` resolves from
+    // the on-disk registry as usual.
+    const suiteFile = opts['suite-file']
     const suite = opts.suite ?? 'signin'
     const json = opts.json === 'true'
     const headed = opts.headed === 'true'
@@ -69,10 +74,19 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // the user's choice: waitForResolution awaits it; {type:'retry-step'} resolves
     // 'retry' and {type:'give-up'} resolves 'giveUp'. Re-armed after each hold so
     // multiple retries work.
-    let resolutionResolve: ((d: 'retry' | 'giveUp') => void) | undefined
-    let resolutionPromise: Promise<'retry' | 'giveUp'> | undefined
+    let resolutionResolve: ((d: 'retry' | 'giveUp' | 'jump') => void) | undefined
+    let resolutionPromise: Promise<'retry' | 'giveUp' | 'jump'> | undefined
     const armResolution = () => {
-        resolutionPromise = new Promise<'retry' | 'giveUp'>(r => (resolutionResolve = r))
+        resolutionPromise = new Promise<'retry' | 'giveUp' | 'jump'>(r => (resolutionResolve = r))
+    }
+    // A latched jump target, set by {type:'jump-to'} and consumed by the run loop at
+    // its next step boundary. A step in flight can't be interrupted, so this is what
+    // makes a mid-step jump "queue up" and land when the step finishes.
+    let jumpTarget: number | undefined
+    const consumeJump = () => {
+        const t = jumpTarget
+        jumpTarget = undefined
+        return t
     }
     // Cache-bust import ONE suite's .ts source so an edited suite's new code is picked
     // up on retry (tsx transpiles it on import — no compile step). A monotonic counter
@@ -80,7 +94,9 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
     // Suite-shape validation.
     let reloadCounter = 0
     const reloadSuite = async (name: string): Promise<Suite> => {
-        const src = path.join(suitesSrcDir(), `${name}.ts`)
+        // For a --suite-file run, reload from that same file path (not the registry
+        // dir), so retry/edit picks up the temp suite's edits.
+        const src = suiteFile ? path.resolve(suiteFile) : path.join(suitesSrcDir(), `${name}.ts`)
         const bust = `${pathToFileURL(src).href}?t=${++reloadCounter}`
         const found = await discoverSuites([bust], f => import(f))
         const fresh = found.find(s => s.name === name) ?? found[0]
@@ -113,6 +129,7 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
             const d = await resolutionPromise
             return d ?? 'giveUp'
         },
+        consumeJump,
         reloadSuite,
     }
 
@@ -138,6 +155,14 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
                     resolutionResolve?.('retry')
                 } else if (msg.type === 'give-up') {
                     resolutionResolve?.('giveUp')
+                } else if (msg.type === 'jump-to') {
+                    // Latch the target, then release whichever hold the run is in so
+                    // the loop reaches a step boundary and consumes it. Both resolves
+                    // are no-ops when nothing is pending (a freely-running suite picks
+                    // the latch up at its next boundary on its own).
+                    jumpTarget = msg.index
+                    resolutionResolve?.('jump')
+                    resumeResolve?.()
                 }
             }
             nl = stdinBuf.indexOf('\n')
@@ -215,8 +240,17 @@ export async function runCommand(opts: Record<string, string>, vars: Vars): Prom
         ...controlDeps,
     }
 
+    // For --suite-file, load the Suite object up front and run it as an override
+    // (never touches the on-disk registry / suite list).
+    const suiteOverride = suiteFile ? await reloadSuite(suite) : undefined
+    const suiteName = suiteOverride?.name ?? suite
+
     try {
-        const result = await runEngine({ suite, env: envConfig.name, role, envConfig }, deps)
+        const result = await runEngine(
+            { suite: suiteName, env: envConfig.name, role, envConfig },
+            deps,
+            suiteOverride
+        )
         if (json) {
             process.stdout.write(resultLine(result))
         } else {

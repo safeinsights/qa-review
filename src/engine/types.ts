@@ -17,7 +17,10 @@ export type FailureCategory =
     | 'tool-crash' // bug in the engine itself
     | 'ai-gave-up' // AI mode only: agent could not carry out the instruction
 
-export type StepStatus = 'running' | 'passed' | 'failed'
+// 'skipped' is a step the run jumped OVER (see the jump-to control message). It
+// occupies a position in the step list like any other step, so the GUI's positional
+// name↔event mapping stays aligned, but it never ran and is not a failure.
+export type StepStatus = 'running' | 'passed' | 'failed' | 'skipped'
 
 export interface StepEvent {
     name: string

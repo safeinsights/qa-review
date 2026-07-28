@@ -3,6 +3,13 @@ import type { Action, ActionTrace } from '@/codegen/action-trace'
 // Escape a string for safe interpolation into a single-quoted TS string literal.
 const sq = (s: string): string => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
+// Escape a string for safe interpolation into a TEMPLATE literal (backticks).
+// Backslash MUST be escaped first — otherwise a later backtick/${ escape would
+// insert a backslash that a pre-existing input backslash could consume, letting
+// the value break out of the template (CodeQL js/incomplete-sanitization).
+const tq = (s: string): string =>
+    s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')
+
 function camelConst(name: string): string {
     const camel = name.replace(/[-_\s]+(.)/g, (_, c: string) => c.toUpperCase())
     const safe = /^\d/.test(camel) ? `_${camel}` : camel
@@ -12,7 +19,7 @@ function camelConst(name: string): string {
 function actionLine(a: Action): string {
     switch (a.kind) {
         case 'goto': {
-            const url = a.url.replace(/`/g, '\\`').replace(/\$\{/g, '\\${')
+            const url = tq(a.url)
             return `            await ctx.page.goto(\`\${ctx.baseURL}${url}\`, { waitUntil: 'domcontentloaded' })`
         }
         case 'click':
@@ -43,12 +50,14 @@ export function generateSuite(trace: ActionTrace): string {
         .map(g => {
             // actionLine emits 12-space indent; the step body here nests 8 deeper.
             const body = g.actions.map(a => `        ${actionLine(a)}`).join('\n')
+            // A step declares its name once (the `name:` field). ctx.step() with no
+            // name records under that name — so a single-group step drops the
+            // repeated label entirely.
             return (
                 `        {\n` +
                 `            name: '${sq(g.label)}',\n` +
-                `            run: async (ctx) => {\n` +
-                `                await ctx.step('${sq(g.label)}', async () => {\n${body}\n                })\n` +
-                `            },\n` +
+                `            run: (ctx) =>\n` +
+                `                ctx.step(async () => {\n${body}\n                }),\n` +
                 `        },`
             )
         })

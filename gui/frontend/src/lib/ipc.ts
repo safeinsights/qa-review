@@ -11,11 +11,14 @@ export interface SettingField {
     key: string
     label: string
     secret: boolean
-    group: string // account section: "Admin" | "Researcher" | "Reviewer" | "" (ungrouped)
-    env: string // for per-env fields (results private keys): "qa" | "staging"; "" otherwise
+    group: string // "Admin" | "Researcher" | "Reviewer" | "Jira" | "" (the base URL)
+    env: string // every account field + the base URL: "qa" | "staging" | "production"; "" only for Jira
+    section: string // sub-section label ("Account" | "Results private key" | "Environment")
+    multiline: boolean // render a textarea (PEM keys) vs a one-line input (MFA code/seed)
     tier: string // "project" | "secrets" | "local" | "" (unset)
     value: string
     set: boolean
+    localOnly: boolean // forced to the local tier (no encrypted/project option)
 }
 
 export interface SettingsView {
@@ -81,6 +84,12 @@ interface WailsApp {
         instruction: string
     ): Promise<string>
     StartRunCompanion(cdpPort: number, suite: string): Promise<string>
+    StartValidationSession(
+        env: string,
+        pr: string,
+        jiraCard: string,
+        instructions: string
+    ): Promise<{ token: string; jiraCard: string }>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -104,7 +113,9 @@ interface WailsApp {
     SaveTrace(bundleDir: string, suite: string): Promise<string>
     ZipBundle(bundleDir: string, suite: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
+    RevealSecret(cwd: string, key: string): Promise<string>
     WriteSetting(cwd: string, key: string, value: string, tier: string): Promise<void>
+    ClearSetting(cwd: string, key: string): Promise<void>
     Sync(cwd: string): Promise<string>
     ResetAndSync(cwd: string): Promise<string>
     RequestAccess(cwd: string, name: string): Promise<string>
@@ -117,6 +128,8 @@ interface WailsApp {
 interface WailsRuntime {
     EventsOn(event: string, cb: (...data: unknown[]) => void): () => void
     EventsOff(event: string): void
+    // Opens a URL in the user's default system browser (NOT inside the webview).
+    BrowserOpenURL(url: string): void
 }
 
 declare global {
@@ -140,6 +153,27 @@ function rt(): WailsRuntime {
 
 export async function runProcess(program: string, args: string[], cwd: string): Promise<void> {
     await app().RunProcess(program, args, cwd)
+}
+
+// Open a URL in the user's real browser (via the Wails runtime), not the webview.
+// Used by the embedded terminal so clicking a link in claude's output works. The
+// Wails runtime is injected on the window; fall back to window.open if it (or the
+// method) isn't present, and never throw so a click can't silently break.
+export function openExternal(url: string): void {
+    const open = window.runtime?.BrowserOpenURL
+    if (typeof open === 'function') {
+        try {
+            open(url)
+            return
+        } catch {
+            /* fall through to window.open */
+        }
+    }
+    try {
+        window.open(url, '_blank', 'noopener,noreferrer')
+    } catch {
+        /* nothing else we can do */
+    }
 }
 
 // A run was rejected because one is already active (Go's ErrRunInProgress).
@@ -195,6 +229,15 @@ export async function giveUpStep(): Promise<void> {
     await sendToRun(JSON.stringify({ type: 'give-up' }))
 }
 
+// Relocate the run to `index` and continue from there. The engine honors this at
+// its next step boundary — a step already in flight runs to completion first, so a
+// jump requested mid-step lands when that step finishes. Jumping FORWARD marks the
+// intervening steps 'skipped' (they never ran); jumping BACKWARD re-runs from the
+// target against the live browser.
+export async function jumpToStep(index: number): Promise<void> {
+    await sendToRun(JSON.stringify({ type: 'jump-to', index }))
+}
+
 // --- Interactive authoring session (terminal + shared browser) ---
 
 // Start a session: Go launches a logged-in browser (shared CDP) + claude in a PTY.
@@ -216,6 +259,23 @@ export async function startAuthoringSession(
 // the session token (see stopSessionIfOwner).
 export async function startRunCompanion(cdpPort: number, suite: string): Promise<string> {
     return app().StartRunCompanion(cdpPort, suite)
+}
+
+// Start a Validation session: Go launches the shared (logged-out) browser + claude
+// in a PTY, with the Jira MCP added. The GUI receives `session-ready` + `pty-output`
+// events, same as authoring. Returns the session token (see stopSessionIfOwner).
+// Starts a validation session. Either `pr` or `jiraCard` must be non-empty (Go
+// enforces it too). Returns the session token AND the Jira card the session is
+// about — with a PR and no card, Go infers the key from the PR, so the resolved
+// card comes back here for the Verdict button. An empty `jiraCard` in the result
+// means it couldn't be inferred and Claude will identify it from the PR.
+export async function startValidationSession(
+    env: string,
+    pr: string,
+    jiraCard: string,
+    instructions: string
+): Promise<{ token: string; jiraCard: string }> {
+    return app().StartValidationSession(env, pr, jiraCard, instructions)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.
@@ -254,13 +314,47 @@ export async function onPtyExit(cb: (code: number | null) => void): Promise<Unli
     return rt().EventsOn('pty-exit', (...data) => cb(typeof data[0] === 'number' ? data[0] : null))
 }
 
-// Fires with the screencast port once the shared browser is ready to display.
-export async function onSessionReady(cb: (screencastPort: number) => void): Promise<UnlistenFn> {
-    return rt().EventsOn('session-ready', (...data) => cb(Number(data[0])))
+// The kind of session that owns the single shared PTY + browser. Both the Author
+// and Validation tabs listen to the same global session events, so each uses `kind`
+// to tell whether the live session is its own or the other tab's.
+export type SessionKind = 'authoring' | 'validation' | 'companion'
+
+export interface SessionReady {
+    kind: SessionKind
+    screencastPort: number
+}
+
+// Fires when the shared browser is ready to display, carrying which tab owns it.
+export async function onSessionReady(cb: (info: SessionReady) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('session-ready', (...data) => {
+        const payload = (data[0] ?? {}) as { kind?: string; screencastPort?: number }
+        cb({
+            kind: (payload.kind ?? 'authoring') as SessionKind,
+            screencastPort: Number(payload.screencastPort ?? 0),
+        })
+    })
 }
 
 export async function onSessionEnded(cb: () => void): Promise<UnlistenFn> {
     return rt().EventsOn('session-ended', () => cb())
+}
+
+export interface VerdictPosted {
+    issue: string
+    result: 'validated' | 'rejected'
+}
+
+// Fires when Claude records a posted verdict (`qar verdict-posted`), whether the
+// GUI's Verdict button or a manual instruction drove it. The Validation tab uses it
+// to hide the Verdict button and show the outcome.
+export async function onVerdictPosted(cb: (v: VerdictPosted) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('verdict-posted', (...data) => {
+        const p = (data[0] ?? {}) as { issue?: string; result?: string }
+        cb({
+            issue: String(p.issue ?? ''),
+            result: p.result === 'rejected' ? 'rejected' : 'validated',
+        })
+    })
 }
 
 // Non-ready engine output (login errors etc.) surfaced before the terminal opens.
@@ -385,9 +479,22 @@ export async function readSettings(): Promise<SettingsView> {
     return app().ReadSettings('')
 }
 
+// Reveal one secret's current plaintext value (decrypting a committed secret with
+// the local identity). Backs the reveal (eye) toggle. Rejects if unset or if the
+// value is encrypted but the local identity can't decrypt it.
+export async function revealSecret(key: string): Promise<string> {
+    return app().RevealSecret('', key)
+}
+
 // Write one field to a tier ("project" commits it; "local" is a gitignored override).
 export async function writeSetting(key: string, value: string, tier: string): Promise<void> {
     await app().WriteSetting('', key, value, tier)
+}
+
+// Unset one field, removing it from every tier file. The only way to clear a value:
+// writeSetting always assigns, and the panel won't save an empty string.
+export async function clearSetting(key: string): Promise<void> {
+    await app().ClearSetting('', key)
 }
 
 // Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged".

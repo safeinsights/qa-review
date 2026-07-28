@@ -5,15 +5,21 @@ import {
     onSessionEnded,
     onSessionLog,
     onSessionReady,
+    type SessionKind,
     startAuthoringSession,
     stopSession,
     stopSessionIfOwner,
 } from '../lib/ipc'
-import { BrowserPanel } from './BrowserPanel'
+import { LiveBrowser } from './LiveBrowser'
 import { SaveSuitePanel } from './SaveSuitePanel'
+import { SessionUnavailable } from './SessionUnavailable'
 import { Terminal } from './Terminal'
 
-const ENVS = ['qa', 'staging']
+// This tab owns "authoring" sessions; a session-ready of any other kind means the
+// other tab (or the run companion) holds the single shared PTY + browser.
+const MY_KIND: SessionKind = 'authoring'
+
+const ENVS = ['qa', 'staging', 'production']
 const ROLES = ['admin', 'researcher', 'reviewer']
 
 // "Author a Suite": the user describes a test, then drives claude in an embedded
@@ -28,6 +34,9 @@ export function ExploratoryTab() {
     const [active, setActive] = useState(false)
     const [starting, setStarting] = useState(false)
     const [screencastPort, setScreencastPort] = useState<number | null>(null)
+    // Set when the OTHER tab owns the shared session; the setup form is replaced by
+    // an "unavailable, take over?" banner while this holds a kind.
+    const [ownedByOther, setOwnedByOther] = useState<SessionKind | null>(null)
     const [error, setError] = useState('')
     const logBuf = useRef('')
     // On unmount we only tear down if we still own the active session (the run
@@ -40,7 +49,16 @@ export function ExploratoryTab() {
         let unEnded: (() => void) | undefined
         let unLog: (() => void) | undefined
         ;(async () => {
-            unReady = await onSessionReady(port => {
+            unReady = await onSessionReady(({ kind, screencastPort: port }) => {
+                if (kind !== MY_KIND) {
+                    // The other tab (or the run companion) took the shared session.
+                    setOwnedByOther(kind)
+                    setActive(false)
+                    setStarting(false)
+                    setScreencastPort(null)
+                    return
+                }
+                setOwnedByOther(null)
                 setScreencastPort(port)
                 setStarting(false)
                 // Our session's browser is genuinely up → we ARE active. Setting this
@@ -51,6 +69,7 @@ export function ExploratoryTab() {
                 setActive(true)
             })
             unEnded = await onSessionEnded(() => {
+                setOwnedByOther(null)
                 setActive(false)
                 setScreencastPort(null)
                 setStarting(false)
@@ -88,6 +107,17 @@ export function ExploratoryTab() {
         sessionToken.current = null
         setActive(false)
         setScreencastPort(null)
+    }
+
+    // Stop the other tab's session (freeing the single shared slot) and drop back to
+    // our setup form so the user can start an authoring session here.
+    const takeOver = async () => {
+        await stopSession()
+        setOwnedByOther(null)
+    }
+
+    if (ownedByOther) {
+        return <SessionUnavailable ownerKind={ownedByOther} onTakeOver={takeOver} />
     }
 
     if (!active) {
@@ -283,7 +313,9 @@ function LiveSession({
                         borderRadius: 10,
                         overflow: 'hidden',
                         minWidth: 650,
-                        minHeight: 460,
+                        // Fixed, viewport-capped height so the terminal scrolls
+                        // internally instead of growing the grid row without bound.
+                        height: 'min(72vh, 720px)',
                         padding: 8,
                     }}
                 >
@@ -301,7 +333,7 @@ function LiveSession({
                     }}
                 >
                     {screencastPort ? (
-                        <BrowserPanel port={screencastPort} />
+                        <LiveBrowser port={screencastPort} />
                     ) : (
                         <div
                             style={{

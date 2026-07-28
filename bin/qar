@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# qar — thin dispatcher so a bare `qar …` works in dev AND the packaged app.
+#
+# There is no `qar` binary: it's a pnpm script (`"qar": "tsx bin/qar.ts"`), so a
+# bare `qar …` would 127. The GUI puts this dir on PATH and exports QAR_BIN
+# (packaged: "<node> --import tsx <bundle>") via withGuiPath(), so prefer it. In a
+# dev checkout QAR_BIN is unset, so fall back to `pnpm qar`.
+set -euo pipefail
+if [ -n "${QAR_BIN:-}" ]; then
+  exec ${QAR_BIN} "$@" # unquoted on purpose: QAR_BIN is a multi-token command
+fi
+if command -v pnpm >/dev/null 2>&1; then
+  exec pnpm qar "$@"
+fi
+echo "qar: neither QAR_BIN nor pnpm available" >&2
+exit 127

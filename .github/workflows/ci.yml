@@ -19,12 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from the "packageManager" field in package.json, so CI
+      # and local machines cannot drift (a pnpm 9 runner reads "overrides" from a
+      # different file than pnpm 11 and rejects the lockfile).
+      # node-version must stay >= 22: pnpm 11 requires Node >=22.13 (it imports
+      # node:sqlite, absent in 20). 22 also matches the Node the packaged app
+      # bundles (NODE_VERSION in scripts/build-app.sh), so CI tests what ships.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -35,11 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
@@ -56,11 +58,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: gui/frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -73,11 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: gui/frontend/pnpm-lock.yaml
       - uses: actions/setup-go@v5

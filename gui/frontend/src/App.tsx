@@ -10,9 +10,10 @@ import { SettingsTab } from './components/SettingsTab'
 import { SetupGate } from './components/SetupGate'
 import { SuitesTab } from './components/SuitesTab'
 import { SyncButton } from './components/SyncButton'
+import { ValidationTab } from './components/ValidationTab'
 
 export function App() {
-    const [tab, setTab] = useState<string | null>('suites')
+    const [tab, setTab] = useState<string | null>('validation')
     const [helpOpen, setHelpOpen] = useState(false)
     // Bumped after a successful sync so SuitesTab re-fetches the (possibly changed)
     // suite list — a pull that adds/removes suites now shows up without a restart.
@@ -79,10 +80,19 @@ export function App() {
 
                     <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
 
-                    <Tabs value={tab} onChange={setTab} mt="lg">
+                    {/* keepMountedMode="display-none": hide inactive panels with CSS
+                    only. Mantine's default ("activity") wraps panels in React
+                    <Activity mode="hidden">, which RUNS each hidden panel's effect
+                    cleanups on tab switch — that tore down live sessions (Validation
+                    /Author killed their Chrome via stopSessionIfOwner; the Suites run
+                    detached its listeners) and reset the tab to its empty initial
+                    state. display-none keeps the effects (and the live session) alive
+                    while the tab is backgrounded, so switching away and back is safe. */}
+                    <Tabs value={tab} onChange={setTab} mt="lg" keepMountedMode="display-none">
                         <Tabs.List>
-                            <Tabs.Tab value="suites">Suites</Tabs.Tab>
-                            <Tabs.Tab value="exploratory">Author a Suite</Tabs.Tab>
+                            <Tabs.Tab value="validation">Validation</Tabs.Tab>
+                            <Tabs.Tab value="suites">Testing</Tabs.Tab>
+                            <Tabs.Tab value="exploratory">Author</Tabs.Tab>
                             <Tabs.Tab value="settings">Settings</Tabs.Tab>
                         </Tabs.List>
 
@@ -97,6 +107,9 @@ export function App() {
                         </Tabs.Panel>
                         <Tabs.Panel value="exploratory" pt="lg" keepMounted>
                             <ExploratoryTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="validation" pt="lg" keepMounted>
+                            <ValidationTab />
                         </Tabs.Panel>
                         <Tabs.Panel value="settings" pt="lg" keepMounted>
                             <SettingsTab />

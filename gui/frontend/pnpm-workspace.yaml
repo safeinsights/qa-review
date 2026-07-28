@@ -1,0 +1,26 @@
+# gui/frontend resolves its dependencies independently of the repo root (it has
+# its own lockfile). Without this file pnpm walks up, finds the root's
+# pnpm-workspace.yaml, and treats this project as governed by it — which silently
+# stops this lockfile from being regenerated when package.json changes.
+packages: []
+
+# vitest and @vitejs/plugin-react each pull their OWN nested vite, which resolves
+# to the unpatched 5.x line even though the direct dependency is 6.4.3. These pin
+# the transitive copies to the patched versions:
+#   vite    >=6.4.3  GHSA-4w7w-66w2-5vf9, GHSA-v6wh-96g9-6wx3 (path traversal,
+#                    server.fs.deny bypass)
+#   postcss >=8.5.18 path traversal in source-map parsing
+#   esbuild >=0.24.3 dev-server request forgery
+# vitest 3.2 declares vite "^5 || ^6 || ^7", so 6.x is inside its supported range.
+overrides:
+    vite: '^6.4.3'
+    postcss: '^8.5.18'
+    esbuild: '^0.25.0'
+
+# pnpm 11 FAILS the install (ERR_PNPM_IGNORED_BUILDS) on any unapproved
+# postinstall. esbuild arrives transitively via vite and downloads its
+# platform-specific binary, so vite is unusable without it. The key is
+# `allowBuilds` (a map), NOT pnpm 10's `onlyBuiltDependencies` (a list) — pnpm 11
+# silently ignores the old key and still fails.
+allowBuilds:
+    esbuild: true

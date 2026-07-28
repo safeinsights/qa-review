@@ -1,6 +1,6 @@
 ---
 name: qa-explore
-description: Interactively author a SafeInsights Playwright test suite by driving a live, already-logged-in browser, then writing and verifying the suite file. Use when given a QA instruction + env + role inside the QA Runner's authoring session.
+description: Interactively author a SafeInsights Playwright test suite by logging into and driving a live browser, then writing and verifying the suite file. Use when given a QA instruction + env + role inside the QA Runner's authoring session.
 ---
 
 # qa-explore
@@ -11,36 +11,46 @@ the suite to a file and verifying it passes. You run **interactively in a termin
 — talk to the user in plain language, ask when unsure, and let them approve actions.
 
 ## The environment you're in
-- The browser is **already launched and logged in** (the QA Runner ran `qar session`
-  before you started). Drive it with the **`chrome-devtools` MCP tools** — do NOT
-  launch your own browser, and do NOT log in again for the primary role. In
-  particular do NOT run `qar login` — the session is already authenticated.
+- The browser is **already launched but NOT logged in** (the QA Runner ran
+  `qar session` before you started; login is deferred). Drive it with the
+  **`chrome-devtools` MCP tools** — do NOT launch your own browser.
+- **Log in first.** The prompt names the **role** — log the shared browser in by
+  running a single pre-approved command: `qar session-login --role <role>` (this
+  performs the deterministic Clerk + MFA login and reports back). Do NOT run
+  `qar login` (that launches a separate browser), and do NOT hand-drive the login
+  through the browser. Wait for it to succeed before carrying out the instruction.
 - The repo is at **`$QAR_REPO_DIR`** and **is already your working directory.**
-  The engine CLI is **`${QAR_BIN:-pnpm qar}`** (`$QAR_BIN` in the packaged app,
-  else `pnpm qar`).
+  The engine CLI is **`qar`** — a shim on PATH that dispatches to the bundled engine
+  (packaged) or `pnpm qar` (dev). Just run `qar …`; don't write `pnpm qar` or
+  `${QAR_BIN:-…}`.
 - The prompt names the **role**, **target** (`--env <name>` or `--pr <n>`), and the
-  **instruction**. The browser is already on that environment as that role.
+  **instruction**. The browser is on that environment, on the login page.
 
 ## Keeping the session smooth (IMPORTANT — read before running anything)
 This runs in a permission-scoped terminal the QA staffer watches. To avoid
 needless permission prompts and noise:
 - **Never prefix a command with `cd`** — you are already in `$QAR_REPO_DIR`.
-  A compound like `cd … && pnpm qar …` does NOT match the pre-approved allowlist,
-  so it forces a permission prompt. Run `pnpm qar …` directly.
+- **Write scratch files under `.tmp/`** (screenshots, notes — anything that isn't
+  the suite itself). It's gitignored; files written elsewhere pollute the user's
+  `git status`. The suite you author is NOT scratch — it belongs in `src/suites/`.
+  A compound like `cd … && qar …` does NOT match the pre-approved allowlist,
+  so it forces a permission prompt. Run `qar …` directly.
 - **One command per Bash call.** Don't chain with `&&`, `;`, or pipes when you can
   avoid it — chained/piped commands fall outside the allowlist and prompt. The
-  pre-approved commands are: `pnpm qar …` (and `qar …`), `pnpm typecheck`,
+  pre-approved commands are: `qar …` (and `pnpm qar …`), `pnpm typecheck`,
   `pnpm test`, and the read-only helpers `mkdir`, `ls`, `cat`, `date`, `echo`.
 - **Be quiet.** Don't narrate every tool call. Do the work, then give the user a
   short, plain-language result. Skip pasting raw JSON step lines and long logs.
 
 ## What to do
-1. **Carry out the instruction in the browser** using the chrome-devtools MCP tools
+1. **Log in first:** run `qar session-login --role <role>` and wait for it to
+   succeed (the shared browser is then authenticated as that role).
+2. **Carry out the instruction in the browser** using the chrome-devtools MCP tools
    (navigate, click, fill, snapshot to read the page). Confirm each meaningful step
    actually worked by reading the resulting page. Keep the user informed.
-2. **Track anything you create** (study/user ids from the URL, e.g.
+3. **Track anything you create** (study/user ids from the URL, e.g.
    `/.../study/<id>/...`) so it can be cleaned up.
-3. **When the user asks to save it as a suite** (they'll give it a short name),
+4. **When the user asks to save it as a suite** (they'll give it a short name),
    **write `src/suites/<name>.ts`** following `src/suites/types.ts`
    (`Suite` + `Step` + `RunContext`). Use an existing suite (`src/suites/create-study.ts`) as
    the template:
@@ -57,12 +67,12 @@ needless permission prompts and noise:
    - use `ctx.page` (Playwright Page), `ctx.baseURL`, `ctx.tag` for unique titles, and
      `ctx.trackStudy(id)` / `ctx.trackUser(id)` for anything you create (cleanup).
    - prefer **stable selectors**: `getByRole`, `getByLabel`, `getByTestId`, `text=`.
-4. **Run and debug the suite until it passes:**
-   `${QAR_BIN:-pnpm qar} run --suite <name> --role <role> (--env <name> | --pr <n>)`
+5. **Run and debug the suite until it passes:**
+   `qar run --suite <name> --role <role> (--env <name> | --pr <n>)`
    Read failures, fix the selectors/steps in the `.ts`, and re-run until green. Tell
    the user when it passes.
-5. **Clean up** anything you created while exploring:
-   `${QAR_BIN:-pnpm qar} cleanup (--env <name> | --pr <n>) --studies <ids> --users <ids>`
+6. **Clean up** anything you created while exploring:
+   `qar cleanup (--env <name> | --pr <n>) --studies <ids> --users <ids>`
 
 ## Rules
 - Drive the EXISTING browser via chrome-devtools MCP; never open your own.

@@ -34,47 +34,90 @@ func isEncryptedValue(v string) bool {
 	return strings.HasPrefix(strings.TrimSpace(v), ageArmorHeader)
 }
 
-// secretVars are the var names whose values must be encrypted when committed to
-// the project tier. Kept in sync with secretVarNames() in src/engine/settings.ts
-// (each account's password + MFA code + results private key).
-var secretVars = map[string]bool{
-	"ADMIN_PASSWORD":                         true,
-	"ADMIN_MFA_CODE":                         true,
-	"ADMIN_RESULTS_PRIVATE_KEY_QA":           true,
-	"ADMIN_RESULTS_PRIVATE_KEY_STAGING":      true,
-	"RESEARCHER_PASSWORD":                    true,
-	"RESEARCHER_MFA_CODE":                    true,
-	"RESEARCHER_RESULTS_PRIVATE_KEY_QA":      true,
-	"RESEARCHER_RESULTS_PRIVATE_KEY_STAGING": true,
-	"REVIEWER_PASSWORD":                      true,
-	"REVIEWER_MFA_CODE":                      true,
-	"REVIEWER_RESULTS_PRIVATE_KEY_QA":        true,
-	"REVIEWER_RESULTS_PRIVATE_KEY_STAGING":   true,
+// envList is the set of stable envs that carry per-env account secrets. Kept in
+// sync with PRIVATE_KEY_ENVS in config/environments.ts.
+var envList = []string{"qa", "staging", "production"}
+
+// accountGroups maps each account's display group to its var prefix.
+var accountGroups = []struct{ group, prefix string }{
+	{"Admin", "ADMIN"},
+	{"Researcher", "RESEARCHER"},
+	{"Reviewer", "REVIEWER"},
 }
 
-// knownVars is the ordered list of fields the Settings panel shows: per-env base
-// URLs, then each account's email + password + MFA code + per-env results private
-// keys. `Group` renders account sections; `Env` marks the qa/staging key variants
-// the panel groups into sub-tabs. Kept in sync with knownVarNames()/secretVarNames()
-// in src/engine/settings.ts (derived there from SHARED_ACCOUNTS x PRIVATE_KEY_ENVS).
-var knownVars = []SettingField{
-	{Key: "QA_BASE_URL", Label: "QA base URL", Secret: false, Group: ""},
-	{Key: "STAGING_BASE_URL", Label: "Staging base URL", Secret: false, Group: ""},
-	{Key: "ADMIN_EMAIL", Label: "Email", Secret: false, Group: "Admin"},
-	{Key: "ADMIN_PASSWORD", Label: "Password", Secret: true, Group: "Admin"},
-	{Key: "ADMIN_MFA_CODE", Label: "MFA code", Secret: true, Group: "Admin"},
-	{Key: "ADMIN_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Admin", Env: "qa"},
-	{Key: "ADMIN_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Admin", Env: "staging"},
-	{Key: "RESEARCHER_EMAIL", Label: "Email", Secret: false, Group: "Researcher"},
-	{Key: "RESEARCHER_PASSWORD", Label: "Password", Secret: true, Group: "Researcher"},
-	{Key: "RESEARCHER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Researcher"},
-	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Researcher", Env: "qa"},
-	{Key: "RESEARCHER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Researcher", Env: "staging"},
-	{Key: "REVIEWER_EMAIL", Label: "Email", Secret: false, Group: "Reviewer"},
-	{Key: "REVIEWER_PASSWORD", Label: "Password", Secret: true, Group: "Reviewer"},
-	{Key: "REVIEWER_MFA_CODE", Label: "MFA code", Secret: true, Group: "Reviewer"},
-	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_QA", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "qa"},
-	{Key: "REVIEWER_RESULTS_PRIVATE_KEY_STAGING", Label: "Results private key", Secret: true, Group: "Reviewer", Env: "staging"},
+// secretVars are the var names whose values must be encrypted when committed to the
+// project tier. Kept in sync with secretVarNames() in src/engine/settings.ts: every
+// account field is per-env and secret (email, password, results private key, MFA
+// code, MFA seed). Built from accountGroups x envList so it can't drift.
+var secretVars = buildSecretVars()
+
+func buildSecretVars() map[string]bool {
+	m := map[string]bool{}
+	for _, ag := range accountGroups {
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			m[ag.prefix+"_EMAIL_"+e] = true
+			m[ag.prefix+"_PASSWORD_"+e] = true
+			m[ag.prefix+"_RESULTS_PRIVATE_KEY_"+e] = true
+			m[ag.prefix+"_MFA_CODE_"+e] = true
+			m[ag.prefix+"_MFA_SEED_"+e] = true
+		}
+	}
+	return m
+}
+
+// knownVars is the ordered list of fields the panel shows: per-env base URLs, the
+// Jira config, then each account's per-env fields. `Group` renders account sections
+// (shown in the Accounts tab); `Env`/`Section` mark the per-env variants the panel
+// groups into sub-tabs — the "Account" section holds email/password/MFA code/seed
+// (short inputs), the "Results private key" section holds the PEM (Multiline). Kept
+// in sync with knownVarNames()/secretVarNames() in src/engine/settings.ts.
+var knownVars = buildKnownVars()
+
+func buildKnownVars() []SettingField {
+	fields := []SettingField{
+		// Jira MCP config for the Validation tab. LocalOnly (gitignored, never
+		// encrypted) — a personal, per-user site/email/token. Not in secretVars:
+		// local-tier values are always plaintext. The token is still Secret for masking.
+		{Key: "JIRA_URL", Label: "Jira site URL", Secret: false, Group: "Jira", LocalOnly: true},
+		{Key: "JIRA_USERNAME", Label: "Jira email", Secret: false, Group: "Jira", LocalOnly: true},
+		{Key: "JIRA_API_TOKEN", Label: "Jira API token", Secret: true, Group: "Jira", LocalOnly: true},
+	}
+	// The per-env base URL. Tagged with its Env (like the account fields) so the
+	// panel can file it under the selected env rather than as a separate list of
+	// three. The label needs no env prefix — the env tab already supplies that.
+	for _, env := range envList {
+		fields = append(fields, SettingField{
+			Key: strings.ToUpper(env) + "_BASE_URL", Label: "Base URL",
+			Secret: false, Group: "", Env: env, Section: "Environment",
+		})
+	}
+	for _, ag := range accountGroups {
+		// The core account fields — one env-tabbed "Account" section per account,
+		// each env tab holding email + password + MFA code + TOTP seed (short inputs).
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			fields = append(fields,
+				SettingField{Key: ag.prefix + "_EMAIL_" + e, Label: "Email",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_PASSWORD_" + e, Label: "Password",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_MFA_CODE_" + e, Label: "MFA fixed code",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+				SettingField{Key: ag.prefix + "_MFA_SEED_" + e, Label: "MFA TOTP seed",
+					Secret: true, Group: ag.group, Env: env, Section: "Account"},
+			)
+		}
+		// Per-env results private key (its own env-tabbed section, PEM textarea).
+		for _, env := range envList {
+			e := strings.ToUpper(env)
+			fields = append(fields, SettingField{
+				Key: ag.prefix + "_RESULTS_PRIVATE_KEY_" + e, Label: "Results private key",
+				Secret: true, Group: ag.group, Env: env, Section: "Results private key", Multiline: true,
+			})
+		}
+	}
+	return fields
 }
 
 // SettingField is one row in the Settings panel.
@@ -82,13 +125,21 @@ type SettingField struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
 	Secret bool   `json:"secret"`
-	// Account section this field belongs to ("Admin"/"Researcher"/"Reviewer"),
-	// or "" for ungrouped fields (the base URLs).
+	// Account this field belongs to ("Admin"/"Researcher"/"Reviewer"), "Jira" for
+	// the Jira config, or "" for the account-less base URL.
 	Group string `json:"group"`
-	// For per-environment fields (the results private keys), the env this value
-	// is for ("qa"/"staging") — the panel renders these as sub-tabs within the
-	// account. "" for env-agnostic fields (email/password/MFA, base URLs).
+	// The env this value is for ("qa"/"staging"/"production"). EVERY account field
+	// is per-env (email, password, MFA code/seed, results key), as is the base URL.
+	// "" only for the genuinely global Jira config. The panel selects one env at the
+	// top and renders every field carrying that Env beneath it.
 	Env string `json:"env"`
+	// Label of the sub-section this field belongs to within its group ("Account",
+	// "Results private key", "Environment"), letting several fields for one env
+	// render together under one heading. "" for the Jira group's plain fields.
+	Section string `json:"section"`
+	// Multiline hints the panel to render a textarea instead of a one-line input —
+	// true for the PEM results keys, false for short values (MFA code, TOTP seed).
+	Multiline bool `json:"multiline"`
 	// Where the current value comes from: "project", "secrets", "local", or ""
 	// (unset). For secrets, the value itself is NOT returned to the UI.
 	Tier string `json:"tier"`
@@ -96,6 +147,31 @@ type SettingField struct {
 	// re-types a secret to change it) — `Set` says whether one already exists.
 	Value string `json:"value"`
 	Set   bool   `json:"set"`
+	// LocalOnly forces this field to the "local" tier (gitignored). The panel hides
+	// the tier selector and the backend rejects any non-local write — so a personal,
+	// per-user value (e.g. the Jira config) can never be committed or encrypted.
+	LocalOnly bool `json:"localOnly"`
+}
+
+// isKnownVar reports whether a settings key is one the panel manages.
+func isKnownVar(key string) bool {
+	for _, f := range knownVars {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// isLocalOnlyVar reports whether a settings key is local-only (must never be
+// committed/encrypted), derived from the LocalOnly flag on knownVars.
+func isLocalOnlyVar(key string) bool {
+	for _, f := range knownVars {
+		if f.Key == key {
+			return f.LocalOnly
+		}
+	}
+	return false
 }
 
 // SettingsView is the merged settings state returned to the panel.
@@ -111,6 +187,30 @@ type SettingsView struct {
 // clone, not at a cwd-relative offset.
 func configDirFor(cwd string) string {
 	return filepath.Join(repoDir(), "config")
+}
+
+// readJiraConfig resolves the Jira MCP config (URL/username/token) from the merged
+// settings files, precedence local > secrets > project (same as ReadSettings). The
+// values are plaintext (local tier / committed default), so no decryption is needed.
+func (a *App) readJiraConfig() JiraCfg {
+	get := func(key string) string {
+		dir := configDirFor("")
+		for _, f := range []string{localFile, secretsFile, projectFile} {
+			m, err := readSettingsFile(filepath.Join(dir, f))
+			if err != nil {
+				continue
+			}
+			if v, ok := m[key]; ok {
+				return v
+			}
+		}
+		return ""
+	}
+	return JiraCfg{
+		URL:      get("JIRA_URL"),
+		Username: get("JIRA_USERNAME"),
+		Token:    get("JIRA_API_TOKEN"),
+	}
 }
 
 // readSettingsFile reads one JSON settings file into a string map. A missing or
@@ -353,6 +453,65 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 	return view, nil
 }
 
+// RevealSecret returns the current plaintext value of one settings key, resolving
+// it with the same precedence as ReadSettings (local > secrets > project). An
+// encrypted committed value is decrypted with the local identity; a plaintext
+// value (local tier, or a non-secret) is returned as-is. Used by the panel's
+// reveal (eye) toggle so a tester can confirm what's stored without re-typing it.
+// Errors if the key is unset, or if it's encrypted but the local identity can't
+// decrypt it (not a recipient / no identity).
+func (a *App) RevealSecret(cwd, key string) (string, error) {
+	dir := configDirFor(cwd)
+	local, err := readSettingsFile(filepath.Join(dir, localFile))
+	if err != nil {
+		return "", err
+	}
+	secrets, err := readSettingsFile(filepath.Join(dir, secretsFile))
+	if err != nil {
+		return "", err
+	}
+	project, err := readSettingsFile(filepath.Join(dir, projectFile))
+	if err != nil {
+		return "", err
+	}
+
+	// Match ReadSettings precedence: local > secrets > project. Only the secrets
+	// tier can hold an encrypted (armored) value; local/project are plaintext.
+	var val string
+	switch {
+	case has(local, key):
+		val = local[key]
+	case has(secrets, key):
+		val = secrets[key]
+	case has(project, key):
+		val = project[key]
+	default:
+		return "", fmt.Errorf("%q is not set", key)
+	}
+
+	if !isEncryptedValue(val) {
+		return val, nil
+	}
+	id, ok, err := loadIdentity(dir)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("no local identity — request access to reveal encrypted values")
+	}
+	plain, err := decryptWithIdentity(val, id)
+	if err != nil {
+		return "", fmt.Errorf("cannot decrypt %q: your key may not be a recipient yet", key)
+	}
+	return plain, nil
+}
+
+// has reports whether a settings map contains a key.
+func has(m map[string]string, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+
 // WriteSetting writes one field to the chosen tier ("project" or "local").
 //
 // A secret field saved to "project" is age-encrypted to every recipient in
@@ -364,6 +523,11 @@ func (a *App) ReadSettings(cwd string) (SettingsView, error) {
 func (a *App) WriteSetting(cwd, key, value, tier string) error {
 	if tier != "project" && tier != "local" {
 		return fmt.Errorf("invalid tier %q (want project or local)", tier)
+	}
+	// A local-only field (e.g. the Jira config) must never be committed/encrypted —
+	// reject any attempt to write it to the project tier, even if the UI is bypassed.
+	if tier != "local" && isLocalOnlyVar(key) {
+		return fmt.Errorf("%q is local-only and cannot be saved to the project tier", key)
 	}
 	dir := configDirFor(cwd)
 	isSecret := secretVars[key]
@@ -405,26 +569,69 @@ func (a *App) WriteSetting(cwd, key, value, tier string) error {
 
 	// Remove any copy of this key from the OTHER writable files so the field has
 	// exactly one home (avoids a stale lower-precedence value lingering).
-	for _, other := range []string{projectFile, secretsFile, localFile} {
-		if other == targetFile {
-			continue
+	others := make([]string, 0, 2)
+	for _, f := range []string{projectFile, secretsFile, localFile} {
+		if f != targetFile {
+			others = append(others, f)
 		}
-		path := filepath.Join(dir, other)
-		om, err := readSettingsFile(path)
-		if err != nil {
-			return err
-		}
-		if _, ok := om[key]; ok {
-			delete(om, key)
-			if err := writeSettingsFile(path, om); err != nil {
-				return err
-			}
-		}
+	}
+	if _, err := deleteKeyFrom(dir, key, others); err != nil {
+		return err
 	}
 
 	// After encrypting a secret to the keyring, refresh the lock fingerprint so the
 	// engine can tell the committed secrets match the current recipient set.
 	if targetFile == secretsFile {
+		recipients, _ := readKeyringRecipients(dir)
+		if err := writeLock(dir, recipients); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteKeyFrom removes key from each of the named settings files under dir,
+// rewriting only the ones that actually held it. Reports whether the key was
+// removed from the encrypted secrets file, so the caller knows to refresh the
+// keyring lock fingerprint.
+func deleteKeyFrom(dir, key string, files []string) (touchedSecrets bool, err error) {
+	for _, name := range files {
+		path := filepath.Join(dir, name)
+		m, err := readSettingsFile(path)
+		if err != nil {
+			return false, err
+		}
+		if _, ok := m[key]; !ok {
+			continue
+		}
+		delete(m, key)
+		if err := writeSettingsFile(path, m); err != nil {
+			return false, err
+		}
+		if name == secretsFile {
+			touchedSecrets = true
+		}
+	}
+	return touchedSecrets, nil
+}
+
+// ClearSetting unsets one field entirely, removing it from ALL three tier files so
+// no lower-precedence copy survives to be picked up. This is the only way to unset
+// a value from the UI — WriteSetting always assigns, and the panel refuses to save
+// an empty string. Clearing a committed secret refreshes the keyring lock, exactly
+// as writing one does.
+func (a *App) ClearSetting(cwd, key string) error {
+	// Only fields the panel knows about — never let an arbitrary key be stripped
+	// out of the settings JSON.
+	if !isKnownVar(key) {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	dir := configDirFor(cwd)
+	touchedSecrets, err := deleteKeyFrom(dir, key, []string{projectFile, secretsFile, localFile})
+	if err != nil {
+		return err
+	}
+	if touchedSecrets {
 		recipients, _ := readKeyringRecipients(dir)
 		if err := writeLock(dir, recipients); err != nil {
 			return err

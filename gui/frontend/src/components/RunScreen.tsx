@@ -1,10 +1,11 @@
-import { useState } from 'react'
-import type { ResultEnvelope } from '../lib/stepStream'
+import { useCallback, useEffect, useState } from 'react'
+import { jumpToStep, resumeRun } from '../lib/ipc'
+import { type ResultEnvelope, stepsByIndex } from '../lib/stepStream'
 import { useReportIssueMirror } from '../lib/useReportIssueMirror'
 import { useRunStream } from '../lib/useRunStream'
 import { useSnapshotSelection } from '../lib/useSnapshotSelection'
 import { useVideoObjectUrl } from '../lib/useVideoObjectUrl'
-import { CompanionDrawer } from './CompanionDrawer'
+import { COMPANION_HEIGHT, CompanionDrawer } from './CompanionDrawer'
 import { MonitorPanel } from './MonitorPanel'
 import { StepsPanel } from './StepsPanel'
 
@@ -46,6 +47,11 @@ export function RunScreen({
     // drawer) so the drawer mounts ONCE at this screen's top level, independent of
     // which right-panel view (live/snapshot/recording) is showing.
     const [companionOpen, setCompanionOpen] = useState(false)
+    // The companion drawer's height in px, owned here so the run content can reserve
+    // equal bottom padding while it's open — otherwise the fixed-position drawer
+    // covers the bottom of the run content with no way to scroll it into view. The
+    // drawer's top drag handle writes this back on resize.
+    const [companionHeight, setCompanionHeight] = useState(COMPANION_HEIGHT)
 
     // The viewed snapshot + recording playback (state that sits beside a run).
     const snap = useSnapshotSelection(stepNames)
@@ -60,6 +66,55 @@ export function RunScreen({
         onStepFailedChange,
         onReset: snap.reset,
     })
+
+    // Removing a step's pause marker while the run is HALTED at that very step must
+    // also unblock the engine — a bare pause-set only updates the not-yet-reached
+    // set, it doesn't release a run already parked on waitForResume. So resume too.
+    const togglePause = useCallback(
+        (name: string) => {
+            onTogglePause(name)
+            if (run.pausedAt === name) void resumeRun()
+        },
+        [onTogglePause, run.pausedAt]
+    )
+
+    // A jump the engine hasn't reached yet. The engine honors a jump at its next step
+    // boundary, so when one is requested mid-step the target row shows "queued" until
+    // a new step event proves the run moved.
+    const [jumpQueuedIndex, setJumpQueuedIndex] = useState<number | null>(null)
+
+    // Double-click a step to relocate the run to it. Jumping FORWARD skips steps whose
+    // side effects later steps may depend on (a login, a created study id) — the engine
+    // can't know which, so confirm rather than let it fail confusingly downstream.
+    const jumpTo = useCallback(
+        (index: number) => {
+            const executed = stepsByIndex(run.steps).length
+            const skipped = index - executed
+            if (
+                skipped > 0 &&
+                !window.confirm(
+                    `Jump forward to step ${index + 1}, skipping ${skipped} step${
+                        skipped === 1 ? '' : 's'
+                    }?\n\n` +
+                        'Skipped steps will be marked as such and never run. Later steps ' +
+                        'may fail if they depend on work the skipped steps do (logging in, ' +
+                        'creating a study).'
+                )
+            ) {
+                return
+            }
+            setJumpQueuedIndex(index)
+            void jumpToStep(index)
+        },
+        [run.steps]
+    )
+
+    // Clear the queued marker once the run actually moves: a new step event means the
+    // engine reached a boundary and consumed the jump.
+    const stepEventCount = run.steps.length
+    useEffect(() => {
+        setJumpQueuedIndex(null)
+    }, [stepEventCount])
 
     // bundleDir (for artifacts) arrives on the result envelope; the video blob is
     // loaded here, not in RecordingPanel, so it isn't re-fetched on snapshot flips.
@@ -93,43 +148,52 @@ export function RunScreen({
 
     return (
         <>
-            <div style={layout}>
-                <StepsPanel
-                    stepNames={stepNames}
-                    steps={run.steps}
-                    stepCount={stepCount}
-                    result={run.result}
-                    error={run.error}
-                    running={run.running}
-                    bundleDir={bundleDir}
-                    pausedSteps={pausedSteps}
-                    pausedAt={run.pausedAt}
-                    errorHeld={run.errorHeld}
-                    onTogglePause={onTogglePause}
-                    selectedIndex={snap.selected?.index ?? null}
-                    onSelect={snap.select}
-                    cdpPort={run.cdpPort}
-                    emphasizeClaude={emphasizeClaude}
-                    onOpenCompanion={() => setCompanionOpen(true)}
-                />
-                <MonitorPanel
-                    result={run.result}
-                    bundleDir={bundleDir}
-                    running={run.running}
-                    port={run.port}
-                    url={run.url}
-                    consoleLines={run.consoleLines}
-                    selected={snap.selected}
-                    stepCount={stepCount}
-                    videoUrl={videoUrl}
-                    playback={snap.playback}
-                    currentStepName={currentStepName}
-                    paused={run.pausedAt !== null}
-                    onPlaybackProgress={snap.onPlaybackProgress}
-                    onUrl={run.setUrl}
-                    onConsoleLine={run.addConsoleLine}
-                    onClearSelected={snap.clear}
-                />
+            {/* While the companion is open, reserve bottom space equal to its height so
+                the fixed-position drawer no longer hides the bottom of the run content
+                — the page scrolls it clear. */}
+            <div style={companionOpen ? { paddingBottom: COMPANION_HEIGHT } : undefined}>
+                <div style={layout}>
+                    <StepsPanel
+                        stepNames={stepNames}
+                        steps={run.steps}
+                        stepCount={stepCount}
+                        result={run.result}
+                        error={run.error}
+                        running={run.running}
+                        bundleDir={bundleDir}
+                        pausedSteps={pausedSteps}
+                        pausedAt={run.pausedAt}
+                        errorHeld={run.errorHeld}
+                        onTogglePause={togglePause}
+                        selectedIndex={snap.selected?.index ?? null}
+                        onSelect={snap.select}
+                        cdpPort={run.cdpPort}
+                        emphasizeClaude={emphasizeClaude}
+                        onOpenCompanion={() => setCompanionOpen(true)}
+                        // Jumping only means something while the engine is still
+                        // looping — on a finished run there's nothing to relocate.
+                        onJumpTo={run.running || run.browserLive ? jumpTo : undefined}
+                        jumpQueuedIndex={jumpQueuedIndex}
+                    />
+                    <MonitorPanel
+                        result={run.result}
+                        bundleDir={bundleDir}
+                        running={run.running}
+                        port={run.port}
+                        url={run.url}
+                        consoleLines={run.consoleLines}
+                        selected={snap.selected}
+                        stepCount={stepCount}
+                        videoUrl={videoUrl}
+                        playback={snap.playback}
+                        currentStepName={currentStepName}
+                        paused={run.pausedAt !== null}
+                        onPlaybackProgress={snap.onPlaybackProgress}
+                        onUrl={run.setUrl}
+                        onConsoleLine={run.addConsoleLine}
+                        onClearSelected={snap.clear}
+                    />
+                </div>
             </div>
             {/* The companion drawer is mounted ONCE at the run-screen top level — NOT
                 inside the live-browser top bar — so it (and any in-progress Claude
@@ -139,9 +203,10 @@ export function RunScreen({
             <CompanionDrawer
                 cdpPort={run.cdpPort}
                 suite={companionSuite}
-                browserLive={run.browserLive}
                 open={companionOpen}
                 onClose={() => setCompanionOpen(false)}
+                height={companionHeight}
+                onHeightChange={setCompanionHeight}
             />
         </>
     )

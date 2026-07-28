@@ -1,8 +1,9 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { useEffect, useRef } from 'react'
 import '@xterm/xterm/css/xterm.css'
-import { onPtyExit, onPtyOutput, resizePty, writeToPty } from '../lib/ipc'
+import { onPtyExit, onPtyOutput, openExternal, resizePty, writeToPty } from '../lib/ipc'
 
 // Embedded interactive terminal for the claude PTY. Renders raw PTY bytes and
 // forwards keystrokes back to Go (which writes them to claude's pseudo-terminal),
@@ -19,23 +20,41 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
             theme: { background: '#0f1419' },
             cursorBlink: true,
             convertEol: true,
+            // OSC 8 hyperlinks (what claude emits — blue underlined links) are handled
+            // by xterm's linkHandler, NOT the WebLinksAddon (which only regex-detects
+            // plain-text URLs like a pasted link). Without this, clicking an OSC 8 link
+            // does nothing. Route it to the system browser like the plain-text case.
+            linkHandler: {
+                activate: (_event, uri) => openExternal(uri),
+            },
         })
         const fit = new FitAddon()
         term.loadAddon(fit)
+        // Plain-text URLs (e.g. a pasted link) aren't OSC 8 hyperlinks, so the
+        // linkHandler above never sees them — the WebLinksAddon regex-detects them and
+        // its activate callback routes them to the system browser the same way.
+        term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)))
         term.open(host)
-        fit.fit()
-        resizePty(term.rows, term.cols).catch(() => {})
-        // The container's final size may not be settled on first paint (flex/grid
-        // layout, fonts loading). Re-fit on the next frame so the initial terminal
-        // isn't sized to a too-small box.
-        const raf = requestAnimationFrame(() => {
+
+        // Fit only when the host actually has a size. On a background tab the panel is
+        // display:none (0×0); fitting then would resize the PTY to 0 cols/rows and
+        // leave the terminal garbled until the next interaction. Skipping keeps the
+        // last good size, and the ResizeObserver re-fits when the tab is shown again.
+        const safeFit = () => {
+            if (host.clientWidth === 0 || host.clientHeight === 0) return
             try {
                 fit.fit()
                 resizePty(term.rows, term.cols).catch(() => {})
             } catch {
-                /* ignore */
+                /* ignore transient layout */
             }
-        })
+        }
+
+        safeFit()
+        // The container's final size may not be settled on first paint (flex/grid
+        // layout, fonts loading). Re-fit on the next frame so the initial terminal
+        // isn't sized to a too-small box.
+        const raf = requestAnimationFrame(safeFit)
 
         // PTY bytes (base64) -> terminal. Decode base64 to a byte array so UTF-8 /
         // control sequences render correctly.
@@ -61,14 +80,7 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
             writeToPty(btoa(bin)).catch(() => {})
         })
 
-        const ro = new ResizeObserver(() => {
-            try {
-                fit.fit()
-                resizePty(term.rows, term.cols).catch(() => {})
-            } catch {
-                /* ignore transient layout */
-            }
-        })
+        const ro = new ResizeObserver(safeFit)
         ro.observe(host)
 
         return () => {
@@ -81,5 +93,13 @@ export function Terminal({ onExit }: { onExit?: (code: number | null) => void })
         }
     }, [onExit])
 
-    return <div ref={hostRef} style={{ width: '100%', height: '100%', minHeight: 360 }} />
+    // maxHeight caps the host so xterm's FitAddon computes a stable row count and
+    // scrolls internally, instead of the terminal's natural height feeding back into
+    // an unconstrained grid row and growing without bound. The parent still sizes it.
+    return (
+        <div
+            ref={hostRef}
+            style={{ width: '100%', height: '100%', minHeight: 360, maxHeight: '100%' }}
+        />
+    )
 }

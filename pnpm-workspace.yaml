@@ -1,0 +1,25 @@
+# This repo is NOT a monorepo: gui/frontend is a separate project with its own
+# lockfile, and must not be treated as a workspace member (pnpm resolves its deps
+# independently). The empty package list keeps that boundary explicit.
+packages: []
+
+# vitest pulls vite in transitively and resolves it to the 5.x line, which is
+# unpatched for GHSA-4w7w-66w2-5vf9 / GHSA-v6wh-96g9-6wx3 (path traversal +
+# server.fs.deny bypass). vitest 3.2 declares vite "^5 || ^6 || ^7", so pinning
+# the patched 6.x is inside its supported range, not a forced override.
+overrides:
+    vite: '^6.4.3'
+
+# pnpm 11 refuses to run a dependency's postinstall unless it is approved here,
+# and a bare `pnpm install` FAILS on unapproved ones (ERR_PNPM_IGNORED_BUILDS)
+# rather than warning. Approval is otherwise stored as per-machine state under
+# $HOME, so a developer who once ran `pnpm approve-builds` sees green while CI —
+# which always starts clean — fails. Listing them makes it explicit and reviewable.
+#
+# The key is `allowBuilds` (a map), NOT pnpm 10's `onlyBuiltDependencies` (a
+# list): pnpm 11 silently ignores the old key and still fails the install.
+#   esbuild        downloads its platform-specific binary; unusable without it
+#   @clerk/shared  first-party package setup (scripts/postinstall.mjs)
+allowBuilds:
+    esbuild: true
+    '@clerk/shared': true

@@ -79,6 +79,24 @@ describe('CleanupClient', () => {
         expect(result.statuses).toEqual({ 'study:study-1': 500 })
     })
 
+    it('treats 404 as already-deleted (ok=true) — cleanup is idempotent', async () => {
+        // 404 means the id is already gone (e.g. a suite deleted + verified it
+        // before teardown, or a retried teardown), which is the goal — not a failure.
+        const fetchImpl = fakeFetch({
+            '/api/qa/studies/gone': { status: 404 },
+            '/api/qa/users/gone': { status: 404 },
+        })
+        const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)
+        client.trackStudy('gone')
+        client.trackUser('gone')
+
+        const result = await client.run()
+
+        expect(result.ok).toBe(true)
+        expect(result.failed).toEqual([])
+        expect(result.deleted.sort()).toEqual(['study:gone', 'user:gone'])
+    })
+
     it('is a no-op (ok=true) when nothing was tracked', async () => {
         const fetchImpl = fakeFetch({})
         const client = new CleanupClient('https://qa.example.com', 'sid=abc', fetchImpl)

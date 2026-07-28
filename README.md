@@ -85,6 +85,9 @@ Each run writes a timestamped folder under `results/` — e.g. `results/2026-07-
 **Just want to run tests?** Use the desktop app — no setup, no terminal. Launch it,
 pick a suite, press Run.
 
+Prerequisites (Chrome, git, gh, Claude Code, node, uv), how to install them, and how
+to get a Jira API token: **[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)**.
+
 <details>
 <summary><strong>Running from the command line (for engineers)</strong></summary>
 
