@@ -70,7 +70,9 @@ export async function requestAccess(
 // CLI wrapper: resolves name/email/date, runs requestAccess, then opens a PR via
 // `gh` (falling back to printed instructions if gh is unavailable).
 export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
-    const name = opts.name ?? (await safeGitConfigName())
+    // An empty string is not a meaningful name (e.g. the GUI sends '' to mean
+    // "derive it"), so treat it the same as an absent flag, not as an explicit value.
+    const name = opts.name || (await safeGitConfigName())
     if (!name) {
         throw new Error('request-access: --name "Your Name" is required (git user.name is unset)')
     }
