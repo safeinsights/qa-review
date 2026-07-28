@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1849,7 +1850,105 @@ func jiraCheck(cfg JiraCfg) DoctorCheck {
 	if err != nil {
 		return DoctorCheck{Name: name, OK: false, Detail: err.Error(), Hint: settingsHint, DocURL: jiraTokenDocURL}
 	}
-	return DoctorCheck{Name: name, OK: true, Detail: "authenticated as " + who}
+
+	// Authenticating only proves the credentials name a real account. A validation
+	// WRITES three times — comment, attachment, transition — and a read-only account
+	// passes /myself and then fails at the end of a validation, which is the moment
+	// this check exists to stop being the discovery point.
+	missing, err := jiraMissingPermissions(cfg)
+	if err != nil {
+		// A permission probe that can't run is not proof of a missing permission —
+		// report it as unverified rather than failing a correctly-configured user.
+		return DoctorCheck{
+			Name:   name,
+			OK:     false,
+			Detail: "authenticated as " + who + ", but couldn't verify write access: " + err.Error(),
+			Hint:   jiraAccessHint,
+		}
+	}
+	if len(missing) > 0 {
+		return DoctorCheck{
+			Name:   name,
+			OK:     false,
+			Detail: "authenticated as " + who + ", but cannot " + strings.Join(missing, ", ") + " in " + jiraProbeProject,
+			Hint:   jiraAccessHint,
+		}
+	}
+	return DoctorCheck{
+		Name:   name,
+		OK:     true,
+		Detail: "authenticated as " + who + "; can comment, attach, and transition in " + jiraProbeProject,
+	}
+}
+
+const jiraAccessHint = "Ask a Jira admin to grant your account write access to the " +
+	jiraProbeProject + " project (add comments, create attachments, transition issues)."
+
+// The project the permission probe runs against. Deliberately NOT jiraBoards: that
+// list exists to MATCH ticket keys in PR text and includes SHRMP, a typo alias, plus
+// SHRIMP — both 404 on /mypermissions (verified against live Jira), which would make
+// the doctor report a failure that says nothing about the user's actual access.
+const jiraProbeProject = "OTTER"
+
+// The three permissions a validation actually needs, mapped to the wording used when
+// one is missing. Keys are Jira Cloud permission keys; see src/engine/jira.ts (comment
+// + attachment) and the qa-validate skill (transition) for the calls they authorize.
+var jiraWritePermissions = []struct{ key, verb string }{
+	{"ADD_COMMENTS", "post comments"},
+	{"CREATE_ATTACHMENTS", "attach screenshots"},
+	{"TRANSITION_ISSUES", "transition issues"},
+}
+
+// jiraMissingPermissions returns the human-readable verbs for any write permission the
+// account lacks. Permissions are per-project, so this asks about a real project rather
+// than globally — a global answer wouldn't say whether the user can comment on OTTER.
+func jiraMissingPermissions(cfg JiraCfg) ([]string, error) {
+	base := strings.TrimRight(cfg.URL, "/")
+	if base == "" {
+		base = defaultJiraURL
+	}
+	keys := make([]string, 0, len(jiraWritePermissions))
+	for _, p := range jiraWritePermissions {
+		keys = append(keys, p.key)
+	}
+
+	// `permissions` is REQUIRED — the unparameterized form is deprecated and 400s.
+	endpoint := base + "/rest/api/3/mypermissions?projectKey=" + url.QueryEscape(jiraProbeProject) +
+		"&permissions=" + url.QueryEscape(strings.Join(keys, ","))
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bad JIRA_URL %q: %w", base, err)
+	}
+	req.SetBasicAuth(cfg.Username, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("can't reach %s: %v", base, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from /mypermissions", resp.StatusCode)
+	}
+
+	var body struct {
+		Permissions map[string]struct {
+			HavePermission bool `json:"havePermission"`
+		} `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("unreadable response: %w", err)
+	}
+
+	var missing []string
+	for _, p := range jiraWritePermissions {
+		// A key absent from the response is not a grant — treat it as missing rather
+		// than assuming allowed, so an API change can't silently turn this green.
+		if !body.Permissions[p.key].HavePermission {
+			missing = append(missing, p.verb)
+		}
+	}
+	return missing, nil
 }
 
 const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"

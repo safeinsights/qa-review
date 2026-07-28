@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -517,17 +518,50 @@ func TestJiraCheckMissingFields(t *testing.T) {
 	}
 }
 
-// Fully configured + Jira accepts: the check passes and names the authenticated
-// account, so the user can spot a token belonging to the WRONG account.
-func TestJiraCheckAuthenticates(t *testing.T) {
-	var gotUser, gotPass, gotPath string
+// jiraStub serves both endpoints the check calls: /myself and /mypermissions. grants
+// maps a permission key to whether the account holds it; a key absent from the map is
+// served as havePermission:false.
+func jiraStub(t *testing.T, grants map[string]bool) (*httptest.Server, *[]string) {
+	t.Helper()
+	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUser, gotPass, _ = r.BasicAuth()
-		gotPath = r.URL.Path
+		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/rest/api/3/mypermissions" {
+			perms := map[string]map[string]bool{}
+			// Echo back only what was ASKED for, as real Jira does — so a test can't
+			// pass by the stub volunteering a permission the check never requested.
+			for _, k := range strings.Split(r.URL.Query().Get("permissions"), ",") {
+				if k == "" {
+					continue
+				}
+				perms[k] = map[string]bool{"havePermission": grants[k]}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": perms})
+			return
+		}
 		_, _ = w.Write([]byte(`{"displayName":"QA Bot","emailAddress":"qa@example.com"}`))
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv, &paths
+}
+
+func allJiraGrants() map[string]bool {
+	return map[string]bool{"ADD_COMMENTS": true, "CREATE_ATTACHMENTS": true, "TRANSITION_ISSUES": true}
+}
+
+// Fully configured, Jira accepts, and the account can write: the check passes and
+// names the authenticated account, so the user can spot a token belonging to the
+// WRONG account.
+func TestJiraCheckAuthenticates(t *testing.T) {
+	var gotUser, gotPass string
+	srv, paths := jiraStub(t, allJiraGrants())
+	// Wrap to capture the credentials the check actually sends.
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, _ = r.BasicAuth()
+		inner.ServeHTTP(w, r)
+	})
 
 	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok-123"})
 	if !got.OK {
@@ -536,13 +570,87 @@ func TestJiraCheckAuthenticates(t *testing.T) {
 	if !strings.Contains(got.Detail, "QA Bot") {
 		t.Fatalf("Detail = %q, want the authenticated account name", got.Detail)
 	}
-	// Same endpoint + Basic scheme the engine's jira.ts uses, so a pass here really
-	// does predict that `qar jira-comment` can authenticate.
-	if gotPath != "/rest/api/3/myself" {
-		t.Fatalf("probed %q, want /rest/api/3/myself", gotPath)
+	// Same endpoints + Basic scheme the engine's jira.ts uses, so a pass here really
+	// does predict that `qar jira-comment` can authenticate AND write.
+	want := []string{"/rest/api/3/myself", "/rest/api/3/mypermissions"}
+	if !reflect.DeepEqual(*paths, want) {
+		t.Fatalf("probed %v, want %v", *paths, want)
 	}
 	if gotUser != "qa@example.com" || gotPass != "tok-123" {
 		t.Fatalf("basic auth = %q:%q, want the configured email:token", gotUser, gotPass)
+	}
+}
+
+// THE failure this check exists for: the credentials are valid and /myself succeeds,
+// but the account can't write. A read-only token would otherwise pass the doctor and
+// then fail at the end of a validation, which is the worst moment to find out.
+func TestJiraCheckMissingWritePermission(t *testing.T) {
+	for _, tc := range []struct {
+		name, revoke, wantVerb string
+	}{
+		{"cannot comment", "ADD_COMMENTS", "post comments"},
+		{"cannot attach", "CREATE_ATTACHMENTS", "attach screenshots"},
+		{"cannot transition", "TRANSITION_ISSUES", "transition issues"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			grants := allJiraGrants()
+			grants[tc.revoke] = false
+			srv, _ := jiraStub(t, grants)
+
+			got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+			if got.OK {
+				t.Fatalf("jiraCheck() passed without %s", tc.revoke)
+			}
+			if !strings.Contains(got.Detail, tc.wantVerb) {
+				t.Fatalf("Detail = %q, want it to name %q", got.Detail, tc.wantVerb)
+			}
+			// Authentication SUCCEEDED here — saying otherwise would send the user to
+			// re-check a token that is fine.
+			if !strings.Contains(got.Detail, "QA Bot") {
+				t.Fatalf("Detail = %q, want it to confirm who authenticated", got.Detail)
+			}
+		})
+	}
+}
+
+// Every write permission missing: all three are named, not just the first.
+func TestJiraCheckReportsEveryMissingPermission(t *testing.T) {
+	srv, _ := jiraStub(t, map[string]bool{})
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed with no write permissions at all")
+	}
+	for _, verb := range []string{"post comments", "attach screenshots", "transition issues"} {
+		if !strings.Contains(got.Detail, verb) {
+			t.Fatalf("Detail = %q, want it to name %q", got.Detail, verb)
+		}
+	}
+}
+
+// A permission probe that can't RUN is not evidence of a missing permission. Report it
+// as unverified rather than failing a user whose access is actually fine.
+func TestJiraCheckPermissionProbeUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/mypermissions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"QA Bot"}`))
+	}))
+	defer srv.Close()
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed when write access could not be verified")
+	}
+	if !strings.Contains(got.Detail, "couldn't verify") {
+		t.Fatalf("Detail = %q, want it to say write access is unverified", got.Detail)
+	}
+	// Must not claim a permission is missing when we simply couldn't ask.
+	if strings.Contains(got.Detail, "cannot ") {
+		t.Fatalf("Detail = %q, must not assert a missing permission it never observed", got.Detail)
 	}
 }
 
