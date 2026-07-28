@@ -2,31 +2,48 @@
 // only the *names* of the env vars to read from .env. resolveEnv() merges this
 // with process.env.
 //
-// Accounts are SHARED across all environments (same test users everywhere), so
-// they are declared once in SHARED_ACCOUNTS and reused. Each account carries its
-// OWN second-factor code (per-account MFA). Each environment only differs by its
-// base URL.
+// Accounts are fully PER-ENV: each env has its own email, password, and second
+// factor for every role, so qa/staging/production can use different test users.
+// All account fields are secret (encrypted). The actual var names are derived
+// per-env from the prefixes in SHARED_ACCOUNTS (`<ROLE>_EMAIL_<ENV>`,
+// `<ROLE>_PASSWORD_<ENV>`, `<ROLE>_MFA_CODE_<ENV>`, `<ROLE>_MFA_SEED_<ENV>`). The
+// second factor is a fixed code and/or a base32 TOTP seed — the seed wins when
+// both are set. Environments otherwise differ only by base URL (the one non-secret
+// per-env value).
 //
 // PR preview environments are NOT listed here — they are ephemeral. A PR run is
 // derived from a PR number via prBaseUrl() and is otherwise identical to QA
 // (same shared accounts). See resolvePrEnv() in src/engine/env.ts.
 
+// Per-account var-name prefixes. Every field is per-env: the actual var is
+// `<prefix>_<ENV>`, derived by the helpers below (emailVar/passwordVar/
+// privateKeyVar/mfaCodeVar/mfaSeedVar). All are secret (encrypted).
 export interface AccountVars {
-    emailVar: string
-    passwordVar: string
-    mfaVar: string
-    // Prefix for this account's per-ENV results-decryption private key (PEM).
-    // Unlike email/password/MFA (shared across all envs), the key differs per
-    // environment, so the actual var is `<privateKeyPrefix>_<ENV>` — see
-    // privateKeyVar(). Secret; used by study-happy-path to decrypt results (as
-    // the reviewer). Each QA user sets their own, for each env.
+    emailPrefix: string
+    passwordPrefix: string
+    // Results-decryption private key (PEM). Used by study-happy-path to decrypt
+    // results (as the reviewer). Each QA user sets their own, for each env.
     privateKeyPrefix: string
+    // Fixed second-factor code, typed verbatim at login.
+    mfaCodePrefix: string
+    // Base32 TOTP seed. When set for the running env, the login code is computed
+    // with totp() at type-time and OVERRIDES the fixed code.
+    mfaSeedPrefix: string
 }
 
-// The env names that have their own per-account results private key. PR previews
-// are NOT listed — they reuse the QA key (previews behave like qa).
-export const PRIVATE_KEY_ENVS = ['qa', 'staging'] as const
+// The stable env names that have their own per-account, per-env secrets (results
+// private key, MFA code, MFA seed). PR previews are NOT listed — they reuse QA.
+export const PRIVATE_KEY_ENVS = ['qa', 'staging', 'production'] as const
 export type PrivateKeyEnv = (typeof PRIVATE_KEY_ENVS)[number]
+
+// The per-account, per-env email/password var names, e.g.
+// emailVar(SHARED_ACCOUNTS.reviewer, 'qa') -> 'REVIEWER_EMAIL_QA'.
+export function emailVar(account: AccountVars, env: PrivateKeyEnv): string {
+    return `${account.emailPrefix}_${env.toUpperCase()}`
+}
+export function passwordVar(account: AccountVars, env: PrivateKeyEnv): string {
+    return `${account.passwordPrefix}_${env.toUpperCase()}`
+}
 
 // The per-account, per-env private-key var name, e.g.
 // privateKeyVar(SHARED_ACCOUNTS.reviewer, 'qa') -> 'REVIEWER_RESULTS_PRIVATE_KEY_QA'.
@@ -34,10 +51,23 @@ export function privateKeyVar(account: AccountVars, env: PrivateKeyEnv): string 
     return `${account.privateKeyPrefix}_${env.toUpperCase()}`
 }
 
-// Which private-key env an environment name maps to. Stable envs map to
-// themselves; anything else (PR previews like "pr839") reuses the QA key.
+// Which private-key env an environment name maps to. Stable envs with their own
+// key (staging, production) map to themselves; anything else (qa, and PR previews
+// like "pr839") reuses the QA key.
 export function privateKeyEnvFor(envName: string): PrivateKeyEnv {
-    return envName === 'staging' ? 'staging' : 'qa'
+    return envName === 'staging' || envName === 'production' ? envName : 'qa'
+}
+
+// The per-account, per-env fixed-code var name, e.g.
+// mfaCodeVar(SHARED_ACCOUNTS.reviewer, 'qa') -> 'REVIEWER_MFA_CODE_QA'.
+export function mfaCodeVar(account: AccountVars, env: PrivateKeyEnv): string {
+    return `${account.mfaCodePrefix}_${env.toUpperCase()}`
+}
+
+// The per-account, per-env TOTP-seed var name, e.g.
+// mfaSeedVar(SHARED_ACCOUNTS.reviewer, 'production') -> 'REVIEWER_MFA_SEED_PRODUCTION'.
+export function mfaSeedVar(account: AccountVars, env: PrivateKeyEnv): string {
+    return `${account.mfaSeedPrefix}_${env.toUpperCase()}`
 }
 
 export interface EnvDeclaration {
@@ -45,33 +75,37 @@ export interface EnvDeclaration {
     baseUrlVar: string
 }
 
-// Shared, un-prefixed credential var names — the same test accounts are used on
-// every environment, stable or PR preview. Each account has its own MFA code var
-// and its own results-decryption private key.
+// The three roles and their per-account var-name prefixes. Every field is per-env
+// (see the *Var helpers). The name SHARED_ACCOUNTS is historical — the ROLE SET is
+// shared across envs, but each role's credentials are now env-specific.
 export const SHARED_ACCOUNTS: Record<'admin' | 'researcher' | 'reviewer', AccountVars> = {
     admin: {
-        emailVar: 'ADMIN_EMAIL',
-        passwordVar: 'ADMIN_PASSWORD',
-        mfaVar: 'ADMIN_MFA_CODE',
+        emailPrefix: 'ADMIN_EMAIL',
+        passwordPrefix: 'ADMIN_PASSWORD',
         privateKeyPrefix: 'ADMIN_RESULTS_PRIVATE_KEY',
+        mfaCodePrefix: 'ADMIN_MFA_CODE',
+        mfaSeedPrefix: 'ADMIN_MFA_SEED',
     },
     researcher: {
-        emailVar: 'RESEARCHER_EMAIL',
-        passwordVar: 'RESEARCHER_PASSWORD',
-        mfaVar: 'RESEARCHER_MFA_CODE',
+        emailPrefix: 'RESEARCHER_EMAIL',
+        passwordPrefix: 'RESEARCHER_PASSWORD',
         privateKeyPrefix: 'RESEARCHER_RESULTS_PRIVATE_KEY',
+        mfaCodePrefix: 'RESEARCHER_MFA_CODE',
+        mfaSeedPrefix: 'RESEARCHER_MFA_SEED',
     },
     reviewer: {
-        emailVar: 'REVIEWER_EMAIL',
-        passwordVar: 'REVIEWER_PASSWORD',
-        mfaVar: 'REVIEWER_MFA_CODE',
+        emailPrefix: 'REVIEWER_EMAIL',
+        passwordPrefix: 'REVIEWER_PASSWORD',
         privateKeyPrefix: 'REVIEWER_RESULTS_PRIVATE_KEY',
+        mfaCodePrefix: 'REVIEWER_MFA_CODE',
+        mfaSeedPrefix: 'REVIEWER_MFA_SEED',
     },
 }
 
 export const ENVIRONMENTS: EnvDeclaration[] = [
     { name: 'qa', baseUrlVar: 'QA_BASE_URL' },
     { name: 'staging', baseUrlVar: 'STAGING_BASE_URL' },
+    { name: 'production', baseUrlVar: 'PRODUCTION_BASE_URL' },
 ]
 
 // Derive a PR preview base URL from its PR number, e.g. 839 -> the pr839 host.

@@ -10,11 +10,10 @@ export const signinSuite: Suite = {
         {
             name: 'Confirm dashboard is visible',
             // Login already happened in the engine; just verify the landing state.
-            run: async ctx => {
-                await ctx.step('Confirm dashboard is visible', async () => {
+            run: ctx =>
+                ctx.step(async () => {
                     await ctx.page.locator('text=dashboard').first().waitFor({ state: 'visible' })
-                })
-            },
+                }),
         },
     ],
 }

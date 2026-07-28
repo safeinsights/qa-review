@@ -60,3 +60,45 @@ describe('truncateEventsToPosition', () => {
         expect(events).toHaveLength(2)
     })
 })
+
+// A jumped-over step never runs, so its 'skipped' event both opens and closes its
+// own position — it must NOT overwrite the preceding step's row (which would shift
+// every later position and misalign the GUI's positional step list).
+describe('skipped steps (jump-to)', () => {
+    const ev = (name: string, status: StepEvent['status'], at = 1): StepEvent => ({
+        name,
+        status,
+        at,
+    })
+
+    it('gives each skipped step its own position', () => {
+        const state = buildRunState([
+            ev('one', 'running'),
+            ev('one', 'passed'),
+            ev('two', 'skipped'),
+            ev('three', 'skipped'),
+            ev('four', 'running'),
+            ev('four', 'passed'),
+        ])
+        expect(state.steps.map(s => [s.name, s.status])).toEqual([
+            ['one', 'passed'],
+            ['two', 'skipped'],
+            ['three', 'skipped'],
+            ['four', 'passed'],
+        ])
+    })
+
+    it('counts skipped positions when truncating for a backward jump', () => {
+        const events = [
+            ev('one', 'running'),
+            ev('one', 'passed'),
+            ev('two', 'skipped'),
+            ev('three', 'running'),
+            ev('three', 'passed'),
+        ]
+        // Truncate back to position 1 ('two') — the skipped row counts as a position,
+        // so this drops 'two' and 'three' and keeps only 'one'.
+        truncateEventsToPosition(events, 1)
+        expect(buildRunState(events).steps.map(s => s.name)).toEqual(['one'])
+    })
+})

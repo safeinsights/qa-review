@@ -3,12 +3,22 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRunCompanion, stopSessionIfOwner } from '../lib/ipc'
 import { Terminal } from './Terminal'
 
+// Companion drawer height in px. COMPANION_HEIGHT is the default the drawer opens
+// at AND the fixed bottom padding the run screen reserves so the drawer never hides
+// the bottom of the run content. The min keeps the terminal usable; the max leaves
+// the run's top bar (and the resize handle) reachable.
+export const COMPANION_HEIGHT = 360
+export const COMPANION_MIN_HEIGHT = 180
+export function companionMaxHeight(): number {
+    return Math.max(COMPANION_MIN_HEIGHT, window.innerHeight - 120)
+}
+// The grab strip at the top of the drawer the user drags to resize.
+const RESIZE_HANDLE_HEIGHT = 10
+
 // The "Ask Claude" run companion drawer. A bottom Mantine Drawer that slides up
 // over the run screen, NON-MODAL so the user keeps interacting with the run (click
 // steps, watch the live browser) while Claude is open. Lazily spawns the companion
-// PTY on first open only, attached to the run's CDP port. `browserLive` = the run is
-// BLOCKED with the browser held open (paused before a step, or held open after a
-// failure) — only then is the browser actually attachable/drivable by Claude.
+// PTY on first open only, attached to the run's CDP port.
 //
 // The `open` state is LIFTED to RunScreen (props `open`/`onClose`) and this drawer
 // is mounted ONCE at RunScreen's top level — NOT inside the live-browser top bar —
@@ -18,15 +28,19 @@ import { Terminal } from './Terminal'
 export function CompanionDrawer({
     cdpPort,
     suite,
-    browserLive,
     open,
     onClose,
+    height,
+    onHeightChange,
 }: {
     cdpPort: number | null
     suite: string
-    browserLive: boolean
     open: boolean
     onClose: () => void
+    // Drawer height in px, owned by RunScreen so the run content can reserve equal
+    // bottom padding (scroll clears the drawer). Dragging the top handle updates it.
+    height: number
+    onHeightChange: (h: number) => void
 }) {
     // xterm measures its container, so mount <Terminal> only after the slide-in
     // transition finishes (drawer at its final height) — otherwise it fits to the
@@ -88,32 +102,119 @@ export function CompanionDrawer({
         }
     }, [])
 
+    // Drag the top handle to resize: height grows as the pointer moves UP (toward
+    // the top of the screen), so track the pointer's distance from the viewport
+    // bottom. Pointer capture keeps the drag alive even over the embedded terminal.
+    const onHandlePointerDown = useCallback(
+        (e: React.PointerEvent) => {
+            e.preventDefault()
+            // Capture keeps the drag alive as the pointer moves over the terminal; a
+            // failure to capture must not abort the resize (listeners still attach).
+            try {
+                e.currentTarget.setPointerCapture(e.pointerId)
+            } catch {
+                /* ignore — capture is a nicety, the window listeners drive the resize */
+            }
+            const max = companionMaxHeight()
+            const onMove = (ev: PointerEvent) => {
+                const next = window.innerHeight - ev.clientY
+                onHeightChange(Math.min(max, Math.max(COMPANION_MIN_HEIGHT, next)))
+            }
+            const onUp = () => {
+                window.removeEventListener('pointermove', onMove)
+                window.removeEventListener('pointerup', onUp)
+            }
+            window.addEventListener('pointermove', onMove)
+            window.addEventListener('pointerup', onUp)
+        },
+        [onHeightChange]
+    )
+
     return (
         <Drawer
             opened={open}
             onClose={onClose}
             position="bottom"
-            size="55%"
+            size={`${height}px`}
             withOverlay={false}
             closeOnClickOutside={false}
+            // Esc must reach the embedded claude terminal (its onData forwards it to
+            // the PTY) — don't let the Drawer swallow it to close. Users close the
+            // companion with the × in the terminal's top-right corner instead.
+            closeOnEscape={false}
             trapFocus={false}
             lockScroll={false}
-            title={
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span className="kicker">Claude — run companion</span>
-                    <span className="mono st-dim" style={{ fontSize: 12 }}>
-                        {browserLive
-                            ? 'browser is live — Claude can drive it'
-                            : 'read-only while a step is running — pause or wait for a failure to let Claude drive'}
-                    </span>
-                </div>
-            }
+            // No header/title bar — it wasted vertical space. The drag handle and the
+            // close × live inside the body (top strip / top-right) instead.
+            withCloseButton={false}
             transitionProps={{ transition: 'slide-up', duration: 200 }}
             onEnterTransitionEnd={() => setEntered(true)}
             onExitTransitionEnd={() => setEntered(false)}
             keepMounted={false}
-            styles={{ body: { height: 'calc(100% - 60px)', background: '#0f1419', padding: 8 } }}
+            styles={{
+                // Body fills the whole drawer (no header). The drag strip is pinned to
+                // its top edge, so reserve equal top padding for it.
+                body: {
+                    position: 'relative',
+                    height: '100%',
+                    background: '#0f1419',
+                    padding: 8,
+                    paddingTop: 8 + RESIZE_HANDLE_HEIGHT,
+                },
+            }}
         >
+            {/* Drag strip pinned to the drawer's very top edge — drag up/down to
+                resize. Fixed inside the drawer so it stays put as the body scrolls. */}
+            <div
+                onPointerDown={onHandlePointerDown}
+                title="Drag to resize"
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: RESIZE_HANDLE_HEIGHT,
+                    cursor: 'ns-resize',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    touchAction: 'none',
+                    zIndex: 2,
+                }}
+            >
+                <div
+                    style={{
+                        width: 44,
+                        height: 4,
+                        borderRadius: 2,
+                        background: 'rgba(255,255,255,0.28)',
+                    }}
+                />
+            </div>
+            {/* Close × in the terminal's top-right corner (replaces the removed header
+                button). Above the drag strip's z-index so it stays clickable. */}
+            <button
+                type="button"
+                onClick={onClose}
+                title="Close companion"
+                aria-label="Close companion"
+                style={{
+                    position: 'absolute',
+                    top: RESIZE_HANDLE_HEIGHT - 2,
+                    right: 10,
+                    zIndex: 3,
+                    appearance: 'none',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'rgba(255,255,255,0.55)',
+                    fontSize: 18,
+                    lineHeight: 1,
+                    cursor: 'pointer',
+                    padding: 4,
+                }}
+            >
+                ✕
+            </button>
             {spawnError ? (
                 <Alert color="red" mb="sm">
                     {spawnError}

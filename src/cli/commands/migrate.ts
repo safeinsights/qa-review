@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { configDir, knownVarNames, LOCAL_FILE } from '@/engine/settings'
-import { SHARED_ACCOUNTS } from '../../../config/environments'
+import { emailVar, mfaCodeVar, passwordVar, SHARED_ACCOUNTS } from '../../../config/environments'
 
 // Minimal .env parser: KEY=VALUE per line, ignores blanks and # comments, strips
 // surrounding quotes. Enough to migrate the old qar .env; not a full dotenv.
@@ -47,16 +47,30 @@ export async function migrateCommand(opts: Record<string, string>): Promise<void
         else skipped.push(key)
     }
 
-    // MFA used to be a single shared MFA_CODE; it is now per-account. Fan a legacy
-    // MFA_CODE out to every account's MFA var that wasn't set explicitly.
-    const legacyMfa = parsed.MFA_CODE
-    if (legacyMfa) {
-        for (const a of Object.values(SHARED_ACCOUNTS)) {
-            if (!migrated[a.mfaVar]) migrated[a.mfaVar] = legacyMfa
-        }
-        const idx = skipped.indexOf('MFA_CODE')
+    // Accounts used to be shared across envs with un-suffixed vars (<ROLE>_EMAIL,
+    // <ROLE>_PASSWORD, and a single global MFA_CODE); they are now per-account AND
+    // per-env. Legacy .env setups used the same values on qa and staging, so fan
+    // each legacy value out to that account's qa + staging vars that weren't set
+    // explicitly. (production uses different accounts / a TOTP seed, so it's
+    // intentionally excluded — set it in the Accounts panel.)
+    const unSuffix = (v: string): void => {
+        const idx = skipped.indexOf(v)
         if (idx !== -1) skipped.splice(idx, 1)
     }
+    for (const a of Object.values(SHARED_ACCOUNTS)) {
+        const legacyEmail = parsed[a.emailPrefix]
+        const legacyPassword = parsed[a.passwordPrefix]
+        const legacyMfa = parsed.MFA_CODE
+        for (const env of ['qa', 'staging'] as const) {
+            if (legacyEmail && !migrated[emailVar(a, env)]) migrated[emailVar(a, env)] = legacyEmail
+            if (legacyPassword && !migrated[passwordVar(a, env)])
+                migrated[passwordVar(a, env)] = legacyPassword
+            if (legacyMfa && !migrated[mfaCodeVar(a, env)]) migrated[mfaCodeVar(a, env)] = legacyMfa
+        }
+        if (legacyEmail) unSuffix(a.emailPrefix)
+        if (legacyPassword) unSuffix(a.passwordPrefix)
+    }
+    if (parsed.MFA_CODE) unSuffix('MFA_CODE')
 
     const localPath = path.join(configDir(), LOCAL_FILE)
     const existing: Record<string, string> = fs.existsSync(localPath)

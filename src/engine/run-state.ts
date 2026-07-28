@@ -3,10 +3,12 @@ import type { RunResult, RunState, StepEvent } from '@/engine/types'
 // Collapse the append-only step stream into one entry per executed position
 // (same rule as the GUI's stepsByIndex): a 'running' opens a position; its
 // resolution replaces it in place. Positional so repeated step names don't merge.
+// A 'skipped' step never ran, so it opens AND closes its own position — it must not
+// overwrite the preceding step's row.
 export function buildRunState(events: StepEvent[], result?: RunResult): RunState {
     const steps: StepEvent[] = []
     for (const e of events) {
-        if (e.status === 'running') steps.push(e)
+        if (e.status === 'running' || e.status === 'skipped') steps.push(e)
         else if (steps.length > 0) steps[steps.length - 1] = e
         else steps.push(e)
     }
@@ -23,7 +25,8 @@ export function truncateEventsToPosition(events: StepEvent[], position: number):
     let seen = 0
     let cut = events.length
     for (let i = 0; i < events.length; i++) {
-        if (events[i].status === 'running') {
+        // Mirrors buildRunState: 'running' and 'skipped' each open a position.
+        if (events[i].status === 'running' || events[i].status === 'skipped') {
             if (seen === position) {
                 cut = i
                 break

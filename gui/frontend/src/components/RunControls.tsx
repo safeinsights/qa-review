@@ -1,6 +1,6 @@
 import { Button, Select, TextInput } from '@mantine/core'
 
-const ENVS = ['qa', 'staging']
+const ENVS = ['qa', 'staging', 'production']
 const ALL_ROLES = ['admin', 'researcher', 'reviewer']
 
 export interface RunControlsProps {

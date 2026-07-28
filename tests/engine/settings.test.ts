@@ -57,21 +57,36 @@ describe('X25519 crypto primitives', () => {
 })
 
 describe('secret classification', () => {
-    it('treats passwords + per-account MFA as secret, emails + URLs as not', () => {
-        expect(isSecretVar('ADMIN_PASSWORD')).toBe(true)
-        expect(isSecretVar('ADMIN_MFA_CODE')).toBe(true)
-        expect(isSecretVar('ADMIN_EMAIL')).toBe(false)
+    it('treats every per-env account field as secret; base URLs are not', () => {
+        expect(isSecretVar('ADMIN_EMAIL_QA')).toBe(true)
+        expect(isSecretVar('ADMIN_PASSWORD_QA')).toBe(true)
+        expect(isSecretVar('ADMIN_MFA_CODE_QA')).toBe(true)
         expect(isSecretVar('QA_BASE_URL')).toBe(false)
-        expect(secretVarNames()).toContain('REVIEWER_PASSWORD')
-        expect(secretVarNames()).toContain('REVIEWER_MFA_CODE')
+        // The old un-suffixed account vars no longer exist.
+        expect(isSecretVar('ADMIN_EMAIL')).toBe(false)
+        expect(isSecretVar('ADMIN_PASSWORD')).toBe(false)
+        expect(isSecretVar('ADMIN_MFA_CODE')).toBe(false)
+        expect(secretVarNames()).toContain('REVIEWER_EMAIL_QA')
+        expect(secretVarNames()).toContain('REVIEWER_PASSWORD_STAGING')
+        expect(secretVarNames()).toContain('REVIEWER_MFA_CODE_QA')
     })
 
     it('treats each account per-env results private key as a secret', () => {
         expect(isSecretVar('REVIEWER_RESULTS_PRIVATE_KEY_QA')).toBe(true)
         expect(isSecretVar('REVIEWER_RESULTS_PRIVATE_KEY_STAGING')).toBe(true)
+        expect(isSecretVar('REVIEWER_RESULTS_PRIVATE_KEY_PRODUCTION')).toBe(true)
         expect(isSecretVar('ADMIN_RESULTS_PRIVATE_KEY_QA')).toBe(true)
         expect(secretVarNames()).toContain('REVIEWER_RESULTS_PRIVATE_KEY_QA')
         expect(secretVarNames()).toContain('RESEARCHER_RESULTS_PRIVATE_KEY_STAGING')
+    })
+
+    it('treats the per-env fixed MFA code and TOTP seed as secrets, for every env', () => {
+        for (const env of ['QA', 'STAGING', 'PRODUCTION']) {
+            expect(isSecretVar(`REVIEWER_MFA_CODE_${env}`)).toBe(true)
+            expect(isSecretVar(`REVIEWER_MFA_SEED_${env}`)).toBe(true)
+        }
+        expect(secretVarNames()).toContain('ADMIN_MFA_SEED_PRODUCTION')
+        expect(secretVarNames()).toContain('RESEARCHER_MFA_CODE_STAGING')
     })
 })
 

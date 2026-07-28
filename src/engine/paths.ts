@@ -44,6 +44,39 @@ export function runStatePath(bundleDir: string): string {
     return path.join(bundleDir, 'run-state.json')
 }
 
+// On-demand action rendezvous for a live `qar session`. A sibling `qar session-*`
+// command writes a request here; the running session process watches this path,
+// performs the action on its held browser, and writes the outcome to
+// sessionRequestResultPath(). One session at a time, so a single fixed path needs
+// no per-run coordination. `session-login`, `session-create-user`, and
+// `session-create-study` all share this one channel (each request carries an
+// `action` field).
+export function sessionRequestPath(): string {
+    return path.join(resultsRoot(), 'session-request.json')
+}
+
+export function sessionRequestResultPath(): string {
+    return path.join(resultsRoot(), 'session-request-result.json')
+}
+
+// Rendezvous for "a verdict was posted to Jira". `qar verdict-posted` writes
+// `{ issue, result }` here after Claude posts a validated/rejected verdict (whether
+// driven by the GUI's Verdict button or a manual instruction); the running validation
+// session polls this path and tells the GUI, which then hides the Verdict button and
+// shows the outcome. One session at a time, so a single fixed path needs no keying.
+export function verdictPostedPath(): string {
+    return path.join(resultsRoot(), 'verdict-posted.json')
+}
+
+// Single-instance lock for `qar session`. The rendezvous above is ONE fixed path,
+// so a second session would consume requests meant for the first: `session-login`
+// would report success while logging in a browser nobody is attached to. The lock
+// holds the owner's pid so a stale file (killed process) can be distinguished from
+// a live owner and reclaimed.
+export function sessionLockPath(): string {
+    return path.join(resultsRoot(), 'session.lock')
+}
+
 // Suite source dir. The engine imports these .ts files directly via tsx (both
 // `pnpm qar` and the packaged app run node with `--import tsx`), so there is no
 // compile step — the registry globs this dir.

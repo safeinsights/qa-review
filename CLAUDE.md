@@ -41,12 +41,25 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   assertions/`toPass`, isolate per-run data), never mask it with a retry, an
   inline timeout, or a bare `waitForTimeout`. Don't set inline Playwright
   timeouts; configure them globally.
+- **Wait on page elements, not URLs.** After a click/navigation, wait for a
+  distinctive element on the DESTINATION page (`getByRole(...).waitFor()`,
+  web-first `expect`), NOT `page.waitForURL()`. A URL can change before the page
+  is interactive (or a click can land before the SPA router is ready), so
+  URL-waits race and time out while the real signal — the target UI — is what you
+  actually depend on. If you genuinely need a value FROM the URL (e.g. a
+  record id in the path), still wait for a destination element first, THEN read
+  `page.url()` once the page has rendered.
 
 ### Stop conditions
 
 - Stop if unit tests, `pnpm typecheck`, or lint fail — fix before proceeding.
 - Ask before committing work.
 - Don't commit planning/scratch files unless explicitly told to.
+- **Session scratch goes in `.tmp/`** (gitignored). Every skill — qa-explore,
+  qa-validate, qa-run-companion, pr-review — writes screenshots, draft Jira comment
+  bodies, and review payloads there. Before this, each session picked its own
+  directory (`.qa-validation-shots/`, `/tmp/claude/`), so output either polluted
+  `git status` or went to a path that didn't exist.
 
 ## Architecture (one-liners)
 
@@ -71,7 +84,11 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | session`.
+  request-access | rekey | set-secret | sync | session | jira-comment |
+  jira-delete-comment`.
+- `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
+  See "Posting Jira comments with inline screenshots" below for why this exists
+  instead of the `jira-atlassian` MCP's `jira_add_comment`.
 - `gui/` — Wails app. `gui/app.go` `RunEngine()` spawns the bundled engine
   (`<Resources>/runtime/node <Resources>/engine/qar.bundle.mjs run ...`, or
   `pnpm qar run ...` under `wails dev`) and streams JSON step lines to the React UI.
@@ -80,6 +97,15 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   `gui/settings.go` reads/writes the settings files and encrypts secrets to the
   keyring (`gui/app.go` also exposes `Sync`/`RequestAccess`/`Rekey`/`ResetAndSync`/
   `IsInDrift`/`Setup`/`Preflight`/`IsRepoReady` to the React UI).
+- `gui/prompts/*.md` + `gui/prompts.go` — the opening message submitted to each
+  Claude session (authoring / validation / run companion), as editable markdown
+  rather than Go string concatenation. `prompts.go` `go:embed`s them (so they
+  compile into the binary — nothing extra to ship, and **an edit needs a rebuild**,
+  unlike the skills in `.claude/skills/`, which are read from the clone at runtime)
+  and substitutes `{{placeholder}}` vars. Each file's trailing newline is trimmed —
+  the prompt is submitted as ONE PTY message and a stray newline would send it early.
+  `validation.md` is used when the Jira card is known; `validation-by-pr.md` when
+  only a PR is (see "Validating by PR number" below).
 - `src/engine/paths.ts` — single source of truth for where the repo lives:
   `repoDir()` reads `QAR_REPO_DIR` (set by the packaged app to the user-writable
   clone) and falls back to this checkout for `pnpm qar`. `configDir`/`resultsRoot`/
@@ -233,10 +259,112 @@ Build it:
 - `make dmg` — signed + notarized `.dmg`. Fill in `DEVELOPER_ID` + `NOTARY_PROFILE`
   and `qaReviewSlug` first (see `scripts/build-app.sh` + `gui/paths.go`).
 
-**`qa-explore` skill note:** in the packaged app there is no `pnpm qar`; the engine
-ships as a bundle. `engineCmd` exports **`QAR_BIN`** (= `"<node> <bundle>"`) for the
-Exploratory tab's `claude` run. The `qa-explore` skill must invoke `$QAR_BIN <args>`
-rather than `pnpm qar <args>`.
+**`qar` shim / skill invocation:** in the packaged app there is no `pnpm qar` (the
+engine ships as a bundle), and `pnpm qar` alone wouldn't work in the Claude PTY
+there. So the committed **`bin/qar`** shim (on PATH) dispatches to the bundled engine
+or `pnpm qar` (dev). `qarBinValue()` (`gui/paths.go`) is the single source of the
+`QAR_BIN` string (= `"<node> --import tsx <bundle>"`, packaged only); `withGuiPath()`
+(`gui/app.go`) exports it AND prepends `<repoDir()>/bin` to PATH, so a bare `qar
+<args>` works in the Claude sessions (authoring/validation/companion) in both dev and
+the packaged app. The skills therefore invoke bare **`qar <args>`** — not `pnpm qar`
+or `$QAR_BIN`. The `Bash(qar:*)` allowlist entry (`gui/app.go`) matches this shim.
+
+## Validating by PR number (Jira card inference)
+
+The Validation screen takes a Jira card **and/or** a PR — either alone is enough
+(`StartValidationSession` rejects neither-given). There is no role picker: the
+qa-validate skill infers the role from the ticket.
+
+Both inputs accept a **pasted URL** (`gui/frontend/src/components/validationInputs.ts`:
+`parseJiraCard` / `parsePrNumber`). Parsing is behavior, not cosmetics — the PR
+value flows into the `--pr` engine flag, the preview base URL, and `gh pr view`,
+so a URL must be reduced to a bare number. `parsePrNumber` prefers the `/pull/<n>`
+segment over a first-number match, since a trailing `#diff-r1234567` fragment or a
+`?w=1` query also contains digits. These live in a plain `.ts` module (not
+`ValidationTab.tsx`) so the engine's tsconfig — which sets no `--jsx` — can
+typecheck `tests/gui/validationInputs.test.ts`.
+
+Given only a PR, `inferJiraCard()` (`gui/app.go`) runs `gh pr view <n> --repo
+safeinsights/management-app --json title,headRefName,body` and scans **title →
+branch → description**, in that order (a description is scanned last because it
+often quotes OTHER tickets — "related to OTTER-99"). The resolved key is returned
+to the UI in `ValidationStart{token, jiraCard}` because the GUI needs it: the
+Verdict button is disabled without a card, and the `verdict-posted` event is
+matched by issue key.
+
+The matcher is anchored to a **known board list** (`jiraBoards` — OTTER, SHRIMP,
+plus the recurring SHRMP typo), the approach `versionista`'s `changelog.go` uses.
+This is not incidental: management-app history is full of ticket-shaped noise
+(`fixes-2026`, `node-7`, `haiku-4`, `pages-6`), and a generic `\w+-\d+` pattern
+turns each into a bogus card that sends the validator chasing a ticket that
+doesn't exist. Matching real boards also makes it safe to be case-insensitive and
+to accept a space separator, so PR #907's `Otter 590` resolves to `OTTER-590`.
+**Adding a new Jira board means adding it to `jiraBoards`.**
+
+Inference is best-effort: offline, `gh`-unauthenticated, or genuinely no key (PR
+#839 has none) yields `""`, and the session still starts using
+`prompts/validation-by-pr.md`, which asks Claude to identify the ticket from the
+PR itself.
+
+### The PR caveat and the `pr-review` skill
+
+`prompts/pr-env-caveat.md` (appended whenever a PR is given) closes a validation by
+telling Claude to run `/pr-review <n> --repo <slug>`. The **repo must be explicit**:
+the session's cwd is the qa-review checkout, so a bare `gh pr view 839` resolves
+against qa-review (PRs in the low tens) instead of the repo under test. The caveat
+interpolates `{{pr}}`/`{{repo}}` from `composeValidationPrompt`, with `{{repo}}`
+sourced from the same `managementAppSlug` constant the card inference uses.
+
+`.claude/skills/pr-review/SKILL.md` posts a **PENDING** review (no `event` field) —
+private to the PR author until a human clicks Submit — so the caveat authorizes
+posting without asking, but requires surfacing the returned `html_url`. A draft
+nobody can find is a draft that never happened. Neither the caveat nor the skill may
+APPROVE or REQUEST CHANGES. The skill also inherits `qa-validate`'s PTY rules
+(one command per Bash call, no `cd`, `.tmp/` for scratch) because it runs in that
+same allowlisted session — a pipe or redirect turns an allowlisted `gh …` into a
+non-matching compound and prompts the user mid-review.
+
+## Posting Jira comments with inline screenshots
+
+A QA validation is worth much more with the evidence embedded in the comment. The
+`jira-atlassian` MCP's `jira_add_comment` **cannot do this** — it only ever emits
+text. Every image syntax you might try is stored verbatim and renders as literal
+text (`![](f.png)`, `!f.png|thumbnail!`, and a markdown link to the attachment URL
+were all confirmed to fail; the wiki form additionally comes back escaped as
+`\![](f.png)`). This is upstream bug
+[sooperset/mcp-atlassian#608](https://github.com/sooperset/mcp-atlassian/issues/608),
+still open.
+
+The reason: Jira Cloud renders **ADF**, and an embedded image is only expressible
+as an ADF `media` node. That node is keyed by a **Media Services file UUID**, which
+is NOT the numeric attachment id from the upload response. It's exposed only
+indirectly — request `/rest/api/3/attachment/content/{id}` **without following the
+redirect**, and the `Location` header is `.../file/{uuid}/binary`.
+
+`src/engine/jira.ts` does exactly that: upload → resolve UUID from the redirect →
+POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
+
+- `qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]`
+  posts ONE comment with the images embedded. Images append after the body by
+  default; put a `{{image:N}}` placeholder (1-based) in the body to position one
+  inline instead. Prints `{"id","url"}`.
+- `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
+  has no delete tool, so this is the only way to clean up a bad post). 404 = already
+  gone = success.
+
+Body text is passed through as **literal text**, not markdown — Jira will not
+render `##` or `**bold**` from this path, so write plain prose.
+
+Auth comes from the same env vars the MCP server uses: `JIRA_URL` (defaults to
+`https://openstax.atlassian.net`), `JIRA_USERNAME`, `JIRA_API_TOKEN`. Note
+`JIRA_USERNAME` is typically NOT exported in the shell (it's hardcoded in the MCP
+config), so it usually has to be supplied inline:
+`JIRA_USERNAME=you@rice.edu pnpm qar jira-comment …`
+
+Deliberately NOT implemented: an "upload any absolute path" helper. That's the
+arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
+[PR #1402](https://github.com/sooperset/mcp-atlassian/pull/1402); uploads here go
+through the issue attachment endpoint only.
 
 ## Useful commands
 
@@ -251,5 +379,8 @@ rather than `pnpm qar <args>`.
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
   branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`/`QAR_BIN`)
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
+- `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
+  — post a Jira comment with the screenshots embedded inline (see above)
+- `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

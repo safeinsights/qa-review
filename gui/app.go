@@ -56,15 +56,34 @@ func withGuiPath() []string {
 			path = d + ":" + path
 		}
 	}
+	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
+	// (bin/qar), which dispatches to QAR_BIN (packaged) or `pnpm qar` (dev). This is
+	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
+	if binDir := filepath.Join(repoDir(), "bin"); !strings.Contains(path, binDir) {
+		path = binDir + ":" + path
+	}
 	out := make([]string, 0, len(env))
 	for _, e := range env {
 		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "QAR_REPO_DIR=") {
 			continue
 		}
+		// Strip CLAUDE_CODE_* markers so a `claude` we spawn in the PTY starts a
+		// FRESH session. Otherwise, if the GUI itself was launched from within a
+		// Claude Code session (dev), the child claude inherits CLAUDE_CODE_CHILD_SESSION
+		// and disables its own transcript saving ("Transcript saving is off").
+		if strings.HasPrefix(e, "CLAUDE_CODE_") {
+			continue
+		}
 		out = append(out, e)
 	}
-	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives.
-	return append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
+	// and export QAR_BIN (packaged only) so the `bin/qar` shim — and thus a bare `qar`
+	// in the Claude PTY — runs the bundled engine where there is no `pnpm`.
+	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	if qb := qarBinValue(); qb != "" {
+		out = append(out, "QAR_BIN="+qb)
+	}
+	return out
 }
 
 // guiPath extracts the PATH value from a withGuiPath() env slice.
@@ -118,6 +137,9 @@ type App struct {
 	// teardown (StopSessionIfOwner) only proceeds if the caller still owns this token.
 	sessionToken string
 	sessionSeq   int
+	// stopVerdictWatch stops the validation session's verdict-file poller (which
+	// emits "verdict-posted" when Claude records a verdict). Closed on teardown.
+	stopVerdictWatch chan struct{}
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -260,6 +282,28 @@ var authoringAllowedTools = []string{
 	"Edit",
 }
 
+// validationAllowedTools is the scoped pre-approval set for the Validation session.
+// Claude drives the shared browser (chrome-devtools MCP), reads the ticket + posts
+// findings (jira-atlassian MCP), finds the PR (gh), and uses qar helpers (login,
+// mail-inbox/mail-wait/totp for signup flows). Same file/shell surface as authoring.
+var validationAllowedTools = []string{
+	"mcp__chrome-devtools",
+	"mcp__jira-atlassian",
+	"Bash(gh:*)",
+	"Bash(pnpm qar:*)",
+	"Bash(qar:*)",
+	"Bash(pnpm typecheck:*)",
+	"Bash(pnpm test:*)",
+	"Bash(mkdir:*)",
+	"Bash(ls:*)",
+	"Bash(cat:*)",
+	"Bash(date:*)",
+	"Bash(echo:*)",
+	"Read",
+	"Write",
+	"Edit",
+}
+
 // StartAuthoringSession boots an interactive "author a suite" session:
 //  1. start `qar session --role <r> (--env|--pr)`, wait for its ready line
 //     (cdpPort + screencastPort) — this GATES claude start (no race),
@@ -270,40 +314,84 @@ var authoringAllowedTools = []string{
 //
 // One session at a time: starting a new one stops the old.
 func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, error) {
-	// Evict any live session (companion or a prior authoring one). If it actually
-	// tore something down, tell the GUI so the OTHER tab (which shares the single
-	// PTY slot) resets to idle instead of showing a live session over a dead PTY.
-	// This is the eviction of the OLD session; the new one we start below immediately
-	// re-announces itself (session-ready / a fresh token), so there's no self-teardown.
+	token, cdpPort, err := a.startSessionBrowser("authoring", env, pr)
+	if err != nil {
+		return "", err
+	}
+
+	mcpPath, err := writeSessionMcpConfig(cdpPort)
+	if err != nil {
+		a.StopSession()
+		return "", err
+	}
+	a.sessionMu.Lock()
+	a.sessionMcpPath = mcpPath
+	a.sessionMu.Unlock()
+
+	claudeArgs := []string{
+		"--permission-mode", "default",
+		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		"--add-dir", repoDir(),
+		"--mcp-config", mcpPath,
+	}
+	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
+		a.StopSession()
+		return "", err
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
+	}()
+	return token, nil
+}
+
+// startSessionBrowser evicts any live session, spawns `qar session (--env|--pr)`
+// (login deferred — the browser starts logged out), and waits for its ready line
+// carrying the CDP + screencast ports. It emits "session-ready" {screencastPort}
+// so the GUI shows the live browser, and returns the fresh session token + CDP
+// port so the caller can write a per-session MCP config and spawn claude. Shared
+// by the authoring and validation sessions (they differ only in MCP config +
+// prompt); `tokenPrefix` labels the session ("authoring"/"validation").
+func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, error) {
+	// Evict any live session (companion or a prior one). If it actually tore
+	// something down, tell the GUI so the OTHER tab (which shares the single PTY
+	// slot) resets to idle instead of showing a live session over a dead PTY. The
+	// new session we start below immediately re-announces itself (session-ready /
+	// a fresh token), so there's no self-teardown.
 	if a.teardownSession() {
 		runtime.EventsEmit(a.ctx, "session-ended")
 	}
-	// Mint the active token AFTER the eviction above, so any prior session's owner
-	// no longer holds the active token (their later StopSessionIfOwner is a no-op).
-	token := a.newSessionToken("authoring")
+	// Mint the active token AFTER the eviction so any prior session's owner no
+	// longer holds the active token (their later StopSessionIfOwner is a no-op).
+	token := a.newSessionToken(tokenPrefix)
 
-	// 1. Start the engine session.
-	args := []string{"session", "--role", role}
+	args := []string{"session"}
 	if strings.TrimSpace(pr) != "" {
 		args = append(args, "--pr", pr)
 	} else {
 		args = append(args, "--env", env)
 	}
 	cmd := engineCmd(args...)
+	// Own process group so teardown can kill the WHOLE tree (pnpm → tsx → node →
+	// Chrome), not just the top wrapper. In dev the session is spawned via `pnpm qar`,
+	// and pnpm does NOT forward SIGTERM to its child — so signalling only cmd.Process
+	// left the real `qar session` (+ its Chrome) orphaned, holding the session lock so
+	// every later session start failed with "Another qar session is already running".
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		a.emitSpawnFailure("qar session", err)
-		return "", err
+		return "", 0, err
 	}
 	a.sessionMu.Lock()
 	a.sessionCmd = cmd
 	a.sessionMu.Unlock()
 
-	// 2. Wait for the session ready line (cdpPort + screencastPort) with a timeout.
+	// Wait for the session ready line (cdpPort + screencastPort) with a timeout.
 	type sessionInfo struct {
 		Type           string `json:"type"`
 		CdpPort        int    `json:"cdpPort"`
@@ -332,8 +420,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	}()
 
 	// Fail fast if the engine process exits before emitting the ready line (e.g.
-	// a stale repo without the `session` command, or a login error) — don't make
-	// the user wait out the full timeout.
+	// a stale repo without the `session` command) — don't wait out the timeout.
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
@@ -346,66 +433,141 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 		if out == "" {
 			out = fmt.Sprintf("the engine exited (%v) before the browser was ready", err)
 		}
-		return "", fmt.Errorf("could not start the session:\n%s", out)
+		return "", 0, fmt.Errorf("could not start the session:\n%s", out)
 	case <-time.After(90 * time.Second):
 		a.teardownSession()
-		return "", fmt.Errorf("timed out waiting for the browser session to start")
+		return "", 0, fmt.Errorf("timed out waiting for the browser session to start")
 	}
 
-	// 3. Per-session MCP config + announce the live browser to the GUI.
-	mcpPath, err := writeSessionMcpConfig(info.CdpPort)
+	// Include the session KIND ("authoring"/"validation"/"companion") so each tab can
+	// tell whether the live session is its OWN or the OTHER tab's — the two tabs share
+	// one PTY + browser, so a tab that isn't the owner shows an "unavailable" state
+	// instead of mirroring the other tab's session.
+	runtime.EventsEmit(a.ctx, "session-ready", map[string]any{
+		"kind":           tokenPrefix,
+		"screencastPort": info.ScreencastPort,
+	})
+	return token, info.CdpPort, nil
+}
+
+// ValidationStart is what StartValidationSession hands back: the session token
+// plus the Jira card the session is actually about. The card matters to the
+// caller because it may have been INFERRED from the PR (the tester gave only a PR
+// number) — the GUI needs the resolved key to enable the Verdict button and to
+// match the "verdict-posted" event. Empty means "unknown, Claude will work it out".
+type ValidationStart struct {
+	Token    string `json:"token"`
+	JiraCard string `json:"jiraCard"`
+}
+
+// StartValidationSession boots a "validate a Jira ticket" session: the same shared
+// logged-out browser as authoring, but the MCP config ALSO carries the Jira
+// (uvx mcp-atlassian) server, and the opening prompt invokes qa-validate. Claude
+// reads the ticket + PR, logs in via `qar session-login`, drives the shared browser
+// via chrome-devtools MCP to check the acceptance criteria, and posts the verdict.
+//
+// Either `pr` or `jiraCard` is required (the UI enforces it too). Given only a PR,
+// we infer the card from it up front so the Verdict button works for the whole
+// session; if inference fails the session still starts and the prompt asks Claude
+// to identify the ticket from the PR.
+func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (ValidationStart, error) {
+	if strings.TrimSpace(pr) == "" && strings.TrimSpace(jiraCard) == "" {
+		return ValidationStart{}, errors.New("a PR number or a Jira card is required")
+	}
+	// Infer BEFORE spawning the browser: a failed lookup is then just a missing
+	// card, not an orphaned session we'd have to tear down.
+	if strings.TrimSpace(jiraCard) == "" {
+		jiraCard = inferJiraCard(pr)
+	}
+
+	token, cdpPort, err := a.startSessionBrowser("validation", env, pr)
+	if err != nil {
+		return ValidationStart{}, err
+	}
+
+	mcpPath, err := writeValidationMcpConfig(cdpPort, a.readJiraConfig())
 	if err != nil {
 		a.StopSession()
-		return "", err
+		return ValidationStart{}, err
 	}
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
-	runtime.EventsEmit(a.ctx, "session-ready", info.ScreencastPort)
 
-	// 4. Spawn claude in a PTY against the shared browser.
 	claudeArgs := []string{
-		"--permission-mode", "default",
-		"--allowedTools", strings.Join(authoringAllowedTools, ","),
+		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
+		// writes (comments/transitions/un-assign) and non-allowlisted Bash still
+		// prompt live in the terminal for a human gate.
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", strings.Join(validationAllowedTools, ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
 	}
 	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
 		a.StopSession()
-		return "", err
+		return ValidationStart{}, err
 	}
-
-	// Send the opening instruction once claude's TUI is up (small delay so the
-	// prompt box is ready to receive it). Same split text-then-CR submit as the
-	// "Save as suite" path, so the user never has to press Enter by hand.
+	a.startVerdictWatch()
 	go func() {
 		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
+		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard, instructions))
 	}()
-	return token, nil
+	return ValidationStart{Token: token, JiraCard: jiraCard}, nil
 }
 
-// composeAuthoringPrompt is claude's first message: invoke the qa-explore skill
-// with the env/role/instruction. The browser is already launched + logged in.
-func composeAuthoringPrompt(env, pr, role, instruction string) string {
-	target := "--env " + env
-	if strings.TrimSpace(pr) != "" {
-		target = "--pr " + pr
+// startVerdictWatch polls the verdict rendezvous file for the duration of the
+// validation session. `qar verdict-posted` writes it after Claude posts a verdict
+// (button- or manually-driven); on seeing it we emit "verdict-posted" {issue,result}
+// so the GUI hides the Verdict button, then consume the file. Any stale file from a
+// prior session is cleared up front so it can't fire a false positive.
+func (a *App) startVerdictWatch() {
+	path := verdictPostedPath()
+	_ = os.Remove(path)
+	stop := make(chan struct{})
+	a.sessionMu.Lock()
+	a.stopVerdictWatch = stop
+	a.sessionMu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				var v struct {
+					Issue  string `json:"issue"`
+					Result string `json:"result"`
+				}
+				if json.Unmarshal(data, &v) == nil && v.Issue != "" {
+					runtime.EventsEmit(a.ctx, "verdict-posted", map[string]any{
+						"issue": v.Issue, "result": v.Result,
+					})
+				}
+				// Consume it either way so a malformed file can't spin.
+				_ = os.Remove(path)
+			}
+		}
+	}()
+}
+
+// stopVerdictWatcher stops the poller if one is running (idempotent).
+func (a *App) stopVerdictWatcher() {
+	a.sessionMu.Lock()
+	stop := a.stopVerdictWatch
+	a.stopVerdictWatch = nil
+	a.sessionMu.Unlock()
+	if stop != nil {
+		close(stop)
 	}
-	return fmt.Sprintf("/qa-explore The browser is already open and logged in as %s against %s. Instruction: %s", role, target, instruction)
 }
 
-// composeCompanionPrompt is the companion Claude's first message: invoke the
-// qa-run-companion skill for the suite whose run is on screen. The browser is the
-// live run browser (driven by the engine; Claude drives it only when idle).
-func composeCompanionPrompt(suite string) string {
-	return fmt.Sprintf(
-		"/qa-run-companion You are attached to a live run of the '%s' suite. "+
-			"Read <bundleDir>/run-state.json for the run's steps and result. "+
-			"Only drive the browser when the run is paused or errored.",
-		suite,
-	)
-}
+// The compose*Prompt helpers (and their markdown templates) live in prompts.go.
 
 // companionClaudeArgs builds the claude flags for the run companion. Same scoped
 // allowlist as authoring (browser MCP + qar + file edit under the repo); the MCP
@@ -496,6 +658,7 @@ func (a *App) SendToPty(text string) error {
 // screencast), and removes the temp MCP config. Returns whether anything was
 // actually running (so callers can decide whether to emit "session-ended").
 func (a *App) teardownSession() bool {
+	a.stopVerdictWatcher()
 	running := a.pty.running()
 	a.pty.stop()
 
@@ -513,15 +676,29 @@ func (a *App) teardownSession() bool {
 	if cmd != nil {
 		running = true
 		if cmd.Process != nil {
-			// Signal only — a single cmd.Wait() runs in StartAuthoringSession's
-			// `exited` goroutine and reaps the process (calling Wait twice races).
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+			// Kill the whole process GROUP (-pid), not just the wrapper: the session is
+			// pnpm → tsx → node → Chrome, and pnpm won't forward a signal to its child.
+			// Signalling only cmd.Process orphaned the real session + its Chrome, which
+			// kept holding the session lock. cmd.Wait() runs in startSessionBrowser's
+			// `exited` goroutine and reaps it (don't Wait twice here). SIGKILL follows
+			// so a process ignoring SIGTERM can't linger and hold the lock.
+			pid := cmd.Process.Pid
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
+			go escalateKill(pid)
 		}
 	}
 	if mcpPath != "" {
 		_ = os.Remove(mcpPath)
 	}
 	return running
+}
+
+// escalateKill SIGKILLs a process group a moment after a SIGTERM, so a session that
+// doesn't honor SIGTERM promptly can't linger and keep holding the single-session
+// lock. Harmless if the group already exited (kill on a gone pgid is a no-op error).
+func escalateKill(pid int) {
+	time.Sleep(2 * time.Second)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // StopSession (bound) tears down the authoring session and tells the GUI it ended
@@ -758,6 +935,14 @@ func pauseSetControlLine(steps []string) string {
 	return string(b)
 }
 
+func jumpToControlLine(index int) string {
+	b, _ := json.Marshal(struct {
+		Type  string `json:"type"`
+		Index int    `json:"index"`
+	}{Type: "jump-to", Index: index})
+	return string(b)
+}
+
 // emitSpawnFailure surfaces a failed process launch to the UI as an error line
 // plus a non-zero exit, so a missing tool (e.g. pnpm/claude not on a GUI app's
 // PATH) shows up instead of the run silently doing nothing.
@@ -987,18 +1172,31 @@ type KeyringAccess struct {
 }
 
 // CheckKeyringAccess pulls the latest keyring + secrets (only those files) and
-// reports whether the local identity can decrypt shared secrets. The frontend
-// gates the app on IsRecipient — a false value means "walk the user through
-// requesting access" — and re-calls this (the Retry button) to detect when a
-// teammate's rekey PR has merged.
+// reports whether the local identity can ACTUALLY DECRYPT shared secrets. The
+// frontend gates the app on IsRecipient — a false value means "walk the user
+// through requesting access" — and re-calls this (the Retry button) to detect when
+// a teammate's rekey PR has merged.
+//
+// The authoritative test is a real decrypt, not keyring.json membership:
+// `request-access` writes the key into the local keyring before the access PR is
+// opened/merged, so membership alone reads true for a key that never landed on main
+// and thus can't decrypt anything. When there are no encrypted secrets to test
+// against, fall back to keyring membership so a fresh/empty repo isn't wrongly gated.
 func (a *App) CheckKeyringAccess(cwd string) (KeyringAccess, error) {
 	dir := repoDir()
 	note := a.syncKeyringFiles(dir)
-	has, isRecipient, err := identityInKeyring(filepath.Join(dir, "config"))
+	configDir := filepath.Join(dir, "config")
+	has, canDecrypt, checkable, err := identityDecryptsSecrets(configDir)
 	if err != nil {
 		return KeyringAccess{}, err
 	}
-	return KeyringAccess{HasIdentity: has, IsRecipient: isRecipient, Note: note}, nil
+	if has && !checkable {
+		// Nothing encrypted to verify against — defer to keyring membership.
+		if _, isRecipient, kerr := identityInKeyring(configDir); kerr == nil {
+			canDecrypt = isRecipient
+		}
+	}
+	return KeyringAccess{HasIdentity: has, IsRecipient: canDecrypt, Note: note}, nil
 }
 
 // RequestAccess runs the bundled engine's `request-access --name <name>` (generate
@@ -1423,20 +1621,120 @@ type DoctorCheck struct {
 	DocURL string `json:"docURL"` // download/install page for the tool, shown as a link when !OK
 }
 
-// runTool runs a command against the GUI-augmented PATH (so a Finder-launched app
-// finds Homebrew tools). On success it returns the trimmed first line of output (the
-// version string); on FAILURE it returns the full combined output so the doctor can
-// show the real reason — a truncated first line hides errors that print on stderr or
-// later lines, which is exactly what made the Finder-PATH bug undiagnosable.
-func runTool(name string, args ...string) (string, error) {
+// runToolFull runs a command against the GUI-augmented PATH (so a Finder-launched
+// app finds Homebrew tools) and returns the trimmed FULL combined output. Use this
+// when the caller needs every line (e.g. parsing multi-line JSON).
+func runToolFull(name string, args ...string) (string, error) {
 	cmd := exec.Command(guiResolve(name), args...)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
-	trimmed := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), err
+}
+
+// runTool is runToolFull narrowed to a single line: on success it returns the
+// trimmed FIRST line of output (the version string); on FAILURE it returns the full
+// combined output so the doctor can show the real reason — a truncated first line
+// hides errors that print on stderr or later lines, which is exactly what made the
+// Finder-PATH bug undiagnosable.
+func runTool(name string, args ...string) (string, error) {
+	out, err := runToolFull(name, args...)
 	if err != nil {
-		return trimmed, err
+		return out, err
 	}
-	return strings.SplitN(trimmed, "\n", 2)[0], nil
+	return strings.SplitN(out, "\n", 2)[0], nil
+}
+
+// managementAppSlug is the repo whose PR numbers the validation screen accepts —
+// a PR preview URL (prN.qa.safeinsights.org) is a deployment of THIS repo, not of
+// qa-review. It's also where we look up a PR to infer its Jira card.
+const managementAppSlug = "safeinsights/management-app"
+
+// jiraBoards are the Jira project keys we recognize in a PR. Matching against a
+// KNOWN board list (the approach versionista uses) rather than a generic
+// `\w+-\d+` pattern is what makes this safe: the team's branches and titles are
+// full of ticket-shaped noise — "fixes-2026", "node-7", "haiku-4", "pages-6" all
+// appear in management-app history — and a generic pattern turns each into a
+// bogus card that sends the validator chasing a ticket that doesn't exist.
+// Anchoring on real boards also lets the match be case-insensitive and accept a
+// space separator, so "otter 644" and "OTTER-644" both resolve.
+// SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
+// still resolve, and normalizeJiraKey maps it back to the real board.
+var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP"}
+
+var jiraKeyRE = regexp.MustCompile(
+	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)
+
+// normalizeJiraKey renders a matched key canonically: uppercase board, hyphen
+// separator, and the SHRMP typo corrected to SHRIMP.
+func normalizeJiraKey(board, number string) string {
+	board = strings.ToUpper(board)
+	if board == "SHRMP" {
+		board = "SHRIMP"
+	}
+	return board + "-" + number
+}
+
+// inferJiraCardFrom scans a PR's title, head branch, and body (in that order of
+// preference) for a Jira key. Title and branch are where our team actually puts
+// it; the body is scanned last because it often quotes OTHER tickets ("related to
+// OTTER-99"), so a body match is the least trustworthy. Returns "" when nothing
+// matches a known board — the caller then lets Claude work the ticket out from
+// the PR, which is far better than acting on a wrong guess.
+func inferJiraCardFrom(title, branch, body string) string {
+	for _, field := range []string{title, branch, body} {
+		if m := jiraKeyRE.FindStringSubmatch(field); m != nil {
+			return normalizeJiraKey(m[1], m[2])
+		}
+	}
+	return ""
+}
+
+// inferJiraCard looks up PR `pr` in the management-app repo and pulls a Jira key
+// out of it, so a tester can validate by PR number alone. Any failure (offline, gh
+// unauthenticated, no key anywhere) yields "" — the caller degrades to telling
+// Claude to work the card out from the PR itself, which is strictly better than
+// blocking the session on a lookup we don't control.
+func inferJiraCard(pr string) string {
+	pr = strings.TrimSpace(pr)
+	if pr == "" {
+		return ""
+	}
+	out, err := runToolFull("gh", "pr", "view", pr, "--repo", managementAppSlug,
+		"--json", "title,headRefName,body")
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Title       string `json:"title"`
+		HeadRefName string `json:"headRefName"`
+		Body        string `json:"body"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return ""
+	}
+	return inferJiraCardFrom(v.Title, v.HeadRefName, v.Body)
+}
+
+// accessPROpen reports whether an access PR opened BY THIS USER (head branch
+// "access/*") is already open on GitHub, so the Doctor can say "your PR is open — a
+// teammate needs to rekey & merge it" instead of prompting for a duplicate. Scoping
+// to --author "@me" (gh is authenticated as the user) is what makes this the user's
+// OWN PR and not some other teammate's onboarding PR. Any error (offline, gh
+// unauthenticated) yields false — the caller falls back to the plain "open an access
+// PR" hint rather than blocking on the network.
+func (a *App) accessPROpen() bool {
+	out, err := runToolFull("gh", "pr", "list", "--repo", qaReviewSlug,
+		"--state", "open", "--author", "@me", "--search", "head:access/", "--json", "number")
+	if err != nil {
+		return false
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return false
+	}
+	return len(prs) > 0
 }
 
 // RunDoctor checks every prerequisite app/state and validates it (not just "on
@@ -1452,6 +1750,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 		{"GitHub CLI (gh)", "gh", "--version", "Install gh: brew install gh", "https://cli.github.com/"},
 		{"Claude Code (claude)", "claude", "--version", "Install Claude Code, then ensure `claude` is on PATH.", "https://docs.anthropic.com/en/docs/claude-code/setup"},
 		{"Node.js (node)", "node", "--version", "Install Node.js: brew install node", "https://nodejs.org/en/download"},
+		{"uv (uvx)", "uvx", "--version", "Install uv (provides uvx) for the Jira MCP: brew install uv", "https://docs.astral.sh/uv/getting-started/installation/"},
 	} {
 		if !toolOnPath(t.bin) {
 			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "not found on PATH", Hint: t.hint, DocURL: t.docURL})
@@ -1490,17 +1789,30 @@ func (a *App) RunDoctor() []DoctorCheck {
 	}
 
 	// Keyring identity — needed to decrypt shared secrets. Presence of the identity
-	// file isn't enough: the key must be a RECIPIENT in the keyring, else decryption
-	// fails at runtime ("your key may not be a recipient yet"). Check both.
-	switch has, isRecipient, err := identityInKeyring(filepath.Join(repoDir(), "config")); {
+	// file (and even membership in the working-tree keyring.json) isn't enough: the
+	// authoritative test is whether the key can ACTUALLY DECRYPT a committed secret.
+	// `request-access` writes your key into the local keyring before the access PR is
+	// opened/merged, so a key that never landed on main still looks present — but it
+	// was never rekeyed into the committed secrets and can't decrypt them. When that's
+	// the case, tailor the hint by whether an access PR is already open.
+	configDir := filepath.Join(repoDir(), "config")
+	switch has, canDecrypt, checkable, err := identityDecryptsSecrets(configDir); {
 	case err != nil:
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "check failed: " + err.Error(), Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
 	case !has:
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "no config/age-identity.txt", Hint: "Settings ▸ Request access to generate your identity and get added to the keyring."})
-	case !isRecipient:
-		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "your key isn't in the keyring yet", Hint: "Ask a teammate to review & rekey your access PR, then sync."})
+	case !checkable:
+		// Identity present but nothing encrypted to test against — treat as OK; a
+		// missing-secret failure would surface at run time with a clearer message.
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present (no encrypted secrets to verify against)"})
+	case !canDecrypt:
+		if a.accessPROpen() {
+			checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "can't decrypt shared secrets — access PR is open, awaiting rekey & merge", Hint: "A teammate needs to review, rekey & merge your open access PR. Then run Sync."})
+		} else {
+			checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: false, Detail: "can't decrypt shared secrets — your key isn't in the committed keyring", Hint: "Open an access PR (Settings ▸ Request access); a teammate reviews, rekeys & merges it."})
+		}
 	default:
-		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and in keyring"})
+		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and can decrypt secrets"})
 	}
 
 	return checks
@@ -1564,6 +1876,7 @@ func (a *App) DebugReport() DebugReport {
 		{"gh", "--version"},
 		{"claude", "--version"},
 		{"node", "--version"},
+		{"uvx", "--version"},
 	} {
 		r.Tools = append(r.Tools, probeTool(t.name, t.flag))
 	}

@@ -56,10 +56,13 @@ export type Envelope =
 // next position; its resolution updates that same position. Positional (not
 // keyed by name) so a suite with repeated step names doesn't light up every
 // same-named row when a single instance passes.
+// A 'skipped' step (jumped over) never ran, so it opens AND closes its own
+// position — it must not overwrite the preceding step's row. Mirrors
+// buildRunState() in src/engine/run-state.ts.
 export function stepsByIndex(steps: StepEnvelope[]): StepEnvelope[] {
     const byIndex: StepEnvelope[] = []
     for (const s of steps) {
-        if (s.status === 'running') byIndex.push(s)
+        if (s.status === 'running' || s.status === 'skipped') byIndex.push(s)
         else if (byIndex.length > 0) {
             // Carry the 'running' event's start time onto the resolved event so the
             // row can render its duration (the running entry is replaced here).
