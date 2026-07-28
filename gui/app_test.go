@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -485,4 +487,89 @@ func TestComposeValidationPrompt(t *testing.T) {
 			t.Fatalf("instructions should follow the PR caveat:\n%s", p)
 		}
 	})
+}
+
+// A missing email or token is "not set up yet", not "broken" — the doctor must say
+// which field is absent and must NOT make a network call to find out.
+func TestJiraCheckMissingFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantDetail string
+		cfg              JiraCfg
+	}{
+		{"both empty", "not configured", JiraCfg{}},
+		{"no username", "no JIRA_USERNAME", JiraCfg{Token: "tok"}},
+		{"no token", "no JIRA_API_TOKEN", JiraCfg{Username: "qa@example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A URL that would fail loudly if the check tried to dial it.
+			tc.cfg.URL = "http://127.0.0.1:1"
+			got := jiraCheck(tc.cfg)
+			if got.OK {
+				t.Fatalf("jiraCheck(%+v).OK = true, want false", tc.cfg)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if got.Hint == "" {
+				t.Fatal("a failing check must carry a Hint")
+			}
+		})
+	}
+}
+
+// Fully configured + Jira accepts: the check passes and names the authenticated
+// account, so the user can spot a token belonging to the WRONG account.
+func TestJiraCheckAuthenticates(t *testing.T) {
+	var gotUser, gotPass, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, _ = r.BasicAuth()
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"QA Bot","emailAddress":"qa@example.com"}`))
+	}))
+	defer srv.Close()
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok-123"})
+	if !got.OK {
+		t.Fatalf("jiraCheck() failed against a healthy server: %s", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "QA Bot") {
+		t.Fatalf("Detail = %q, want the authenticated account name", got.Detail)
+	}
+	// Same endpoint + Basic scheme the engine's jira.ts uses, so a pass here really
+	// does predict that `qar jira-comment` can authenticate.
+	if gotPath != "/rest/api/3/myself" {
+		t.Fatalf("probed %q, want /rest/api/3/myself", gotPath)
+	}
+	if gotUser != "qa@example.com" || gotPass != "tok-123" {
+		t.Fatalf("basic auth = %q:%q, want the configured email:token", gotUser, gotPass)
+	}
+}
+
+// The failure a presence-only check can't catch: every field is filled in, but the
+// token is expired/revoked. The detail must say so rather than blaming the settings.
+func TestJiraCheckRejectsBadToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "stale"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed with a 401 from Jira")
+	}
+	if !strings.Contains(got.Detail, "expired") && !strings.Contains(got.Detail, "revoked") {
+		t.Fatalf("Detail = %q, want it to point at the token", got.Detail)
+	}
+}
+
+// An unreachable host must fail as a connectivity problem, not hang or panic.
+func TestJiraCheckUnreachable(t *testing.T) {
+	got := jiraCheck(JiraCfg{URL: "http://127.0.0.1:1", Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed against an unreachable host")
+	}
+	if !strings.Contains(got.Detail, "can't reach") {
+		t.Fatalf("Detail = %q, want a reachability message", got.Detail)
+	}
 }

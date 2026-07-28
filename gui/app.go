@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1815,7 +1816,92 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and can decrypt secrets"})
 	}
 
+	checks = append(checks, jiraCheck(a.readJiraConfig()))
+
 	return checks
+}
+
+// jiraCheck validates that validation verdicts can actually be posted. The token is
+// LocalOnly (per-user, never in the shared secrets, never distributed by `qar sync`),
+// so unlike the other settings it is invisible until something fails — and the thing
+// that fails is `qar jira-comment` at the end of a validation, the worst moment to
+// discover it. Checking uvx alone doesn't help: that proves the MCP can launch, not
+// that Jira will accept us.
+//
+// So this authenticates for real (GET /myself) rather than testing for non-empty
+// strings — an expired or revoked token is the failure mode a presence check misses.
+func jiraCheck(cfg JiraCfg) DoctorCheck {
+	const name = "Jira credentials"
+	const settingsHint = "Settings ▸ Jira: set your Atlassian email and API token."
+
+	// Missing pieces are a "not set up yet" state, not a broken one — don't make a
+	// network call to say so, and name the specific field that's absent.
+	switch {
+	case cfg.Username == "" && cfg.Token == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "not configured (no email or API token)", Hint: settingsHint, DocURL: jiraTokenDocURL}
+	case cfg.Username == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "no JIRA_USERNAME (your Atlassian account email)", Hint: settingsHint}
+	case cfg.Token == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "no JIRA_API_TOKEN", Hint: settingsHint, DocURL: jiraTokenDocURL}
+	}
+
+	who, err := jiraWhoAmI(cfg)
+	if err != nil {
+		return DoctorCheck{Name: name, OK: false, Detail: err.Error(), Hint: settingsHint, DocURL: jiraTokenDocURL}
+	}
+	return DoctorCheck{Name: name, OK: true, Detail: "authenticated as " + who}
+}
+
+const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"
+
+// Mirrors the engine's fallback in src/engine/jira.ts, so the doctor probes the same
+// host `qar jira-comment` will post to when JIRA_URL is unset.
+const defaultJiraURL = "https://openstax.atlassian.net"
+
+// jiraWhoAmI authenticates against Jira Cloud and returns the display name (or email)
+// of the account the credentials belong to. Same Basic email:token scheme as
+// src/engine/jira.ts, so a pass here means `qar jira-comment` will authenticate too.
+func jiraWhoAmI(cfg JiraCfg) (string, error) {
+	base := strings.TrimRight(cfg.URL, "/")
+	if base == "" {
+		base = defaultJiraURL
+	}
+	req, err := http.NewRequest(http.MethodGet, base+"/rest/api/3/myself", nil)
+	if err != nil {
+		return "", fmt.Errorf("bad JIRA_URL %q: %w", base, err)
+	}
+	req.SetBasicAuth(cfg.Username, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("can't reach %s: %v", base, err)
+	}
+	defer resp.Body.Close()
+
+	// 401/403 is the case worth naming precisely: the settings look filled in, so the
+	// user would otherwise re-check them and find nothing wrong.
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return "", fmt.Errorf("rejected by Jira (HTTP %d) — the API token is wrong, expired, or revoked", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		return "", fmt.Errorf("unexpected response from Jira (HTTP %d)", resp.StatusCode)
+	}
+
+	var me struct {
+		DisplayName  string `json:"displayName"`
+		EmailAddress string `json:"emailAddress"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		return "", fmt.Errorf("unreadable response from Jira: %w", err)
+	}
+	if me.DisplayName != "" {
+		return me.DisplayName, nil
+	}
+	if me.EmailAddress != "" {
+		return me.EmailAddress, nil
+	}
+	return cfg.Username, nil
 }
 
 // ToolProbe is one tool's resolution result for the debug report: whether it was
