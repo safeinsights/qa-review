@@ -29,6 +29,36 @@ type ptySession struct {
 // maxTranscript caps the retained PTY transcript (keep the most recent bytes).
 const maxTranscript = 512 * 1024
 
+// ptyFastExit is how quickly a claude exit counts as "never started" rather than a
+// session the user ended. Generous enough to cover a slow cold start.
+const ptyFastExit = 10 * time.Second
+
+// ptyTailBytes bounds how much trailing transcript a failed-start log entry keeps.
+const ptyTailBytes = 1500
+
+// ptyTail returns the last few non-empty lines of a transcript, flattened to one
+// line, for a log entry. TUI output is mostly redraw noise; the tail is where the
+// error text lands.
+func ptyTail(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) > ptyTailBytes {
+		s = s[len(s)-ptyTailBytes:]
+	}
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) > 12 {
+		keep = keep[len(keep)-12:]
+	}
+	return strings.Join(keep, " | ")
+}
+
 // transcriptText returns the captured PTY output for the current/last session
 // with ANSI escape sequences stripped, suitable for a GitHub issue body.
 func (p *ptySession) transcriptText() string {
@@ -81,8 +111,11 @@ func (p *ptySession) start(app *App, dir string, env []string, args []string) er
 	cmd.Env = env
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		logDiag("pty", "FAIL start %s: %v", cmd.Path, err)
 		return err
 	}
+	logDiag("pty", "start %s (dir=%s)", cmd.Path, dir)
+	started := time.Now()
 	p.ptmx = ptmx
 	p.cmd = cmd
 	p.transcript = p.transcript[:0] // fresh transcript for this session
@@ -106,6 +139,18 @@ func (p *ptySession) start(app *App, dir string, env []string, args []string) er
 			} else {
 				code = -1
 			}
+		}
+		// A session the user ends normally exits 0 after a while; an exit that is
+		// non-zero OR near-instant means claude never came up (bad args, missing MCP
+		// config, auth). The UI just returns to idle either way, so record the tail
+		// of the transcript — it holds claude's own error text.
+		if elapsed := time.Since(started); code != 0 || elapsed < ptyFastExit {
+			logDiag("pty", "exit code=%d after %s (session did not run normally)", code, elapsed.Round(time.Millisecond))
+			if tail := ptyTail(p.transcriptText()); tail != "" {
+				logDiag("pty", "  last output: %s", tail)
+			}
+		} else {
+			logDiag("pty", "exit code=0 after %s", elapsed.Round(time.Second))
 		}
 		runtime.EventsEmit(app.ctx, "pty-exit", code)
 		p.mu.Lock()

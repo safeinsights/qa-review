@@ -13,7 +13,26 @@
 # Each var below is one word, so quoting it is both correct and sufficient.
 set -euo pipefail
 if [ -n "${QAR_NODE:-}" ] && [ -n "${QAR_BUNDLE:-}" ]; then
+  if [ ! -x "${QAR_NODE}" ] || [ ! -f "${QAR_BUNDLE}" ]; then
+    echo "qar: packaged engine is missing files from the app bundle." >&2
+    echo "  QAR_NODE=${QAR_NODE}" >&2
+    echo "  QAR_BUNDLE=${QAR_BUNDLE}" >&2
+    echo "Reinstall the app; do NOT expect \`pnpm qar\` to work here." >&2
+    exit 127
+  fi
   exec "${QAR_NODE}" --import tsx "${QAR_BUNDLE}" "$@"
+fi
+# QAR_REPO_DIR without QAR_NODE means the GUI launched us from a PACKAGED app whose
+# Resources/engine/qar.bundle.mjs wasn't found (resourcesDir() returned ""). The
+# `pnpm qar` fallback below is for a DEV CHECKOUT and cannot work there: node_modules
+# is a symlink into the .app, so pnpm dead-ends on a node-version or pinned-pnpm error
+# that says nothing about the real cause. Fail with the real cause instead.
+if [ -n "${QAR_REPO_DIR:-}" ]; then
+  echo "qar: QAR_REPO_DIR is set but QAR_NODE/QAR_BUNDLE are not." >&2
+  echo "The app could not locate its bundled engine (Resources/engine/qar.bundle.mjs)." >&2
+  echo "This is a broken packaged install, not a dev checkout — reinstall the app." >&2
+  echo "(In a real dev checkout, launch via \`pnpm qar\` directly.)" >&2
+  exit 127
 fi
 if command -v pnpm >/dev/null 2>&1; then
   exec pnpm qar "$@"

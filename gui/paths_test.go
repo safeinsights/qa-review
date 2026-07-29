@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // In dev mode (`wails dev` — no packaged Resources bundle) and with no explicit
@@ -112,6 +114,30 @@ func TestWithGuiPathExportsBinDirAndOmitsQarBinInDev(t *testing.T) {
 	}
 }
 
+// A STALE inherited QAR_NODE/QAR_BUNDLE must not survive withGuiPath(). This is the
+// state behind a real report: QAR_REPO_DIR was set (it is appended unconditionally)
+// while the QAR_* engine pair was not (qarBinEnv returns nil when resourcesDir() is
+// ""), so the `bin/qar` shim took its `pnpm qar` dev fallback inside a packaged
+// install — where node_modules is a symlink into the .app and every pnpm route
+// dead-ends on an unrelated-looking node-version error.
+//
+// TestWithGuiPathExportsBinDirAndOmitsQarBinInDev above passes only because the
+// ambient env happens to be clean; it cannot catch a leak. This sets them first.
+func TestWithGuiPathDropsInheritedQarBin(t *testing.T) {
+	if resourcesDir() != "" {
+		t.Skip("not running in dev mode (a Resources bundle is present)")
+	}
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+	t.Setenv("QAR_NODE", "/Applications/Stale.app/Contents/Resources/runtime/node")
+	t.Setenv("QAR_BUNDLE", "/Applications/Stale.app/Contents/Resources/engine/qar.bundle.mjs")
+
+	for _, e := range withGuiPath() {
+		if strings.HasPrefix(e, "QAR_NODE=") || strings.HasPrefix(e, "QAR_BUNDLE=") {
+			t.Fatalf("withGuiPath() leaked inherited %q into a dev child", e)
+		}
+	}
+}
+
 // readMcpServers reads a written MCP config file back into its mcpServers map.
 func readMcpServers(t *testing.T, path string) map[string]map[string]any {
 	t.Helper()
@@ -182,4 +208,143 @@ func TestWriteValidationMcpConfigNoJira(t *testing.T) {
 	if _, ok := servers["jira-atlassian"]; ok {
 		t.Fatal("jira-atlassian server present without a token")
 	}
+}
+
+// logDiag must write a timestamped, category-tagged line that recentDiagLogMarkdown
+// can read back. HOME is redirected so the test never touches the real log.
+func TestDiagLogRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	logDiag("mcp", "chrome-devtools exited: %v", "boom")
+
+	data, err := os.ReadFile(diagLogPath())
+	if err != nil {
+		t.Fatalf("reading diag log: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "[mcp]") || !strings.Contains(got, "chrome-devtools exited: boom") {
+		t.Fatalf("diag log = %q, missing category tag or message", got)
+	}
+	if md := recentDiagLogMarkdown(); !strings.Contains(md, "chrome-devtools exited: boom") {
+		t.Fatalf("recentDiagLogMarkdown() = %q, does not embed the entry", md)
+	}
+}
+
+// An absent log must degrade to an explanatory note, not an error or empty section —
+// an issue report always renders this block.
+func TestRecentDiagLogMarkdownAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if md := recentDiagLogMarkdown(); !strings.Contains(md, "no diagnostic log") {
+		t.Fatalf("recentDiagLogMarkdown() with no file = %q, want an explanatory note", md)
+	}
+}
+
+// The log is embedded in GitHub issue bodies, so a secret passed to the engine must
+// never reach the label built from its args.
+func TestRedactArgsMasksSecretValues(t *testing.T) {
+	got := strings.Join(redactArgs([]string{"set-secret", "--key", "QA_PASSWORD", "--value", "hunter2"}), " ")
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("redactArgs leaked the secret: %q", got)
+	}
+	for _, want := range []string{"--key QA_PASSWORD", "--value ***"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("redactArgs = %q, want it to contain %q", got, want)
+		}
+	}
+	// A trailing secret flag with no value must not panic or corrupt the args.
+	if got := strings.Join(redactArgs([]string{"run", "--value"}), " "); got != "run --value" {
+		t.Fatalf("redactArgs on trailing flag = %q", got)
+	}
+}
+
+// The probe's job is to leave a diagnosable record when the chrome-devtools MCP
+// server cannot serve the session — the failure that is otherwise invisible, since
+// the server is spawned by claude and its stderr is never seen. Pointed at a dead
+// CDP port, it must log both the unreachable endpoint and a FAIL line. The exact
+// failure varies by machine (no npx, no network, a broken @latest release), so this
+// asserts a usable record exists rather than pinning one cause.
+func TestProbeMcpServersLogsUnreachableBrowser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("probe spawns npx and waits for it; skipped under -short")
+	}
+	t.Setenv("HOME", t.TempDir())
+
+	probeMcpServers(59999) // nothing is listening here
+
+	data, err := os.ReadFile(diagLogPath())
+	if err != nil {
+		t.Fatalf("probe wrote no log: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "session start: cdpPort=59999") {
+		t.Fatalf("log missing the session header: %q", got)
+	}
+	// The dead browser must be called out separately from the MCP server, since
+	// conflating the two is what sent the original bug report down the wrong path.
+	if !strings.Contains(got, "CDP endpoint 127.0.0.1:59999 not answering") {
+		t.Fatalf("log did not flag the unreachable CDP endpoint: %q", got)
+	}
+}
+
+// The MCP server version must be PINNED, and the configs must use the same pin the
+// probe tests. `@latest` re-resolves on every cold start, so an upstream release can
+// break every session with no local change — and the failure is invisible (the
+// session simply has no mcp__chrome-devtools__* tools). A probe that exercised a
+// different version than the sessions use would report a healthy server while the
+// real one failed, which is worse than no probe at all.
+func TestChromeDevtoolsMcpVersionIsPinned(t *testing.T) {
+	if strings.HasSuffix(chromeDevtoolsMcpPkg, "@latest") {
+		t.Fatalf("chromeDevtoolsMcpPkg = %q; pin an explicit version", chromeDevtoolsMcpPkg)
+	}
+	if !strings.Contains(chromeDevtoolsMcpPkg, "@") {
+		t.Fatalf("chromeDevtoolsMcpPkg = %q; want a name@version spec", chromeDevtoolsMcpPkg)
+	}
+
+	explore, err := writeSessionMcpConfig(9222)
+	if err != nil {
+		t.Fatalf("writeSessionMcpConfig: %v", err)
+	}
+	defer os.Remove(explore)
+	validate, err := writeValidationMcpConfig(9222, JiraCfg{})
+	if err != nil {
+		t.Fatalf("writeValidationMcpConfig: %v", err)
+	}
+	defer os.Remove(validate)
+
+	for _, path := range []string{explore, validate} {
+		args, _ := readMcpServers(t, path)["chrome-devtools"]["args"].([]any)
+		if len(args) == 0 || args[0] != chromeDevtoolsMcpPkg {
+			t.Fatalf("%s: chrome-devtools args[0] = %v, want the pinned %q", path, args, chromeDevtoolsMcpPkg)
+		}
+	}
+}
+
+// The probe must reap its whole process tree. `npx` spawns three levels (npm exec ->
+// the server -> a telemetry watchdog), so killing only cmd.Process orphans the real
+// server — which keeps holding a CDP connection to the session browser. Orphans from
+// prior sessions were observed accumulating on a real machine before this was fixed.
+func TestProbeMcpServersLeavesNoOrphans(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns npx and waits out the probe window; skipped under -short")
+	}
+	t.Setenv("HOME", t.TempDir())
+
+	before := countMcpProcs()
+	probeMcpServers(59998) // nothing listening; the server itself still starts
+	time.Sleep(2 * time.Second)
+
+	if after := countMcpProcs(); after > before {
+		t.Fatalf("probe orphaned %d chrome-devtools-mcp process(es)", after-before)
+	}
+}
+
+// countMcpProcs counts running chrome-devtools-mcp processes (0 if pgrep finds none).
+func countMcpProcs() int {
+	out, _ := exec.Command("pgrep", "-f", "chrome-devtools-mcp").Output()
+	n := 0
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(l) != "" {
+			n++
+		}
+	}
+	return n
 }

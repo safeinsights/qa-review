@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // qaReviewSlug is the GitHub repo the app clones on first launch via `gh repo
@@ -120,7 +124,7 @@ func writeSessionMcpConfig(cdpPort int) (string, error) {
 			"chrome-devtools": map[string]any{
 				"command": "npx",
 				"args": []string{
-					"chrome-devtools-mcp@latest",
+					chromeDevtoolsMcpPkg,
 					fmt.Sprintf("--browserUrl=http://127.0.0.1:%d", cdpPort),
 				},
 			},
@@ -139,6 +143,199 @@ func writeSessionMcpConfig(cdpPort int) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// chromeDevtoolsMcpPkg pins the browser MCP server. It is PINNED, not `@latest`,
+// because `@latest` re-resolves on every cold start: a new upstream release (or a
+// failed fetch of one) breaks every session with no local change, and the failure is
+// invisible — the session just comes up with no mcp__chrome-devtools__* tools. A
+// pinned version also keeps the npx cache usable offline once warmed.
+//
+// Bumping it is a deliberate, testable change: update this constant, start a session,
+// and confirm the probe logs "stayed up past" (see probeMcpServers).
+const chromeDevtoolsMcpPkg = "chrome-devtools-mcp@1.6.0"
+
+// diagLogPath is the app's append-only diagnostic log. It exists because this app's
+// characteristic failure is SILENT: subprocesses (the engine, git/gh, claude, MCP
+// servers) fail in ways that surface to the user only as an absence — no steps
+// appear, a tool is missing, a button does nothing. The GUI folds engine stderr into
+// a stdout parser that ignores non-JSON lines, MCP servers are spawned by `claude`
+// where we never see their stderr, and per-session temp files are deleted at
+// teardown. Without a durable record, a bug report carries no evidence at all.
+func diagLogPath() string {
+	return filepath.Join(appSupportDir(), "diagnostics.log")
+}
+
+// maxDiagLogBytes caps the on-disk log. When exceeded, the file is rotated to
+// .log.1 (one generation kept) so a long-lived install can't grow without bound
+// while a just-happened failure still survives the rotation.
+const maxDiagLogBytes = 2 * 1024 * 1024
+
+// logDiag appends one timestamped, category-tagged line to the diagnostic log.
+// Best-effort by design: diagnostics must never break a session, so errors here are
+// deliberately swallowed. `cat` is a short area tag ("mcp", "engine", "git") that
+// makes the log greppable and groups related lines in an issue report.
+func logDiag(cat, format string, args ...any) {
+	_ = os.MkdirAll(appSupportDir(), 0o755)
+	path := diagLogPath()
+	if info, err := os.Stat(path); err == nil && info.Size() > maxDiagLogBytes {
+		_ = os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s [%s] %s\n", time.Now().Format(time.RFC3339), cat, fmt.Sprintf(format, args...))
+}
+
+// logMcp records MCP session startup, the failure that motivated this log: a server
+// that doesn't come up leaves the session with none of its mcp__* tools and no
+// explanation, and nothing is recoverable from inside that session.
+func logMcp(format string, args ...any) { logDiag("mcp", format, args...) }
+
+// probeMcpServers records the environment facts that decide whether the chrome-devtools
+// MCP server can start, and then actually STARTS it once to capture the failure.
+//
+// The two known failure modes are invisible at session start and look identical from
+// inside the session (no mcp__chrome-devtools__* tools):
+//   - `npx` is not on the GUI-augmented PATH (node installed via nvm/asdf/Volta, which
+//     a Finder-launched app never searches — guiPathDirs only covers brew + /usr/local).
+//   - The pinned chromeDevtoolsMcpPkg cannot be fetched (cold npx cache + no network)
+//     or the pinned release is broken on this machine.
+//
+// The probe runs the real command and gives it a moment to fail. A healthy MCP server
+// is a long-lived stdio process, so "still running when we look" IS the success signal;
+// we kill it and let claude spawn its own. Exiting fast means it died — and its stderr
+// is the diagnostic that is otherwise lost forever.
+func probeMcpServers(cdpPort int) {
+	logMcp("--- session start: cdpPort=%d", cdpPort)
+
+	npx, err := exec.LookPath("npx")
+	if err != nil {
+		// Retry against the augmented PATH: LookPath uses the PARENT process PATH,
+		// which for a Finder-launched app is just /usr/bin:/bin (see guiResolve).
+		npx = guiResolve("npx")
+		if npx == "npx" {
+			logMcp("FAIL npx not found on PATH=%s", guiPath(withGuiPath()))
+			logMcp("  chrome-devtools MCP cannot start; the session will have no browser tools.")
+			return
+		}
+	}
+	logMcp("ok npx=%s", npx)
+
+	if _, err := probeCdp(cdpPort); err != nil {
+		logMcp("warn CDP endpoint 127.0.0.1:%d not answering: %v", cdpPort, err)
+	} else {
+		logMcp("ok CDP endpoint 127.0.0.1:%d is live", cdpPort)
+	}
+
+	cmd := exec.Command(npx, chromeDevtoolsMcpPkg,
+		fmt.Sprintf("--browserUrl=http://127.0.0.1:%d", cdpPort))
+	cmd.Env = withGuiPath()
+	// Own process group. `npx` spawns a THREE-level tree (npm exec -> the server ->
+	// a telemetry watchdog); killing only cmd.Process reaps the npm wrapper and
+	// leaves the real server orphaned, still holding a CDP connection to the session
+	// browser. Signalling -pgid takes the whole tree, as pty.stop() does for claude.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	// Hold stdin OPEN. This is an stdio MCP server: with a closed stdin it sees EOF,
+	// exits 0 immediately, and the probe would report a healthy server as a failure.
+	// claude keeps the pipe open, so this makes the probe match real conditions.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		logMcp("FAIL could not open stdin pipe: %v", err)
+		return
+	}
+	defer stdin.Close()
+	if err := cmd.Start(); err != nil {
+		logMcp("FAIL could not spawn chrome-devtools-mcp: %v", err)
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			// Exited 0 without being asked to. Not the expected shape for a long-lived
+			// stdio server, but NOT an error either — don't cry wolf.
+			logMcp("warn chrome-devtools-mcp exited cleanly (code 0) before %s", mcpProbeWait)
+		} else {
+			logMcp("FAIL chrome-devtools-mcp exited immediately: %v", err)
+		}
+		// This server writes a startup banner to stderr even when healthy, so label
+		// it neutrally: on a real failure the cause is in these first lines, and npm's
+		// output otherwise runs long enough to dominate the issue body it's embedded in.
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			logMcp("  output: %s", firstLines(s, 8))
+		} else {
+			logMcp("  (no output — likely a failed package fetch; check network/registry)")
+		}
+	case <-time.After(mcpProbeWait):
+		logMcp("ok chrome-devtools-mcp stayed up past %s (healthy)", mcpProbeWait)
+		killProcessGroup(cmd)
+		<-done
+	}
+}
+
+// killProcessGroup kills a Setpgid'd command's whole process tree. Falls back to the
+// direct process if the pgid can't be resolved (the process already exited).
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		return
+	}
+	_ = cmd.Process.Kill()
+}
+
+// mcpProbeWait is how long the probe waits for the MCP server to prove it survived
+// startup. Long enough to cover a cold `npx` package fetch, short enough that it does
+// not noticeably delay the session (it runs concurrently with claude spawning anyway).
+const mcpProbeWait = 8 * time.Second
+
+// probeCdp checks the session browser's CDP endpoint is answering, so the log can tell
+// a dead MCP server apart from a dead browser — the report that motivated this logging
+// confused the two, and the distinction decides who needs to fix what.
+func probeCdp(port int) (string, error) {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d/json/version", port))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// diagLogTailBytes bounds how much of the log an issue report embeds — enough for
+// several sessions, capped so a long-lived install can't bloat the issue body.
+const diagLogTailBytes = 24 * 1024
+
+// recentDiagLogMarkdown returns the tail of the diagnostic log as a fenced block for
+// an issue report, or a note explaining an empty/absent log.
+func recentDiagLogMarkdown() string {
+	data, err := os.ReadFile(diagLogPath())
+	if err != nil {
+		return fmt.Sprintf("_(no diagnostic log at %s — nothing has been logged since this was added)_\n", diagLogPath())
+	}
+	if len(data) > diagLogTailBytes {
+		// Drop the partial first line so the block starts at a real entry.
+		data = data[len(data)-diagLogTailBytes:]
+		if i := strings.IndexByte(string(data), '\n'); i >= 0 {
+			data = data[i+1:]
+		}
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return "_(diagnostic log is empty)_\n"
+	}
+	return "```\n" + strings.TrimSpace(string(data)) + "\n```\n"
 }
 
 // JiraCfg is the per-user Jira MCP config (from the settings files). Token empty
@@ -162,7 +359,7 @@ func writeValidationMcpConfig(cdpPort int, jira JiraCfg) (string, error) {
 		"chrome-devtools": map[string]any{
 			"command": "npx",
 			"args": []string{
-				"chrome-devtools-mcp@latest",
+				chromeDevtoolsMcpPkg,
 				fmt.Sprintf("--browserUrl=http://127.0.0.1:%d", cdpPort),
 			},
 		},
