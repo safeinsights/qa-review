@@ -85,6 +85,15 @@ export interface HelpDoc {
     body: string
 }
 
+// The verdict on a PR's deployment (continuous-integration/*) checks. Only "ok"
+// and "unknown" let a validation start; the rest mean the PR preview isn't a build
+// of the code under review. See CheckPrCI in gui/app.go.
+export interface PrCIStatus {
+    state: 'ok' | 'pending' | 'failed' | 'none' | 'unknown'
+    warning: string
+    checks: string[] | null
+}
+
 interface WailsApp {
     RunProcess(program: string, args: string[], cwd: string): Promise<void>
     RunEngine(args: string[]): Promise<void>
@@ -102,8 +111,10 @@ interface WailsApp {
         env: string,
         pr: string,
         jiraCard: string,
-        instructions: string
+        instructions: string,
+        force: boolean
     ): Promise<{ token: string; jiraCard: string }>
+    CheckPrCI(pr: string): Promise<PrCIStatus>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -284,13 +295,23 @@ export async function startRunCompanion(cdpPort: number, suite: string): Promise
 // about — with a PR and no card, Go infers the key from the PR, so the resolved
 // card comes back here for the Verdict button. An empty `jiraCard` in the result
 // means it couldn't be inferred and Claude will identify it from the PR.
+// `force` proceeds despite a blocking CI status — the tester has seen the warning
+// and chosen to validate against a preview that may be stale.
 export async function startValidationSession(
     env: string,
     pr: string,
     jiraCard: string,
-    instructions: string
+    instructions: string,
+    force = false
 ): Promise<{ token: string; jiraCard: string }> {
-    return app().StartValidationSession(env, pr, jiraCard, instructions)
+    return app().StartValidationSession(env, pr, jiraCard, instructions, force)
+}
+
+// Reads the PR's continuous-integration/* checks so the Validation tab can warn
+// before the tester presses Start. Go re-checks at start — this is the early
+// warning, not the gate.
+export async function checkPrCI(pr: string): Promise<PrCIStatus> {
+    return app().CheckPrCI(pr)
 }
 
 // Forward terminal keystrokes (base64) to claude's PTY.

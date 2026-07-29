@@ -21,6 +21,19 @@ function safeParsePrs(listed: string): Array<{ number: number; url: string }> {
     }
 }
 
+// The reviewer instructions matter more than they look: merging an access PR WITHOUT
+// rekeying leaves the requester in the keyring but unable to decrypt anything, and
+// leaves keyring.lock showing drift for everyone else. approve-access.sh does both
+// halves atomically, so the body names it explicitly rather than saying "merge".
+const ACCESS_PR_BODY = (name: string) =>
+    `Adds ${name}'s age public key to the keyring so they can decrypt the shared QA secrets.
+
+**Reviewer:** run \`scripts/approve-access.sh <this PR's number>\` from a qa-review checkout — do NOT just merge.
+
+That script checks out this branch, re-encrypts every secret to the updated keyring, refreshes \`keyring.lock\`, pushes, and merges, all in one step. Merging without it leaves the requester in the keyring but unable to decrypt anything, and leaves \`keyring.lock\` showing drift for everyone else.
+
+You must already be a keyring recipient yourself — rekey decrypts the current secrets with your identity before re-encrypting them.`
+
 // Create the access PR, or report the one that already exists. `gh pr create`
 // fails when a PR is already open for the branch; that is the SUCCESS path here —
 // treating it as an error is what made a pending request look like a failed one.
@@ -50,7 +63,7 @@ export async function openAccessPr(opts: {
             '--title',
             `Add ${opts.name} to keyring`,
             '--body',
-            'Reviewer: run "Approve & rekey" (qar rekey on this branch) before merging.',
+            ACCESS_PR_BODY(opts.name),
         ])
         return { url: out.trim(), created: true }
     } catch (e) {

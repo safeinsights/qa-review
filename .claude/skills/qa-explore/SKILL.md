@@ -22,7 +22,7 @@ the suite to a file and verifying it passes. You run **interactively in a termin
 - The repo is at **`$QAR_REPO_DIR`** and **is already your working directory.**
   The engine CLI is **`qar`** — a shim on PATH that dispatches to the bundled engine
   (packaged) or `pnpm qar` (dev). Just run `qar …`; don't write `pnpm qar` or
-  `${QAR_BIN:-…}`.
+  invoke the underlying `$QAR_NODE`/`$QAR_BUNDLE` yourself.
 - The prompt names the **role**, **target** (`--env <name>` or `--pr <n>`), and the
   **instruction**. The browser is on that environment, on the login page.
 

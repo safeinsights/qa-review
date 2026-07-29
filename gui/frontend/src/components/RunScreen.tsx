@@ -110,11 +110,12 @@ export function RunScreen({
     )
 
     // Clear the queued marker once the run actually moves: a new step event means the
-    // engine reached a boundary and consumed the jump. stepEventCount is the TRIGGER, not
-    // an input — the body deliberately doesn't read it, so biome flags it as extraneous.
-    // Removing it (biome's suggested fix) would run this once on mount and strand the marker.
+    // engine reached a boundary and consumed the jump.
+    // stepEventCount is the CHANGE TRIGGER, not a value the body reads. Biome's
+    // suggested fix (an empty dep array) would run this once on mount and leave the
+    // marker stuck for the rest of the run.
     const stepEventCount = run.steps.length
-    // biome-ignore lint/correctness/useExhaustiveDependencies(stepEventCount): trigger, not an input
+    // biome-ignore lint/correctness/useExhaustiveDependencies: fires ON step change
     useEffect(() => {
         setJumpQueuedIndex(null)
     }, [stepEventCount])

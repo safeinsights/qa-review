@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -473,6 +476,122 @@ func TestInferJiraCardNoPR(t *testing.T) {
 	}
 }
 
+// jenkins/actions build rollup entries in the two shapes GitHub actually returns:
+// third-party commit statuses (StatusContext: Context + State, no Status field)
+// and GitHub Actions checks (CheckRun: Name + Status + Conclusion).
+func jenkins(context, state string) ciRollupEntry {
+	return ciRollupEntry{TypeName: "StatusContext", Context: context, State: state}
+}
+
+func actions(name, status, conclusion string) ciRollupEntry {
+	return ciRollupEntry{
+		TypeName: "CheckRun", Name: name, Status: status, Conclusion: conclusion,
+	}
+}
+
+func TestClassifyCIRollup(t *testing.T) {
+	const head = ciContextPrefix + "jenkins/pr-head"
+	const branch = ciContextPrefix + "jenkins/branch"
+
+	cases := []struct {
+		name    string
+		entries []ciRollupEntry
+		want    string
+	}{
+		{
+			name:    "all deployment checks green",
+			entries: []ciRollupEntry{jenkins(head, "SUCCESS"), jenkins(branch, "SUCCESS")},
+			want:    "ok",
+		},
+		{
+			name:    "a deployment check still running blocks",
+			entries: []ciRollupEntry{jenkins(head, "PENDING"), jenkins(branch, "SUCCESS")},
+			want:    "pending",
+		},
+		{
+			name:    "a failed deployment check blocks",
+			entries: []ciRollupEntry{jenkins(head, "FAILURE")},
+			want:    "failed",
+		},
+		{
+			name:    "an errored deployment check blocks",
+			entries: []ciRollupEntry{jenkins(head, "ERROR")},
+			want:    "failed",
+		},
+		{
+			// Jenkins hasn't reported at all: the preview isn't built, which is
+			// exactly the case a tester must not validate against.
+			name:    "no matching check at all blocks",
+			entries: []ciRollupEntry{actions("lint", "COMPLETED", "SUCCESS")},
+			want:    "none",
+		},
+		{
+			// The Actions checks don't build the preview, so their state is
+			// irrelevant to whether the deployed code is current.
+			name: "failing Actions checks are ignored",
+			entries: []ciRollupEntry{
+				jenkins(head, "SUCCESS"),
+				actions("lint", "COMPLETED", "FAILURE"),
+				actions("e2e", "IN_PROGRESS", ""),
+			},
+			want: "ok",
+		},
+		{
+			// GitHub returns one entry per run; the latest is the one that
+			// reflects the current commit, so a passing re-run must win.
+			name:    "a re-run supersedes an earlier failure of the same check",
+			entries: []ciRollupEntry{jenkins(head, "FAILURE"), jenkins(head, "SUCCESS")},
+			want:    "ok",
+		},
+		{
+			name:    "a failing re-run supersedes an earlier success",
+			entries: []ciRollupEntry{jenkins(head, "SUCCESS"), jenkins(head, "FAILURE")},
+			want:    "failed",
+		},
+		{
+			// Worst state wins: one red check is not redeemed by a green one.
+			name:    "failure outranks pending",
+			entries: []ciRollupEntry{jenkins(head, "PENDING"), jenkins(branch, "FAILURE")},
+			want:    "failed",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyCIRollup(c.entries)
+			if got.State != c.want {
+				t.Fatalf("classifyCIRollup() = %q, want %q (warning: %s)",
+					got.State, c.want, got.Warning)
+			}
+			if c.want != "ok" && got.Warning == "" {
+				t.Fatal("a non-ok status must carry a warning for the UI")
+			}
+		})
+	}
+}
+
+func TestPrCIStatusBlocking(t *testing.T) {
+	blocking := map[string]bool{
+		"ok": false, "pending": true, "failed": true, "none": true,
+		// Not being able to ASK GitHub is our problem, not evidence of a stale
+		// deployment — blocking on it would strand a tester with no way forward.
+		"unknown": false,
+	}
+	for state, want := range blocking {
+		if got := (PrCIStatus{State: state}).Blocking(); got != want {
+			t.Fatalf("PrCIStatus{%q}.Blocking() = %v, want %v", state, got, want)
+		}
+	}
+}
+
+func TestPrCIStatusNoPR(t *testing.T) {
+	// Validating a Jira card with no PR has no preview deployment to gate on, and
+	// must not shell out to gh.
+	if got := prCIStatus("  "); got.State != "ok" {
+		t.Fatalf("blank PR should not gate, got %q", got.State)
+	}
+}
+
 func TestComposeValidationPrompt(t *testing.T) {
 	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
 		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
@@ -574,4 +693,196 @@ func TestComposeValidationPrompt(t *testing.T) {
 			t.Fatalf("instructions should follow the PR caveat:\n%s", p)
 		}
 	})
+}
+
+// A missing email or token is "not set up yet", not "broken" — the doctor must say
+// which field is absent and must NOT make a network call to find out.
+func TestJiraCheckMissingFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantDetail string
+		cfg              JiraCfg
+	}{
+		{"both empty", "not configured", JiraCfg{}},
+		{"no username", "no JIRA_USERNAME", JiraCfg{Token: "tok"}},
+		{"no token", "no JIRA_API_TOKEN", JiraCfg{Username: "qa@example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A URL that would fail loudly if the check tried to dial it.
+			tc.cfg.URL = "http://127.0.0.1:1"
+			got := jiraCheck(tc.cfg)
+			if got.OK {
+				t.Fatalf("jiraCheck(%+v).OK = true, want false", tc.cfg)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if got.Hint == "" {
+				t.Fatal("a failing check must carry a Hint")
+			}
+		})
+	}
+}
+
+// jiraStub serves both endpoints the check calls: /myself and /mypermissions. grants
+// maps a permission key to whether the account holds it; a key absent from the map is
+// served as havePermission:false.
+func jiraStub(t *testing.T, grants map[string]bool) (*httptest.Server, *[]string) {
+	t.Helper()
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/rest/api/3/mypermissions" {
+			perms := map[string]map[string]bool{}
+			// Echo back only what was ASKED for, as real Jira does — so a test can't
+			// pass by the stub volunteering a permission the check never requested.
+			for _, k := range strings.Split(r.URL.Query().Get("permissions"), ",") {
+				if k == "" {
+					continue
+				}
+				perms[k] = map[string]bool{"havePermission": grants[k]}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": perms})
+			return
+		}
+		_, _ = w.Write([]byte(`{"displayName":"QA Bot","emailAddress":"qa@example.com"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &paths
+}
+
+func allJiraGrants() map[string]bool {
+	return map[string]bool{"ADD_COMMENTS": true, "CREATE_ATTACHMENTS": true, "TRANSITION_ISSUES": true}
+}
+
+// Fully configured, Jira accepts, and the account can write: the check passes and
+// names the authenticated account, so the user can spot a token belonging to the
+// WRONG account.
+func TestJiraCheckAuthenticates(t *testing.T) {
+	var gotUser, gotPass string
+	srv, paths := jiraStub(t, allJiraGrants())
+	// Wrap to capture the credentials the check actually sends.
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, _ = r.BasicAuth()
+		inner.ServeHTTP(w, r)
+	})
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok-123"})
+	if !got.OK {
+		t.Fatalf("jiraCheck() failed against a healthy server: %s", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "QA Bot") {
+		t.Fatalf("Detail = %q, want the authenticated account name", got.Detail)
+	}
+	// Same endpoints + Basic scheme the engine's jira.ts uses, so a pass here really
+	// does predict that `qar jira-comment` can authenticate AND write.
+	want := []string{"/rest/api/3/myself", "/rest/api/3/mypermissions"}
+	if !reflect.DeepEqual(*paths, want) {
+		t.Fatalf("probed %v, want %v", *paths, want)
+	}
+	if gotUser != "qa@example.com" || gotPass != "tok-123" {
+		t.Fatalf("basic auth = %q:%q, want the configured email:token", gotUser, gotPass)
+	}
+}
+
+// THE failure this check exists for: the credentials are valid and /myself succeeds,
+// but the account can't write. A read-only token would otherwise pass the doctor and
+// then fail at the end of a validation, which is the worst moment to find out.
+func TestJiraCheckMissingWritePermission(t *testing.T) {
+	for _, tc := range []struct {
+		name, revoke, wantVerb string
+	}{
+		{"cannot comment", "ADD_COMMENTS", "post comments"},
+		{"cannot attach", "CREATE_ATTACHMENTS", "attach screenshots"},
+		{"cannot transition", "TRANSITION_ISSUES", "transition issues"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			grants := allJiraGrants()
+			grants[tc.revoke] = false
+			srv, _ := jiraStub(t, grants)
+
+			got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+			if got.OK {
+				t.Fatalf("jiraCheck() passed without %s", tc.revoke)
+			}
+			if !strings.Contains(got.Detail, tc.wantVerb) {
+				t.Fatalf("Detail = %q, want it to name %q", got.Detail, tc.wantVerb)
+			}
+			// Authentication SUCCEEDED here — saying otherwise would send the user to
+			// re-check a token that is fine.
+			if !strings.Contains(got.Detail, "QA Bot") {
+				t.Fatalf("Detail = %q, want it to confirm who authenticated", got.Detail)
+			}
+		})
+	}
+}
+
+// Every write permission missing: all three are named, not just the first.
+func TestJiraCheckReportsEveryMissingPermission(t *testing.T) {
+	srv, _ := jiraStub(t, map[string]bool{})
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed with no write permissions at all")
+	}
+	for _, verb := range []string{"post comments", "attach screenshots", "transition issues"} {
+		if !strings.Contains(got.Detail, verb) {
+			t.Fatalf("Detail = %q, want it to name %q", got.Detail, verb)
+		}
+	}
+}
+
+// A permission probe that can't RUN is not evidence of a missing permission. Report it
+// as unverified rather than failing a user whose access is actually fine.
+func TestJiraCheckPermissionProbeUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/mypermissions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"QA Bot"}`))
+	}))
+	defer srv.Close()
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed when write access could not be verified")
+	}
+	if !strings.Contains(got.Detail, "couldn't verify") {
+		t.Fatalf("Detail = %q, want it to say write access is unverified", got.Detail)
+	}
+	// Must not claim a permission is missing when we simply couldn't ask.
+	if strings.Contains(got.Detail, "cannot ") {
+		t.Fatalf("Detail = %q, must not assert a missing permission it never observed", got.Detail)
+	}
+}
+
+// The failure a presence-only check can't catch: every field is filled in, but the
+// token is expired/revoked. The detail must say so rather than blaming the settings.
+func TestJiraCheckRejectsBadToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	got := jiraCheck(JiraCfg{URL: srv.URL, Username: "qa@example.com", Token: "stale"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed with a 401 from Jira")
+	}
+	if !strings.Contains(got.Detail, "expired") && !strings.Contains(got.Detail, "revoked") {
+		t.Fatalf("Detail = %q, want it to point at the token", got.Detail)
+	}
+}
+
+// An unreachable host must fail as a connectivity problem, not hang or panic.
+func TestJiraCheckUnreachable(t *testing.T) {
+	got := jiraCheck(JiraCfg{URL: "http://127.0.0.1:1", Username: "qa@example.com", Token: "tok"})
+	if got.OK {
+		t.Fatal("jiraCheck() passed against an unreachable host")
+	}
+	if !strings.Contains(got.Detail, "can't reach") {
+		t.Fatalf("Detail = %q, want a reachability message", got.Detail)
+	}
 }

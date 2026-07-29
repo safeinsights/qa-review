@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +60,7 @@ func withGuiPath() []string {
 		}
 	}
 	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
-	// (bin/qar), which dispatches to QAR_BIN (packaged) or `pnpm qar` (dev). This is
+	// (bin/qar), which dispatches to QAR_NODE/QAR_BUNDLE (packaged) or `pnpm qar` (dev). This is
 	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
 	if binDir := filepath.Join(repoDir(), "bin"); !strings.Contains(path, binDir) {
 		path = binDir + ":" + path
@@ -78,12 +80,10 @@ func withGuiPath() []string {
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
-	// and export QAR_BIN (packaged only) so the `bin/qar` shim — and thus a bare `qar`
-	// in the Claude PTY — runs the bundled engine where there is no `pnpm`.
+	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
+	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
-	if qb := qarBinValue(); qb != "" {
-		out = append(out, "QAR_BIN="+qb)
-	}
+	out = append(out, qarBinEnv()...)
 	return out
 }
 
@@ -471,9 +471,23 @@ type ValidationStart struct {
 // we infer the card from it up front so the Verdict button works for the whole
 // session; if inference fails the session still starts and the prompt asks Claude
 // to identify the ticket from the PR.
-func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (ValidationStart, error) {
+//
+// With a PR, the deployment checks must be green first — see the ciContextPrefix
+// gate below. `force` skips that gate for a tester who has read the warning and
+// wants to proceed anyway.
+func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, force bool) (ValidationStart, error) {
 	if strings.TrimSpace(pr) == "" && strings.TrimSpace(jiraCard) == "" {
 		return ValidationStart{}, errors.New("a PR number or a Jira card is required")
+	}
+	// Gate BEFORE spawning anything: validating against a preview URL that CI hasn't
+	// finished building tests the previous commit (or 404s), and a green-looking pass
+	// on stale code is worse than no validation at all. Re-checked here rather than
+	// trusting the UI's probe because the state can change between the two, and
+	// because a session can be started by a caller that never probed.
+	if !force {
+		if status := prCIStatus(pr); status.Blocking() {
+			return ValidationStart{}, errors.New(status.Warning)
+		}
 	}
 	// Infer BEFORE spawning the browser: a failed lookup is then just a missing
 	// card, not an orphaned session we'd have to tear down.
@@ -1798,6 +1812,177 @@ func inferJiraCard(pr string) string {
 	return inferJiraCardFrom(v.Title, v.HeadRefName, v.Body)
 }
 
+// ciContextPrefix selects the checks that gate a validation. The Jenkins statuses
+// (continuous-integration/jenkins/pr-head, .../branch) are the ones that BUILD AND
+// DEPLOY the PR preview — until they finish green, prN.qa.safeinsights.org either
+// doesn't exist or is still serving the PREVIOUS commit's build. Validating then
+// tests code that isn't the code under review. The GitHub Actions checks (lint,
+// unit, e2e, CodeQL) are deliberately NOT gated on: they don't affect what's
+// deployed, and a failing lint job shouldn't block a tester from looking at a
+// feature that's live on the preview.
+const ciContextPrefix = "continuous-integration/"
+
+// PrCIStatus is the verdict on a PR's deployment checks. State is one of:
+// "ok" (all matching checks succeeded), "pending" (at least one still running),
+// "failed" (at least one concluded badly), "none" (the PR has no matching check
+// yet — Jenkins hasn't reported), or "unknown" (we couldn't ask GitHub).
+// Warning is a human sentence for the UI; empty when State is "ok".
+type PrCIStatus struct {
+	State   string   `json:"state"`
+	Warning string   `json:"warning"`
+	Checks  []string `json:"checks"`
+}
+
+// Blocking reports whether this status should stop a validation from starting.
+// "unknown" does NOT block: an offline laptop or an unauthenticated gh is our
+// problem, not evidence the deployment is stale, and blocking on it would strand a
+// tester with no way forward. "none" DOES block — Jenkins not having reported is
+// the exact case where the preview URL isn't built yet.
+func (s PrCIStatus) Blocking() bool {
+	return s.State == "pending" || s.State == "failed" || s.State == "none"
+}
+
+// ciRollupEntry is the subset of `gh pr view --json statusCheckRollup` we read.
+// The rollup mixes two GraphQL types: CheckRun (GitHub Actions — Status +
+// Conclusion) and StatusContext (third-party commit statuses like Jenkins —
+// Context + State, with NO status field). The Jenkins checks we gate on are
+// StatusContexts, so State is what carries their result.
+type ciRollupEntry struct {
+	TypeName   string `json:"__typename"`
+	Name       string `json:"name"`
+	Context    string `json:"context"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+// label is the check's display name across both rollup types.
+func (e ciRollupEntry) label() string {
+	if e.Context != "" {
+		return e.Context
+	}
+	return e.Name
+}
+
+// pending reports whether the check hasn't reached a verdict yet. A CheckRun is
+// pending until Status is COMPLETED; a StatusContext is pending while its State is
+// PENDING (Jenkins sets that when it accepts the build and again while it runs).
+func (e ciRollupEntry) pending() bool {
+	if e.TypeName == "CheckRun" {
+		return !strings.EqualFold(e.Status, "COMPLETED")
+	}
+	return strings.EqualFold(e.State, "PENDING") || strings.EqualFold(e.State, "EXPECTED")
+}
+
+// succeeded reports a green verdict. SKIPPED and NEUTRAL count as green: a check
+// that deliberately didn't run is not a reason to withhold the preview.
+func (e ciRollupEntry) succeeded() bool {
+	result := e.Conclusion
+	if result == "" {
+		result = e.State
+	}
+	return strings.EqualFold(result, "SUCCESS") ||
+		strings.EqualFold(result, "SKIPPED") ||
+		strings.EqualFold(result, "NEUTRAL")
+}
+
+// classifyCIRollup reduces a PR's rollup to a single verdict over the checks whose
+// name starts with ciContextPrefix. Worst state wins — one pending check among ten
+// green ones still means the deployment is mid-flight.
+//
+// GitHub returns one entry PER RUN, so a re-run leaves several entries with the
+// SAME name; we keep the LAST of each name because the rollup is in run order and
+// the latest run is the one that reflects the current commit. Without that, an old
+// failed attempt would veto a passing re-run forever.
+func classifyCIRollup(entries []ciRollupEntry) PrCIStatus {
+	latest := map[string]ciRollupEntry{}
+	var order []string
+	for _, e := range entries {
+		name := e.label()
+		if !strings.HasPrefix(name, ciContextPrefix) {
+			continue
+		}
+		if _, seen := latest[name]; !seen {
+			order = append(order, name)
+		}
+		latest[name] = e
+	}
+
+	if len(order) == 0 {
+		return PrCIStatus{
+			State: "none",
+			Warning: "No " + ciContextPrefix + "* check has reported on this PR yet. " +
+				"The preview deployment is probably not built — wait for CI, then start again.",
+		}
+	}
+
+	var names, pending, failed []string
+	for _, name := range order {
+		names = append(names, name)
+		switch e := latest[name]; {
+		case e.pending():
+			pending = append(pending, name)
+		case !e.succeeded():
+			failed = append(failed, name)
+		}
+	}
+
+	switch {
+	case len(failed) > 0:
+		return PrCIStatus{
+			State: "failed",
+			Warning: "CI failed on this PR (" + strings.Join(failed, ", ") + "). " +
+				"The preview deployment may be missing or stale, so validating now " +
+				"would test the wrong code.",
+			Checks: names,
+		}
+	case len(pending) > 0:
+		return PrCIStatus{
+			State: "pending",
+			Warning: "CI is still running on this PR (" + strings.Join(pending, ", ") + "). " +
+				"The preview deployment isn't updated yet — wait for it to finish, " +
+				"then start again.",
+			Checks: names,
+		}
+	}
+	return PrCIStatus{State: "ok", Checks: names}
+}
+
+// prCIStatus asks GitHub for PR `pr`'s check rollup and classifies it. A lookup
+// failure yields "unknown", which is non-blocking (see Blocking).
+func prCIStatus(pr string) PrCIStatus {
+	pr = strings.TrimSpace(pr)
+	if pr == "" {
+		return PrCIStatus{State: "ok"}
+	}
+	out, err := runToolFull("gh", "pr", "view", pr, "--repo", managementAppSlug,
+		"--json", "statusCheckRollup")
+	if err != nil {
+		return PrCIStatus{
+			State:   "unknown",
+			Warning: "Could not read CI status for PR " + pr + " from GitHub: " + out,
+		}
+	}
+	var v struct {
+		StatusCheckRollup []ciRollupEntry `json:"statusCheckRollup"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return PrCIStatus{
+			State:   "unknown",
+			Warning: "Could not parse the CI status GitHub returned for PR " + pr + ".",
+		}
+	}
+	return classifyCIRollup(v.StatusCheckRollup)
+}
+
+// CheckPrCI is the UI-facing probe: the Validation tab calls it as the PR input
+// settles so a tester sees a warning BEFORE pressing Start, rather than having the
+// start call rejected. StartValidationSession re-checks (see there) — this is the
+// early warning, not the gate.
+func (a *App) CheckPrCI(pr string) PrCIStatus {
+	return prCIStatus(pr)
+}
+
 // accessPROpen reports whether an access PR opened BY THIS USER (head branch
 // "access/*") is already open on GitHub, so the Doctor can say "your PR is open — a
 // teammate needs to rekey & merge it" instead of prompting for a duplicate. Scoping
@@ -1898,7 +2083,190 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: "Encryption identity", OK: true, Detail: "present and can decrypt secrets"})
 	}
 
+	checks = append(checks, jiraCheck(a.readJiraConfig()))
+
 	return checks
+}
+
+// jiraCheck validates that validation verdicts can actually be posted. The token is
+// LocalOnly (per-user, never in the shared secrets, never distributed by `qar sync`),
+// so unlike the other settings it is invisible until something fails — and the thing
+// that fails is `qar jira-comment` at the end of a validation, the worst moment to
+// discover it. Checking uvx alone doesn't help: that proves the MCP can launch, not
+// that Jira will accept us.
+//
+// So this authenticates for real (GET /myself) rather than testing for non-empty
+// strings — an expired or revoked token is the failure mode a presence check misses.
+func jiraCheck(cfg JiraCfg) DoctorCheck {
+	const name = "Jira credentials"
+	const settingsHint = "Settings ▸ Jira: set your Atlassian email and API token."
+
+	// Missing pieces are a "not set up yet" state, not a broken one — don't make a
+	// network call to say so, and name the specific field that's absent.
+	switch {
+	case cfg.Username == "" && cfg.Token == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "not configured (no email or API token)", Hint: settingsHint, DocURL: jiraTokenDocURL}
+	case cfg.Username == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "no JIRA_USERNAME (your Atlassian account email)", Hint: settingsHint}
+	case cfg.Token == "":
+		return DoctorCheck{Name: name, OK: false, Detail: "no JIRA_API_TOKEN", Hint: settingsHint, DocURL: jiraTokenDocURL}
+	}
+
+	who, err := jiraWhoAmI(cfg)
+	if err != nil {
+		return DoctorCheck{Name: name, OK: false, Detail: err.Error(), Hint: settingsHint, DocURL: jiraTokenDocURL}
+	}
+
+	// Authenticating only proves the credentials name a real account. A validation
+	// WRITES three times — comment, attachment, transition — and a read-only account
+	// passes /myself and then fails at the end of a validation, which is the moment
+	// this check exists to stop being the discovery point.
+	missing, err := jiraMissingPermissions(cfg)
+	if err != nil {
+		// A permission probe that can't run is not proof of a missing permission —
+		// report it as unverified rather than failing a correctly-configured user.
+		return DoctorCheck{
+			Name:   name,
+			OK:     false,
+			Detail: "authenticated as " + who + ", but couldn't verify write access: " + err.Error(),
+			Hint:   jiraAccessHint,
+		}
+	}
+	if len(missing) > 0 {
+		return DoctorCheck{
+			Name:   name,
+			OK:     false,
+			Detail: "authenticated as " + who + ", but cannot " + strings.Join(missing, ", ") + " in " + jiraProbeProject,
+			Hint:   jiraAccessHint,
+		}
+	}
+	return DoctorCheck{
+		Name:   name,
+		OK:     true,
+		Detail: "authenticated as " + who + "; can comment, attach, and transition in " + jiraProbeProject,
+	}
+}
+
+const jiraAccessHint = "Ask a Jira admin to grant your account write access to the " +
+	jiraProbeProject + " project (add comments, create attachments, transition issues)."
+
+// The project the permission probe runs against. Deliberately NOT jiraBoards: that
+// list exists to MATCH ticket keys in PR text and includes SHRMP, a typo alias, plus
+// SHRIMP — both 404 on /mypermissions (verified against live Jira), which would make
+// the doctor report a failure that says nothing about the user's actual access.
+const jiraProbeProject = "OTTER"
+
+// The three permissions a validation actually needs, mapped to the wording used when
+// one is missing. Keys are Jira Cloud permission keys; see src/engine/jira.ts (comment
+// + attachment) and the qa-validate skill (transition) for the calls they authorize.
+var jiraWritePermissions = []struct{ key, verb string }{
+	{"ADD_COMMENTS", "post comments"},
+	{"CREATE_ATTACHMENTS", "attach screenshots"},
+	{"TRANSITION_ISSUES", "transition issues"},
+}
+
+// jiraMissingPermissions returns the human-readable verbs for any write permission the
+// account lacks. Permissions are per-project, so this asks about a real project rather
+// than globally — a global answer wouldn't say whether the user can comment on OTTER.
+func jiraMissingPermissions(cfg JiraCfg) ([]string, error) {
+	base := strings.TrimRight(cfg.URL, "/")
+	if base == "" {
+		base = defaultJiraURL
+	}
+	keys := make([]string, 0, len(jiraWritePermissions))
+	for _, p := range jiraWritePermissions {
+		keys = append(keys, p.key)
+	}
+
+	// `permissions` is REQUIRED — the unparameterized form is deprecated and 400s.
+	endpoint := base + "/rest/api/3/mypermissions?projectKey=" + url.QueryEscape(jiraProbeProject) +
+		"&permissions=" + url.QueryEscape(strings.Join(keys, ","))
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bad JIRA_URL %q: %w", base, err)
+	}
+	req.SetBasicAuth(cfg.Username, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("can't reach %s: %v", base, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from /mypermissions", resp.StatusCode)
+	}
+
+	var body struct {
+		Permissions map[string]struct {
+			HavePermission bool `json:"havePermission"`
+		} `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("unreadable response: %w", err)
+	}
+
+	var missing []string
+	for _, p := range jiraWritePermissions {
+		// A key absent from the response is not a grant — treat it as missing rather
+		// than assuming allowed, so an API change can't silently turn this green.
+		if !body.Permissions[p.key].HavePermission {
+			missing = append(missing, p.verb)
+		}
+	}
+	return missing, nil
+}
+
+const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"
+
+// Mirrors the engine's fallback in src/engine/jira.ts, so the doctor probes the same
+// host `qar jira-comment` will post to when JIRA_URL is unset.
+const defaultJiraURL = "https://openstax.atlassian.net"
+
+// jiraWhoAmI authenticates against Jira Cloud and returns the display name (or email)
+// of the account the credentials belong to. Same Basic email:token scheme as
+// src/engine/jira.ts, so a pass here means `qar jira-comment` will authenticate too.
+func jiraWhoAmI(cfg JiraCfg) (string, error) {
+	base := strings.TrimRight(cfg.URL, "/")
+	if base == "" {
+		base = defaultJiraURL
+	}
+	req, err := http.NewRequest(http.MethodGet, base+"/rest/api/3/myself", nil)
+	if err != nil {
+		return "", fmt.Errorf("bad JIRA_URL %q: %w", base, err)
+	}
+	req.SetBasicAuth(cfg.Username, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("can't reach %s: %v", base, err)
+	}
+	defer resp.Body.Close()
+
+	// 401/403 is the case worth naming precisely: the settings look filled in, so the
+	// user would otherwise re-check them and find nothing wrong.
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return "", fmt.Errorf("rejected by Jira (HTTP %d) — the API token is wrong, expired, or revoked", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		return "", fmt.Errorf("unexpected response from Jira (HTTP %d)", resp.StatusCode)
+	}
+
+	var me struct {
+		DisplayName  string `json:"displayName"`
+		EmailAddress string `json:"emailAddress"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		return "", fmt.Errorf("unreadable response from Jira: %w", err)
+	}
+	if me.DisplayName != "" {
+		return me.DisplayName, nil
+	}
+	if me.EmailAddress != "" {
+		return me.EmailAddress, nil
+	}
+	return cfg.Username, nil
 }
 
 // ToolProbe is one tool's resolution result for the debug report: whether it was

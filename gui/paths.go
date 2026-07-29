@@ -222,20 +222,45 @@ func devSourceRepo() string {
 	return ""
 }
 
-// qarBinValue is the single source of truth for the QAR_BIN string — the multi-token
-// command that runs the bundled engine in a packaged .app
-// ("<node> --import tsx <bundle>"). It is exported both to the engine subprocess
-// (engineCmd) and to the Claude PTY env (withGuiPath), where the `bin/qar` shim
-// consumes it so a bare `qar …` works. Under `wails dev` there is no Resources
-// bundle, so it returns "" and the shim falls back to `pnpm qar`.
-func qarBinValue() string {
-	res := resourcesDir()
+// qarBinValue is the single source of truth for how the `bin/qar` shim runs the
+// bundled engine in a packaged .app: the node binary and the bundle path, as TWO
+// values (QAR_NODE / QAR_BUNDLE) rather than one command string.
+//
+// They must stay separate because the .app path contains spaces
+// ("/Applications/SI QA Runner.app/..."). A single packed string forces the shim to
+// choose between word-splitting it — which shatters that path at the space and
+// 127s — and quoting it, which makes the whole thing one unfindable "command".
+// Two values need no quoting decision at all: each is exactly one word to the shim.
+//
+// Exported to the engine subprocess (engineCmd) and to the Claude PTY env
+// (withGuiPath), where the shim consumes them so a bare `qar …` works. Under
+// `wails dev` there is no Resources bundle, so both are "" and the shim falls back
+// to `pnpm qar`.
+func qarBinValue() (node, bundle string) {
+	return qarBinValueIn(resourcesDir())
+}
+
+// qarBinValueIn is qarBinValue for an explicit Resources dir, so the spaced-path
+// behavior is testable without a real .app on disk.
+func qarBinValueIn(res string) (node, bundle string) {
 	if res == "" {
-		return ""
+		return "", ""
 	}
-	node := filepath.Join(res, "runtime", "node")
-	bundle := filepath.Join(res, "engine", "qar.bundle.mjs")
-	return node + " --import tsx " + bundle
+	return filepath.Join(res, "runtime", "node"), filepath.Join(res, "engine", "qar.bundle.mjs")
+}
+
+// qarBinEnv returns the QAR_NODE/QAR_BUNDLE env entries for a packaged app, or nil
+// under `wails dev`.
+func qarBinEnv() []string {
+	return qarBinEnvIn(resourcesDir())
+}
+
+func qarBinEnvIn(res string) []string {
+	node, bundle := qarBinValueIn(res)
+	if node == "" {
+		return nil
+	}
+	return []string{"QAR_NODE=" + node, "QAR_BUNDLE=" + bundle}
 }
 
 // engineCmd builds the command that runs the bundled engine with the given qar
@@ -264,8 +289,8 @@ func engineCmd(args ...string) *exec.Cmd {
 		env = append(env,
 			"NODE_PATH="+filepath.Join(res, "engine", "node_modules"),
 			"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1",
-			"QAR_BIN="+qarBinValue(),
 		)
+		env = append(env, qarBinEnv()...)
 		cmd.Env = env
 	} else {
 		// Dev: run `pnpm qar` from the LIVE engine source (the tree containing

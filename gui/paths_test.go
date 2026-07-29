@@ -38,19 +38,57 @@ func TestRepoDirRespectsExplicitOverride(t *testing.T) {
 
 // In dev mode there is no Resources bundle, so qarBinValue() is empty and the
 // bin/qar shim falls back to `pnpm qar`. (Packaged mode returns the node+bundle
-// string; that path can't be exercised without a real .app.)
+// paths; that path can't be exercised without a real .app.)
 func TestQarBinValueEmptyInDevMode(t *testing.T) {
 	if resourcesDir() != "" {
 		t.Skip("not running in dev mode (a Resources bundle is present)")
 	}
-	if got := qarBinValue(); got != "" {
-		t.Fatalf("dev-mode qarBinValue()=%q, want empty", got)
+	node, bundle := qarBinValue()
+	if node != "" || bundle != "" {
+		t.Fatalf("dev-mode qarBinValue()=(%q, %q), want both empty", node, bundle)
+	}
+	if env := qarBinEnv(); env != nil {
+		t.Fatalf("dev-mode qarBinEnv()=%v, want nil", env)
+	}
+}
+
+// The packaged app installs to "/Applications/SI QA Runner.app" — a path with a
+// SPACE. QAR_NODE/QAR_BUNDLE must therefore each be a single value the shim can
+// quote; regressing to one packed "<node> --import tsx <bundle>" string reintroduces
+// the `/Applications/SI: No such file or directory` 127 at every bare `qar` call.
+// Asserting each var round-trips a spaced path intact is what pins that apart.
+func TestQarBinEnvKeepsSpacedPathsIntact(t *testing.T) {
+	res := filepath.Join("/Applications", "SI QA Runner.app", "Contents", "Resources")
+
+	node, bundle := qarBinValueIn(res)
+	if node == "" || bundle == "" {
+		t.Fatalf("qarBinValueIn(%q)=(%q, %q), want both populated", res, node, bundle)
+	}
+
+	env := qarBinEnvIn(res)
+	got := map[string]string{}
+	for _, e := range env {
+		k, v, _ := strings.Cut(e, "=")
+		got[k] = v
+	}
+	// Each var holds exactly one path, spaces and all — no shell tokens spliced in.
+	if got["QAR_NODE"] != node {
+		t.Fatalf("QAR_NODE=%q, want the node path %q", got["QAR_NODE"], node)
+	}
+	if got["QAR_BUNDLE"] != bundle {
+		t.Fatalf("QAR_BUNDLE=%q, want the bundle path %q", got["QAR_BUNDLE"], bundle)
+	}
+	if strings.Contains(got["QAR_NODE"], " --import") {
+		t.Fatalf("QAR_NODE=%q packs a command line; it must be the node path alone", got["QAR_NODE"])
+	}
+	if !strings.Contains(got["QAR_NODE"], "SI QA Runner.app") {
+		t.Fatalf("QAR_NODE=%q lost the spaced .app path segment", got["QAR_NODE"])
 	}
 }
 
 // withGuiPath() must put the repo's bin dir (holding the committed `qar` shim) on
 // PATH so a bare `qar` resolves in the Claude PTY, and — in dev — must NOT set
-// QAR_BIN (empty qarBinValue), so the shim falls through to `pnpm qar`.
+// QAR_NODE/QAR_BUNDLE (empty qarBinValue), so the shim falls through to `pnpm qar`.
 func TestWithGuiPathExportsBinDirAndOmitsQarBinInDev(t *testing.T) {
 	if resourcesDir() != "" {
 		t.Skip("not running in dev mode (a Resources bundle is present)")
@@ -64,8 +102,8 @@ func TestWithGuiPathExportsBinDirAndOmitsQarBinInDev(t *testing.T) {
 		if strings.HasPrefix(e, "PATH=") {
 			pathVal = strings.TrimPrefix(e, "PATH=")
 		}
-		if strings.HasPrefix(e, "QAR_BIN=") {
-			t.Fatalf("dev-mode withGuiPath() set %q; QAR_BIN must be unset in dev", e)
+		if strings.HasPrefix(e, "QAR_NODE=") || strings.HasPrefix(e, "QAR_BUNDLE=") {
+			t.Fatalf("dev-mode withGuiPath() set %q; it must be unset in dev", e)
 		}
 	}
 	wantBin := filepath.Join(dir, "bin")
