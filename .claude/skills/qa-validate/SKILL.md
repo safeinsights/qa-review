@@ -166,10 +166,36 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    jira-comment …`. That email is their **Atlassian account email**, often NOT their
    git email; ask if you don't know it (or tell them to set it in Settings).
 4. **Transition the ticket** — resolve the transition by NAME (ids vary) via
-   `jira_get_transitions` then `jira_transition_issue`:
-   - **Validated** → transition to **"Final Review - EM & PM"**.
-   - **Rejected** → **un-assign** (`jira_update_issue(fields='{"assignee": null}')`)
-     AND transition to **"Development"**.
+   `jira_get_transitions` then `jira_transition_issue`. **Which move depends on the
+   TARGET you validated against**, so establish that first (it's in the prompt as
+   `--env <name>` or `--pr <n>`):
+
+   | Target | Verdict | Move to | Assignee |
+   |---|---|---|---|
+   | **QA** | Validated | **"Final Review - EM & PM"** | un-assign |
+   | **Staging** | Validated | **"Done"** | un-assign |
+   | **QA or Staging** | Rejected | **"To Do"** | assign to the last person who worked it (below) |
+   | **PR preview / production** | either | **do NOT transition** | leave as-is |
+
+   - **A PR preview (`--pr <n>`) or production proves nothing about the shared
+     envs** — a preview is a throwaway deployment with no seeded data, and
+     production isn't where work gets signed off. Post the comment, then STOP:
+     no transition, no assignee change. Tell the user you've commented only, and
+     that moving the card needs a QA or Staging validation.
+   - **Un-assign** with `jira_update_issue(fields='{"assignee": null}')`.
+
+   **Finding who to assign on rejection.** The card is usually already un-assigned
+   by the time it reaches QA, so read the history rather than the current field:
+   `jira_get_issue(issue_key=…, include='changelog')`, then walk `changelogs`
+   (newest first) for the most recent item with `field: "assignee"` and take its
+   **`from_id`** — that's the accountId of whoever held it before it was cleared.
+   Assign with `jira_update_issue(fields='{"assignee": {"accountId": "<id>"}}')`.
+
+   Cross-check against the PR author (`gh pr view <n> --json author`) when a PR is
+   known. If the changelog and the PR disagree, or the changelog has no assignee
+   history at all, **ask the user** — a card silently assigned to the wrong person
+   is worse than one left un-assigned, since nobody is watching an unexpected queue.
+   A GitHub login is NOT a Jira accountId; never guess a mapping between them.
 5. **Tell the GUI the verdict is posted** so it hides the Verdict button and shows the
    outcome — run `qar verdict-posted --issue <CARD> --result <validated|rejected>`.
    Do this AFTER the comment + transition succeed, whether the user pressed the
@@ -222,4 +248,4 @@ Never tell the user "cleanup needs a token I don't have" — fetch it as above.
   `qar jira-delete-comment` — don't leave a mess for the user to clean up, and
   don't repost variations hoping one renders.
 - Always confirm before writing to Jira (comments, attachments, transitions,
-  un-assign).
+  assigning/un-assigning).
