@@ -222,7 +222,17 @@ func probeMcpServers(cdpPort int) {
 			return
 		}
 	}
-	logMcp("ok npx=%s", npx)
+	// Log the node npx will actually use, and flag it when unsupported. The crash it
+	// causes (`The "path" argument must be of type string`) names neither node nor a
+	// version, so without this the log shows a failure with no visible cause — which
+	// is exactly what happened in issue #36.
+	nodeVer, _ := runToolFull("node", "--version")
+	if why := nodeVersionProblem(nodeVer); why != "" {
+		logMcp("FAIL node %s is unsupported: %s", strings.TrimSpace(nodeVer), why)
+		logMcp("  npx=%s will crash chrome-devtools-mcp at import; put a supported node FIRST on PATH", npx)
+	} else {
+		logMcp("ok npx=%s (node %s)", npx, strings.TrimSpace(nodeVer))
+	}
 
 	if _, err := probeCdp(cdpPort); err != nil {
 		logMcp("warn CDP endpoint 127.0.0.1:%d not answering: %v", cdpPort, err)
