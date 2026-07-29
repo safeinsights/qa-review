@@ -384,6 +384,122 @@ func TestInferJiraCardNoPR(t *testing.T) {
 	}
 }
 
+// jenkins/actions build rollup entries in the two shapes GitHub actually returns:
+// third-party commit statuses (StatusContext: Context + State, no Status field)
+// and GitHub Actions checks (CheckRun: Name + Status + Conclusion).
+func jenkins(context, state string) ciRollupEntry {
+	return ciRollupEntry{TypeName: "StatusContext", Context: context, State: state}
+}
+
+func actions(name, status, conclusion string) ciRollupEntry {
+	return ciRollupEntry{
+		TypeName: "CheckRun", Name: name, Status: status, Conclusion: conclusion,
+	}
+}
+
+func TestClassifyCIRollup(t *testing.T) {
+	const head = ciContextPrefix + "jenkins/pr-head"
+	const branch = ciContextPrefix + "jenkins/branch"
+
+	cases := []struct {
+		name    string
+		entries []ciRollupEntry
+		want    string
+	}{
+		{
+			name:    "all deployment checks green",
+			entries: []ciRollupEntry{jenkins(head, "SUCCESS"), jenkins(branch, "SUCCESS")},
+			want:    "ok",
+		},
+		{
+			name:    "a deployment check still running blocks",
+			entries: []ciRollupEntry{jenkins(head, "PENDING"), jenkins(branch, "SUCCESS")},
+			want:    "pending",
+		},
+		{
+			name:    "a failed deployment check blocks",
+			entries: []ciRollupEntry{jenkins(head, "FAILURE")},
+			want:    "failed",
+		},
+		{
+			name:    "an errored deployment check blocks",
+			entries: []ciRollupEntry{jenkins(head, "ERROR")},
+			want:    "failed",
+		},
+		{
+			// Jenkins hasn't reported at all: the preview isn't built, which is
+			// exactly the case a tester must not validate against.
+			name:    "no matching check at all blocks",
+			entries: []ciRollupEntry{actions("lint", "COMPLETED", "SUCCESS")},
+			want:    "none",
+		},
+		{
+			// The Actions checks don't build the preview, so their state is
+			// irrelevant to whether the deployed code is current.
+			name: "failing Actions checks are ignored",
+			entries: []ciRollupEntry{
+				jenkins(head, "SUCCESS"),
+				actions("lint", "COMPLETED", "FAILURE"),
+				actions("e2e", "IN_PROGRESS", ""),
+			},
+			want: "ok",
+		},
+		{
+			// GitHub returns one entry per run; the latest is the one that
+			// reflects the current commit, so a passing re-run must win.
+			name:    "a re-run supersedes an earlier failure of the same check",
+			entries: []ciRollupEntry{jenkins(head, "FAILURE"), jenkins(head, "SUCCESS")},
+			want:    "ok",
+		},
+		{
+			name:    "a failing re-run supersedes an earlier success",
+			entries: []ciRollupEntry{jenkins(head, "SUCCESS"), jenkins(head, "FAILURE")},
+			want:    "failed",
+		},
+		{
+			// Worst state wins: one red check is not redeemed by a green one.
+			name:    "failure outranks pending",
+			entries: []ciRollupEntry{jenkins(head, "PENDING"), jenkins(branch, "FAILURE")},
+			want:    "failed",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyCIRollup(c.entries)
+			if got.State != c.want {
+				t.Fatalf("classifyCIRollup() = %q, want %q (warning: %s)",
+					got.State, c.want, got.Warning)
+			}
+			if c.want != "ok" && got.Warning == "" {
+				t.Fatal("a non-ok status must carry a warning for the UI")
+			}
+		})
+	}
+}
+
+func TestPrCIStatusBlocking(t *testing.T) {
+	blocking := map[string]bool{
+		"ok": false, "pending": true, "failed": true, "none": true,
+		// Not being able to ASK GitHub is our problem, not evidence of a stale
+		// deployment — blocking on it would strand a tester with no way forward.
+		"unknown": false,
+	}
+	for state, want := range blocking {
+		if got := (PrCIStatus{State: state}).Blocking(); got != want {
+			t.Fatalf("PrCIStatus{%q}.Blocking() = %v, want %v", state, got, want)
+		}
+	}
+}
+
+func TestPrCIStatusNoPR(t *testing.T) {
+	// Validating a Jira card with no PR has no preview deployment to gate on, and
+	// must not shell out to gh.
+	if got := prCIStatus("  "); got.State != "ok" {
+		t.Fatalf("blank PR should not gate, got %q", got.State)
+	}
+}
+
 func TestComposeValidationPrompt(t *testing.T) {
 	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
 		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
