@@ -33,3 +33,17 @@ export function parsePrNumber(input: string): string {
 export function isPrNumber(input: string): boolean {
     return /^\d+$/.test(parsePrNumber(input))
 }
+
+// The states of a PR's continuous-integration/* checks. Anything but "ok" or
+// "unknown" means the PR preview deployment isn't a build of the code under
+// review, so validating against it would test the wrong commit.
+export type CIState = 'ok' | 'pending' | 'failed' | 'none' | 'unknown'
+
+// Whether a CI status should stop a validation from starting. Mirrors
+// PrCIStatus.Blocking() in gui/app.go, which is the real gate — this one only
+// decides whether the UI shows a warning and swaps the Start button for
+// "Start anyway". "unknown" (offline, gh unauthenticated) deliberately does NOT
+// block: our inability to ask GitHub is not evidence the deployment is stale.
+export function ciBlocks(state: CIState | null | undefined): boolean {
+    return state === 'pending' || state === 'failed' || state === 'none'
+}
