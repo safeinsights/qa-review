@@ -382,14 +382,17 @@ POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
   has no delete tool, so this is the only way to clean up a bad post). 404 = already
   gone = success.
 
-Body text is passed through as **literal text**, not markdown — Jira will not
-render `##` or `**bold**` from this path, so write plain prose.
+Body text **is** markdown — `buildCommentAdf()` converts each text segment with
+`markdownToAdf()` (the `marklassian` package) and splices the resulting block nodes
+into the doc, so headings, bold/italic, inline code, lists, and links all render.
+(This replaced an earlier literal-text path; write markdown, not plain prose.)
 
-Auth comes from the same env vars the MCP server uses: `JIRA_URL` (defaults to
-`https://openstax.atlassian.net`), `JIRA_USERNAME`, `JIRA_API_TOKEN`. Note
-`JIRA_USERNAME` is typically NOT exported in the shell (it's hardcoded in the MCP
-config), so it usually has to be supplied inline:
-`JIRA_USERNAME=you@rice.edu pnpm qar jira-comment …`
+Auth comes from the same var names the MCP server uses: `JIRA_URL` (defaults to
+`https://openstax.atlassian.net`), `JIRA_USERNAME`, `JIRA_API_TOKEN`. These are read
+from the merged settings via `jiraConfig(vars)`, so the GUI's saved "Jira email"
+is picked up from `settings.local.json` and does NOT need to be exported — inline
+`JIRA_USERNAME=you@rice.edu qar jira-comment …` is only a fallback when it isn't
+saved there. Note the Jira account email is not necessarily your git email.
 
 Deliberately NOT implemented: an "upload any absolute path" helper. That's the
 arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
