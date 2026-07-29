@@ -209,3 +209,16 @@ func (p *ptySession) running() bool {
 	defer p.mu.Unlock()
 	return p.ptmx != nil
 }
+
+// pid returns the claude process's PID (0 if none). pty.Start makes it a session
+// leader, so its PGID == its PID and -pid signals claude plus every MCP server it
+// spawned. Callers use this to reap the group synchronously at app shutdown, where
+// stop()'s deferred SIGKILL goroutine would never get to run.
+func (p *ptySession) pid() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}

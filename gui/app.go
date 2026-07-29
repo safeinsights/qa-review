@@ -184,8 +184,51 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown runs when the app is quitting — tear down any live authoring session
 // so we never orphan a Chrome (remote-debugging) or claude process.
+//
+// teardownSession() only SIGTERMs; the SIGKILL escalation runs in goroutines that
+// fire seconds later (escalateKill, pty.stop). On quit the process exits first, so
+// those never run and anything ignoring SIGTERM is orphaned — `npx` wrappers and
+// the chrome-devtools-mcp telemetry watchdog are exactly that shape, and orphans
+// pinned to long-dead CDP ports were observed accumulating on a real machine. Wait
+// out the escalation window so the kills actually land before we exit.
 func (a *App) shutdown(ctx context.Context) {
+	// Capture the PIDs BEFORE teardown: it clears sessionCmd and closes the PTY
+	// immediately, so app state stops being a usable signal the moment it returns.
+	pids := a.sessionPids()
 	a.StopSession()
+	killGroupsNow(pids)
+	logDiag("app", "shutdown complete (%d session group(s) reaped)", len(pids))
+}
+
+// sessionPids returns the PIDs of the live session processes (the engine/browser
+// session and the claude PTY), each a process-group leader.
+func (a *App) sessionPids() []int {
+	var pids []int
+	a.sessionMu.Lock()
+	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
+		pids = append(pids, a.sessionCmd.Process.Pid)
+	}
+	a.sessionMu.Unlock()
+	if pid := a.pty.pid(); pid != 0 {
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// killGroupsNow SIGKILLs each process group synchronously. teardownSession only
+// SIGTERMs and defers the SIGKILL to goroutines (escalateKill, pty.stop) that fire
+// seconds later — on quit the process exits first, so those never run and anything
+// ignoring SIGTERM is orphaned. Sending the SIGKILL inline is what makes it land.
+func killGroupsNow(pids []int) {
+	if len(pids) == 0 {
+		return
+	}
+	// A brief grace so a well-behaved child can finish its SIGTERM cleanup (Chrome
+	// flushing its profile) before the group is killed outright.
+	time.Sleep(300 * time.Millisecond)
+	for _, pid := range pids {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
 }
 
 // Preflight reports required external tools/apps that are missing, so the UI can

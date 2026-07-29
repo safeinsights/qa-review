@@ -249,6 +249,14 @@ What it captures that is otherwise unrecoverable:
   still holds a CDP connection. Orphans from dead sessions were observed accumulating
   on a real machine (18 of them, one pinned to a long-gone port), which is itself a
   plausible contributor to "the MCP server didn't come up".
+
+**App quit reaps synchronously.** `teardownSession()`/`pty.stop()` only SIGTERM and
+defer the SIGKILL to goroutines that fire 2–3s later. That's fine for a session
+switch, but at quit the process exits before those goroutines run — so anything
+ignoring SIGTERM is orphaned. `shutdown()` therefore captures the session PIDs
+BEFORE teardown (which nils `sessionCmd` and closes the PTY immediately, so app
+state is useless a moment later) and calls `killGroupsNow()`, which SIGKILLs each
+process GROUP inline. Don't "simplify" that back to relying on the deferred kills.
 - **`engine`** — the non-JSON lines the run parser discards (below), which is where a
   crash-before-first-step says why.
 - **`pty`** — a `claude` that exits non-zero or suspiciously fast, plus its last output.
