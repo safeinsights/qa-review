@@ -10,5 +10,17 @@
     "publicKey": "age1l3j5lazd8j52z4ks9hvcasfafczpt577ac7ehsmjan9caqvxza3sumd9gf",
     "email": "ns51@rice.edu",
     "addedDate": "2026-07-02"
+  },
+  {
+    "name": "Stella Tetradis",
+    "publicKey": "age1p63alzmrqkvm0q4cgt2ghtdhax3astpu0qnzykk2kx79gjr5vsrq62ejpf",
+    "email": "stella.tetradis@gmail.com",
+    "addedDate": "2026-07-28"
+  },
+  {
+    "name": "Greg Fitch",
+    "publicKey": "age1ddzapcjwh9jqt5k88x83e3lzjgqfgy4a69rt0nppfvfgvc0c0qlqrgfmru",
+    "email": "greg.fitch@rice.edu",
+    "addedDate": "2026-07-28"
   }
 ]

@@ -8,20 +8,91 @@ function jsonResponse(body: unknown, status: number): Response {
     })
 }
 
-describe('mail.tm client (live)', () => {
-    it('returns an active domain', async () => {
-        const domain = await activeDomain()
-        expect(domain).toMatch(/\./) // a real hostname
-    }, 20_000)
+// These once called the real mail.tm. That made a unit test depend on a free-tier
+// public API: it 429s under any burst (a few `pnpm test` runs in a row is enough)
+// and fails offline, so CI went red for reasons that had nothing to do with our
+// code. The client's retry/backoff is covered separately in "mail.tm api retry"
+// below — what's left to prove here is that we send the right requests and parse
+// the responses, which a fake serves better than the network. It also lets us
+// assert the DELETE's URL and auth header, which the live version never could.
+describe('mail.tm client', () => {
+    // A minimal stand-in for the API: records every request, and answers the four
+    // endpoints the client uses with mail.tm's real response shapes.
+    function fakeMailTm() {
+        const calls: { method: string; path: string; auth?: string; body?: unknown }[] = []
+        const fetchImpl = (async (url: string, init?: RequestInit) => {
+            const path = String(url).replace('https://api.mail.tm', '')
+            const method = init?.method ?? 'GET'
+            const headers = (init?.headers ?? {}) as Record<string, string>
+            const body = init?.body ? JSON.parse(String(init.body)) : undefined
+            calls.push({ method, path, auth: headers.Authorization, body })
+
+            if (path === '/domains') {
+                return jsonResponse(
+                    {
+                        'hydra:member': [
+                            { domain: 'inactive.test', isActive: false },
+                            { domain: 'web-library.test', isActive: true },
+                        ],
+                    },
+                    200
+                )
+            }
+            if (path === '/accounts' && method === 'POST') {
+                // mail.tm echoes the address back on create.
+                return jsonResponse({ id: 'acct-42', address: body?.address }, 201)
+            }
+            if (path === '/token') {
+                return jsonResponse({ token: 'a-token-long-enough' }, 200)
+            }
+            if (path.startsWith('/accounts/') && method === 'DELETE') {
+                return new Response(null, { status: 204 })
+            }
+            throw new Error(`unexpected request: ${method} ${path}`)
+        }) as unknown as typeof fetch
+        return { calls, fetchImpl }
+    }
+
+    it('returns the first ACTIVE domain, skipping inactive ones', async () => {
+        const { fetchImpl } = fakeMailTm()
+        const realFetch = globalThis.fetch
+        globalThis.fetch = fetchImpl
+        try {
+            expect(await activeDomain()).toBe('web-library.test')
+        } finally {
+            globalThis.fetch = realFetch
+        }
+    })
 
     it('creates a usable inbox and deletes it', async () => {
-        const domain = await activeDomain()
-        const inbox = await createInbox(domain)
-        expect(inbox.address).toContain(`@${domain}`)
-        expect(inbox.token.length).toBeGreaterThan(10)
-        expect(inbox.id).toBeTruthy()
-        await deleteInbox(inbox) // must not throw
-    }, 30_000)
+        const { calls, fetchImpl } = fakeMailTm()
+        const realFetch = globalThis.fetch
+        globalThis.fetch = fetchImpl
+        try {
+            const domain = await activeDomain()
+            const inbox = await createInbox(domain)
+            expect(inbox.address).toContain(`@${domain}`)
+            expect(inbox.token.length).toBeGreaterThan(10)
+            expect(inbox.id).toBeTruthy()
+
+            await deleteInbox(inbox) // must not throw
+        } finally {
+            globalThis.fetch = realFetch
+        }
+
+        // The account is created and the token fetched with the SAME credentials —
+        // a mismatch would yield an inbox whose token can't read its own mail.
+        const create = calls.find(c => c.path === '/accounts' && c.method === 'POST')
+        const token = calls.find(c => c.path === '/token')
+        const creds = create?.body as { address: string; password: string }
+        expect(token?.body).toEqual(creds)
+
+        // Cleanup must target the created account and carry its bearer token;
+        // without either, the account silently outlives the run.
+        const del = calls.find(c => c.method === 'DELETE')
+        expect(del?.path).toBe('/accounts/acct-42')
+        expect(del?.auth).toBe('Bearer a-token-long-enough')
+    })
 })
 
 describe('createInbox address (qa-prefixed)', () => {

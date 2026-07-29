@@ -160,9 +160,14 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
-- **Revocation** is manual: remove the entry from `keyring.json`, run `qar rekey`,
-  land via PR. A revoked user can still read OLD secrets they already pulled —
-  rotate the actual password/MFA seed (and `set-secret` it) if truly sensitive.
+- **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
+  `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
+  key**, not by row, so a user with duplicate entries (`addMember` dedupes on name
+  only, so re-running `request-access` with different `--name` spellings appends
+  rather than replaces) doesn't keep a working key behind. Refuses to remove the
+  last recipient, which would leave the secrets unrecoverable.
+  A revoked user can still read OLD secrets they already pulled — rotate the actual
+  password/MFA seed (and `set-secret` it) if truly sensitive.
 
 Trust is enforced by **GitHub** (who can merge keyring PRs), not by the app.
 
@@ -388,6 +393,8 @@ through the issue attachment endpoint only.
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
   branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine via
   the `bin/qar` shim)
+- `scripts/revoke-access.sh "<name>" [--no-pr] [--yes]` — remove a user from the
+  keyring, rekey to the survivors, and open a revocation PR
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)
