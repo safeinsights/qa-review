@@ -221,6 +221,51 @@ so you can drive it in Chrome via the chrome-devtools MCP tools.
    - The harmless `runtime:ready -> Unknown message from front end` lines in the
      log are expected when running in Chrome (not the native webview); ignore them.
 
+## The diagnostic log (first stop for any silent failure)
+
+This app's characteristic failure is an ABSENCE: no steps appear, an MCP tool is
+missing, a button does nothing. `logDiag()` (`gui/paths.go`) appends to
+`~/Library/Application Support/qa-runner/diagnostics.log` (rotates at 2 MB to
+`.log.1`), tagged by area — `mcp`, `engine`, `spawn`, `pty`, `path`, `git`, `tool`.
+**`ReportIssue` embeds its tail automatically**, so a bug report carries the
+evidence without the user knowing the path. Read it before theorizing.
+
+What it captures that is otherwise unrecoverable:
+- **`mcp`** — MCP servers are spawned by `claude`, so we never see their stderr, and
+  a server that fails to start just leaves the session without its `mcp__*` tools.
+  `probeMcpServers()` therefore STARTS the real command once per session and records
+  why it died. It also probes the CDP endpoint separately, because "dead MCP server"
+  and "dead browser" look identical from inside a session and have different fixes.
+  The server version is **pinned** in `chromeDevtoolsMcpPkg` (`gui/paths.go`), NOT
+  `@latest` — `@latest` re-resolves on every cold start, so an upstream release could
+  break every session with no local change. Both session configs and the probe read
+  that one constant, so the probe always tests what the sessions actually run. To bump
+  it: change the constant, start a session, confirm the probe logs "stayed up past".
+  Two things the probe must keep doing, both found by getting them wrong first:
+  it holds **stdin open** (an stdio server sees EOF on a closed stdin and exits 0
+  immediately, so the probe would report every healthy server as a failure), and it
+  kills by **process group** — `npx` spawns three levels (`npm exec` → server →
+  telemetry watchdog), so killing only the wrapper orphans the real server while it
+  still holds a CDP connection. Orphans from dead sessions were observed accumulating
+  on a real machine (18 of them, one pinned to a long-gone port), which is itself a
+  plausible contributor to "the MCP server didn't come up".
+
+**App quit reaps synchronously.** `teardownSession()`/`pty.stop()` only SIGTERM and
+defer the SIGKILL to goroutines that fire 2–3s later. That's fine for a session
+switch, but at quit the process exits before those goroutines run — so anything
+ignoring SIGTERM is orphaned. `shutdown()` therefore captures the session PIDs
+BEFORE teardown (which nils `sessionCmd` and closes the PTY immediately, so app
+state is useless a moment later) and calls `killGroupsNow()`, which SIGKILLs each
+process GROUP inline. Don't "simplify" that back to relying on the deferred kills.
+- **`engine`** — the non-JSON lines the run parser discards (below), which is where a
+  crash-before-first-step says why.
+- **`pty`** — a `claude` that exits non-zero or suspiciously fast, plus its last output.
+- **`path`** — a tool `guiResolve()` could not find, and the PATH searched. A
+  Finder-launched app only searches `guiPathDirs`, so nvm/asdf/Volta installs miss.
+
+Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
+before any engine label is logged or embedded in an issue.
+
 ## Debugging "the run does nothing / no steps appear"
 
 The GUI shows "No steps yet — press Run" and "No live session" even after Run,
@@ -298,6 +343,16 @@ word-splits at the space (`/Applications/SI: No such file or directory`, exit 12
 every `qar` call in the packaged app); quoted it becomes one nonexistent command
 name. Split into one path per var, each expansion is a single word and quotes
 correctly. Don't recombine them.
+
+**The shim does NOT fall back to `pnpm` when `QAR_REPO_DIR` is set but `QAR_NODE`
+isn't.** That combination means a PACKAGED app whose `Resources/engine/qar.bundle.mjs`
+wasn't found (`resourcesDir()` returned `""`), and the `pnpm qar` fallback is for a
+DEV CHECKOUT — there, `node_modules` is a symlink into the `.app`, so pnpm dead-ends
+on a node-version or pinned-pnpm error that names nothing real. The shim exits 127
+with the actual cause instead. `withGuiPath()` correspondingly STRIPS inherited
+`QAR_NODE`/`QAR_BUNDLE` (it already stripped `PATH`/`QAR_REPO_DIR`): `QAR_REPO_DIR` is
+appended unconditionally while the pair is packaged-only, so without stripping, the
+two halves of the shim's contract can disagree.
 
 ## Validating by PR number (Jira card inference)
 

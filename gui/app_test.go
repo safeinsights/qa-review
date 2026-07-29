@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestControlLines(t *testing.T) {
@@ -885,4 +888,73 @@ func TestJiraCheckUnreachable(t *testing.T) {
 	if !strings.Contains(got.Detail, "can't reach") {
 		t.Fatalf("Detail = %q, want a reachability message", got.Detail)
 	}
+}
+
+// killGroupsNow must reap a process group SYNCHRONOUSLY, including children that
+// ignore SIGTERM. teardownSession only SIGTERMs and defers the SIGKILL to goroutines
+// that fire 2-3s later; at app quit the process exits before those run, orphaning
+// anything still alive. `npx` wrappers and the chrome-devtools-mcp telemetry watchdog
+// are exactly that shape — orphans pinned to long-dead CDP ports were found
+// accumulating on a real machine.
+func TestKillGroupsNowReapsSigtermIgnoringChild(t *testing.T) {
+	// A `sh` trap doesn't reliably survive under exec.Command, so use the test binary
+	// itself as the child: TestHelperIgnoresSigterm explicitly ignores SIGTERM, which
+	// is the behavior that has to be exercised.
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperIgnoresSigterm", "-test.v")
+	cmd.Env = append(os.Environ(), "GO_HELPER_IGNORE_SIGTERM=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting child: %v", err)
+	}
+	// Wait for the child to announce it is running: signalling before signal.Ignore
+	// takes effect kills it during test-binary startup and proves nothing.
+	if _, err := stdout.Read(make([]byte, 64)); err != nil {
+		t.Fatalf("child produced no output: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	pid := cmd.Process.Pid
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+
+	// A SIGTERM alone must NOT kill it — otherwise this test proves nothing.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-done:
+		t.Fatal("child died on SIGTERM; it cannot exercise the escalation path")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	killGroupsNow([]int{pid})
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		t.Fatal("killGroupsNow returned but the child survived; it would be orphaned at quit")
+	}
+}
+
+// No live session must not panic or stall the quit path.
+func TestKillGroupsNowNoSession(t *testing.T) {
+	start := time.Now()
+	killGroupsNow(nil)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("killGroupsNow(nil) took %s; quitting with no session must be instant", elapsed)
+	}
+}
+
+// TestHelperIgnoresSigterm is not a real test: it is the child process spawned by
+// TestKillGroupsNowReapsSigtermIgnoringChild. Guarded by an env var so it no-ops
+// during a normal run. It ignores SIGTERM and blocks, so only a SIGKILL ends it.
+func TestHelperIgnoresSigterm(t *testing.T) {
+	if os.Getenv("GO_HELPER_IGNORE_SIGTERM") != "1" {
+		t.Skip("helper process; not a standalone test")
+	}
+	signal.Ignore(syscall.SIGTERM)
+	time.Sleep(30 * time.Second)
 }

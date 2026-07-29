@@ -70,6 +70,13 @@ func withGuiPath() []string {
 		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "QAR_REPO_DIR=") {
 			continue
 		}
+		// Drop any inherited QAR_NODE/QAR_BUNDLE too. qarBinEnv() appends these only
+		// in a packaged app, but QAR_REPO_DIR is appended unconditionally — so without
+		// this an inherited pair could survive into a dev child (pointing at a stale or
+		// absent .app), and the two halves of the shim's contract would disagree.
+		if strings.HasPrefix(e, "QAR_NODE=") || strings.HasPrefix(e, "QAR_BUNDLE=") {
+			continue
+		}
 		// Strip CLAUDE_CODE_* markers so a `claude` we spawn in the PTY starts a
 		// FRESH session. Otherwise, if the GUI itself was launched from within a
 		// Claude Code session (dev), the child claude inherits CLAUDE_CODE_CHILD_SESSION
@@ -116,6 +123,11 @@ func guiResolve(name string) string {
 			return full
 		}
 	}
+	// Unresolved: we return the bare name, so the caller fails later with a generic
+	// "executable file not found" that names no search path. Record what we searched —
+	// for a Finder-launched app the answer is usually that the tool lives somewhere
+	// guiPathDirs doesn't cover (nvm/asdf/Volta).
+	logDiag("path", "unresolved tool %q; searched PATH=%s", name, guiPath(withGuiPath()))
 	return name
 }
 
@@ -172,8 +184,51 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown runs when the app is quitting — tear down any live authoring session
 // so we never orphan a Chrome (remote-debugging) or claude process.
+//
+// teardownSession() only SIGTERMs; the SIGKILL escalation runs in goroutines that
+// fire seconds later (escalateKill, pty.stop). On quit the process exits first, so
+// those never run and anything ignoring SIGTERM is orphaned — `npx` wrappers and
+// the chrome-devtools-mcp telemetry watchdog are exactly that shape, and orphans
+// pinned to long-dead CDP ports were observed accumulating on a real machine. Wait
+// out the escalation window so the kills actually land before we exit.
 func (a *App) shutdown(ctx context.Context) {
+	// Capture the PIDs BEFORE teardown: it clears sessionCmd and closes the PTY
+	// immediately, so app state stops being a usable signal the moment it returns.
+	pids := a.sessionPids()
 	a.StopSession()
+	killGroupsNow(pids)
+	logDiag("app", "shutdown complete (%d session group(s) reaped)", len(pids))
+}
+
+// sessionPids returns the PIDs of the live session processes (the engine/browser
+// session and the claude PTY), each a process-group leader.
+func (a *App) sessionPids() []int {
+	var pids []int
+	a.sessionMu.Lock()
+	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
+		pids = append(pids, a.sessionCmd.Process.Pid)
+	}
+	a.sessionMu.Unlock()
+	if pid := a.pty.pid(); pid != 0 {
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// killGroupsNow SIGKILLs each process group synchronously. teardownSession only
+// SIGTERMs and defers the SIGKILL to goroutines (escalateKill, pty.stop) that fire
+// seconds later — on quit the process exits first, so those never run and anything
+// ignoring SIGTERM is orphaned. Sending the SIGKILL inline is what makes it land.
+func killGroupsNow(pids []int) {
+	if len(pids) == 0 {
+		return
+	}
+	// A brief grace so a well-behaved child can finish its SIGTERM cleanup (Chrome
+	// flushing its profile) before the group is killed outright.
+	time.Sleep(300 * time.Millisecond)
+	for _, pid := range pids {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
 }
 
 // Preflight reports required external tools/apps that are missing, so the UI can
@@ -242,8 +297,30 @@ func (a *App) RunProcess(program string, args []string, cwd string) error {
 // Go (engineCmd) so the frontend never has to know about node/pnpm/bundle paths.
 func (a *App) RunEngine(args []string) error {
 	cmd := engineCmd(args...)
-	return a.streamCmd(cmd, "qar "+strings.Join(args, " "), isTrackedRun(args))
+	return a.streamCmd(cmd, "qar "+strings.Join(redactArgs(args), " "), isTrackedRun(args))
 }
+
+// redactArgs masks the value following a secret-bearing flag. The engine CLI takes
+// `--value <secret>` (set-secret), and the label built here is written to the
+// diagnostic log and embedded in issue reports — neither should ever carry a secret.
+// The GUI currently writes secrets through Go rather than this path, but RunEngine
+// takes arbitrary args from the frontend, so redact rather than depend on that.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i := 0; i < len(out)-1; i++ {
+		switch out[i] {
+		case "--value", "--password", "--token", "--api-token":
+			out[i+1] = "***"
+		}
+	}
+	return out
+}
+
+// maxStrayLines caps the non-JSON engine output retained per run for the diagnostic
+// log. A crash says why in its first few lines; a chatty successful run must not
+// flood the log.
+const maxStrayLines = 40
 
 // isTrackedRun reports whether an engine invocation is THE stoppable, one-at-a-time
 // run. `list` (and any other read-only query the UI fires on mount) must NOT be
@@ -328,6 +405,8 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
+	logMcp("authoring session: config=%s", mcpPath)
+	go probeMcpServers(cdpPort)
 
 	claudeArgs := []string{
 		"--permission-mode", "default",
@@ -500,7 +579,8 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 		return ValidationStart{}, err
 	}
 
-	mcpPath, err := writeValidationMcpConfig(cdpPort, a.readJiraConfig())
+	jiraCfg := a.readJiraConfig()
+	mcpPath, err := writeValidationMcpConfig(cdpPort, jiraCfg)
 	if err != nil {
 		a.StopSession()
 		return ValidationStart{}, err
@@ -508,6 +588,10 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
+	// Whether the Jira server is even present is a separate invisible failure: no token
+	// means no jira-atlassian server, which surfaces only as missing mcp__jira__* tools.
+	logMcp("validation session: config=%s jiraConfigured=%t", mcpPath, strings.TrimSpace(jiraCfg.Token) != "")
+	go probeMcpServers(cdpPort)
 
 	claudeArgs := []string{
 		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
@@ -623,6 +707,8 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
 	a.sessionMu.Lock()
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
+	logMcp("companion session: config=%s suite=%s", mcpPath, suite)
+	go probeMcpServers(cdpPort)
 
 	repo := repoDir()
 	if err := a.pty.start(a, repo, withGuiPath(), companionClaudeArgs(mcpPath, repo)); err != nil {
@@ -836,16 +922,27 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
 		// Untracked: nothing will write to stdin, so close our write end now.
 		_ = stdin.Close()
 	}
+	logDiag("engine", "start: %s", label)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // allow long NDJSON lines
+		// Retain the non-JSON lines the UI parser discards. stderr is folded into
+		// this stream, so an engine that dies before its first step line (a missing
+		// secret, a failed import) says WHY only here — the UI shows "No steps yet"
+		// and nothing else. This is the silent-crash path in CLAUDE.md.
+		var stray []string
 		for scanner.Scan() {
-			runtime.EventsEmit(a.ctx, "stdout-line", scanner.Text())
+			line := scanner.Text()
+			runtime.EventsEmit(a.ctx, "stdout-line", line)
+			if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "{") && len(stray) < maxStrayLines {
+				stray = append(stray, t)
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			// A scan error (e.g. a line exceeding the buffer) would otherwise be
 			// swallowed, leaving the UI thinking output ended cleanly. Surface it.
 			runtime.EventsEmit(a.ctx, "stdout-line", fmt.Sprintf("[qa-runner] output read error: %v", err))
+			logDiag("engine", "output read error: %v", err)
 		}
 		code := 0
 		if err := cmd.Wait(); err != nil {
@@ -854,6 +951,17 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
 			} else {
 				code = -1
 			}
+		}
+		if code != 0 {
+			logDiag("engine", "FAIL exit=%d: %s", code, label)
+			for _, s := range stray {
+				logDiag("engine", "  %s", s)
+			}
+			if len(stray) == 0 {
+				logDiag("engine", "  (no non-JSON output — engine died without a message)")
+			}
+		} else {
+			logDiag("engine", "ok exit=0: %s", label)
 		}
 		if track {
 			a.runMu.Lock()
@@ -962,6 +1070,7 @@ func jumpToControlLine(index int) string {
 // plus a non-zero exit, so a missing tool (e.g. pnpm/claude not on a GUI app's
 // PATH) shows up instead of the run silently doing nothing.
 func (a *App) emitSpawnFailure(program string, err error) {
+	logDiag("spawn", "FAIL %s: %v (PATH=%s)", program, err, guiPath(withGuiPath()))
 	runtime.EventsEmit(a.ctx, "stdout-line", fmt.Sprintf("[qa-runner] could not start %q: %v", program, err))
 	runtime.EventsEmit(a.ctx, "proc-exit", -1)
 }
@@ -1357,6 +1466,12 @@ func (a *App) git(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
+	// Only failures: sync/access flows run many git commands, and a green log is
+	// noise that buries the one line that matters.
+	if err != nil {
+		logDiag("git", "FAIL git %s (dir=%s): %v — %s",
+			strings.Join(args, " "), dir, err, firstLines(string(out), 3))
+	}
 	return string(out), err
 }
 
@@ -1602,6 +1717,12 @@ func (a *App) ReportIssue(title, note, tab, runState string) (string, error) {
 	b.WriteString("\n## Setup Doctor\n")
 	b.WriteString(doctorMarkdown(a.RunDoctor()))
 
+	// This app's failures are silent (see diagLogPath): they reach the user as an
+	// absence, not an error. Attach the log always — the user can't be expected to
+	// know its path, and the per-session state it describes is gone by teardown.
+	b.WriteString("\n## Diagnostic log\n")
+	b.WriteString(recentDiagLogMarkdown())
+
 	b.WriteString("\n## Debug info\n")
 	b.WriteString(a.debugInfo())
 
@@ -1725,7 +1846,29 @@ func runToolFull(name string, args ...string) (string, error) {
 	cmd := exec.Command(guiResolve(name), args...)
 	cmd.Env = withGuiPath()
 	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil {
+		logDiag("tool", "FAIL %s %s: %v — %s", name, strings.Join(args, " "), err, firstLines(trimmed, 3))
+	}
+	return trimmed, err
+}
+
+// firstLines flattens the first n non-empty lines of command output onto one line,
+// so a multi-line failure stays one greppable log entry.
+func firstLines(s string, n int) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			keep = append(keep, t)
+			if len(keep) == n {
+				break
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return "(no output)"
+	}
+	return strings.Join(keep, " | ")
 }
 
 // runTool is runToolFull narrowed to a single line: on success it returns the
