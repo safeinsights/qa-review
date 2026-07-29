@@ -1486,6 +1486,41 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 	return strings.TrimSpace(string(lock)) != want, nil
 }
 
+// CommitsBehind reports how many commits the cloned test repo is behind its
+// upstream — i.e. how much a successful Sync would pull. 0 means current.
+//
+// This exists to give the "sync skipped" banner a magnitude. Sync auto-runs at
+// startup but bails on a dirty or diverged working copy, and "sync skipped" alone
+// reads as a minor note you can dismiss. A clone tens of commits stale is not
+// minor: it breaks in ways that name neither the app nor the staleness — a stale
+// bin/qar hunting an env var the app no longer exports, stale skills, stale suites.
+// One observed case sat 48 commits behind for exactly this reason.
+//
+// Never returns an error, and returns 0 (not a guess) whenever the count can't be
+// established — offline, no upstream, unparseable output. A staleness warning that
+// cries wolf when it simply couldn't fetch is worse than one that stays quiet, and
+// this must never block the sync path it annotates.
+func (a *App) CommitsBehind(cwd string) int {
+	dir := repoDir()
+	// Compare against freshly-fetched refs; a stale origin/* would under-report.
+	if _, err := a.git(dir, "fetch", "--quiet"); err != nil {
+		return 0
+	}
+	upstream, err := a.git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if err != nil {
+		return 0
+	}
+	out, err := a.git(dir, "rev-list", "--count", "HEAD.."+strings.TrimSpace(upstream))
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
 func (a *App) git(dir string, args ...string) (string, error) {
 	cmd := exec.Command(guiResolve("git"), args...)
 	cmd.Dir = dir

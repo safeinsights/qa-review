@@ -176,6 +176,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
+  `SyncButton` auto-syncs on mount, so a clone normally can't drift — **unless the
+  sync keeps getting skipped**, which is silent by design (a dirty working copy is
+  normal while authoring a suite). One clone sat **48 commits behind** that way, and
+  the resulting failures named neither the app nor the staleness: the stale `bin/qar`
+  hunted `QAR_BIN`, a var the app had stopped exporting in favour of
+  `QAR_NODE`/`QAR_BUNDLE`. So the skip banner now carries a magnitude from
+  `CommitsBehind()` (`gui/app.go`): a `git fetch` plus `rev-list --count HEAD..@{u}`,
+  asked for **only** when a sync was skipped. It returns **0 rather than a guess**
+  whenever the count is unknowable (offline, no upstream) — a staleness warning that
+  fires on every offline launch teaches people to ignore the one that matters.
 - **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
   `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
   key**, not by row, so a user with duplicate entries (`addMember` dedupes on name

@@ -1057,3 +1057,107 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 		t.Fatalf("PATH puts /usr/local/bin ahead of Homebrew, so npx picks the wrong node: %q", pathVal)
 	}
 }
+
+// gitAt runs a git command in dir, failing the test on error. Commits are made with
+// -c flags rather than a global config so the test never depends on (or writes) the
+// developer's git identity.
+func gitAt(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	full := append([]string{
+		"-c", "user.email=test@example.com",
+		"-c", "user.name=Test",
+		"-c", "commit.gpgsign=false",
+	}, args...)
+	cmd := exec.Command("git", full...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s (dir=%s) failed: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return string(out)
+}
+
+// commitFile writes a file and commits it, so a clone can be pushed forward.
+func commitFile(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, dir, "add", name)
+	gitAt(t, dir, "commit", "-m", "add "+name)
+}
+
+// CommitsBehind must report the REAL gap against a freshly-fetched upstream. This is
+// what gives the "sync skipped" banner its urgency: the clone that motivated this sat
+// 48 commits behind while the banner said only "sync skipped".
+func TestCommitsBehindCountsUpstreamGap(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	upstream := filepath.Join(root, "up.git")
+	gitAt(t, root, "init", "--bare", "-b", "main", upstream)
+
+	// The clone under test, seeded with one commit so it has a branch to track.
+	clone := filepath.Join(root, "clone")
+	gitAt(t, root, "clone", upstream, clone)
+	commitFile(t, clone, "seed.txt", "seed")
+	gitAt(t, clone, "push", "-u", "origin", "main")
+
+	a := &App{}
+	t.Setenv("QAR_REPO_DIR", clone)
+
+	if got := a.CommitsBehind(""); got != 0 {
+		t.Fatalf("CommitsBehind() = %d on an up-to-date clone, want 0", got)
+	}
+
+	// Advance upstream from a SECOND clone, leaving the first one behind — the exact
+	// shape of a stale test repo while the app itself has moved on.
+	other := filepath.Join(root, "other")
+	gitAt(t, root, "clone", upstream, other)
+	for _, n := range []string{"a.txt", "b.txt", "c.txt"} {
+		commitFile(t, other, n, n)
+	}
+	gitAt(t, other, "push", "origin", "main")
+
+	// The clone's own origin/* is stale until CommitsBehind fetches; that fetch is
+	// the point of the method, so no fetch is done here on its behalf.
+	if got := a.CommitsBehind(""); got != 3 {
+		t.Fatalf("CommitsBehind() = %d, want 3 after upstream gained 3 commits", got)
+	}
+
+	// A dirty working copy is what makes Sync skip, so the count must still be
+	// reported in exactly that state — otherwise the banner stays silent when it
+	// matters most.
+	if err := os.WriteFile(filepath.Join(clone, "seed.txt"), []byte("edited"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.CommitsBehind(""); got != 3 {
+		t.Fatalf("CommitsBehind() = %d with a dirty working copy, want 3", got)
+	}
+}
+
+// Whenever the gap can't be established, CommitsBehind must return 0 rather than
+// guess. A staleness banner that fires on a failed fetch would cry wolf on every
+// offline launch, training people to ignore the one warning that matters.
+func TestCommitsBehindQuietWhenUnknown(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	a := &App{}
+
+	// Not a git repo at all: every git call fails.
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+	if got := a.CommitsBehind(""); got != 0 {
+		t.Fatalf("CommitsBehind() = %d outside a git repo, want 0", got)
+	}
+
+	// A real repo with NO upstream configured: fetch and/or @{u} fail.
+	noUpstream := t.TempDir()
+	gitAt(t, noUpstream, "init", "-b", "main")
+	commitFile(t, noUpstream, "only.txt", "only")
+	t.Setenv("QAR_REPO_DIR", noUpstream)
+	if got := a.CommitsBehind(""); got != 0 {
+		t.Fatalf("CommitsBehind() = %d with no upstream, want 0", got)
+	}
+}

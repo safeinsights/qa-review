@@ -1,7 +1,18 @@
 import { Button } from '@mantine/core'
 import { useEffect, useState } from 'react'
-import { isInDrift, rekey, resetAndSync, sync } from '../lib/ipc'
+import { commitsBehind, isInDrift, rekey, resetAndSync, sync } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
+
+// A skipped sync is only worth acting on if you know what it cost you. "Sync
+// skipped" alone reads as dismissable; the commit count is what makes it urgent,
+// because a stale clone fails without ever mentioning staleness. 0 means current
+// or undeterminable (offline), so the count is simply omitted.
+function skippedBannerText(behind: number): string {
+    const base = 'Sync skipped — working copy has uncommitted edits or diverged.'
+    if (behind <= 0) return base
+    const plural = behind === 1 ? '' : 's'
+    return `${base} Your test repo is ${behind} commit${plural} behind — until it syncs, stale suites, skills and the qar shim can fail in ways that never mention staleness.`
+}
 
 export function SyncButton({
     extraActions,
@@ -13,10 +24,22 @@ export function SyncButton({
     const [status, setStatus] = useState('')
     const [syncState, setSyncState] = useState('')
     const [drift, setDrift] = useState(false)
+    const [behind, setBehind] = useState(0)
+
+    // Only asked for when a sync was skipped: it costs a `git fetch`, and after a
+    // successful pull the answer is always 0.
+    const measureBehind = async () => {
+        try {
+            setBehind(await commitsBehind())
+        } catch {
+            setBehind(0)
+        }
+    }
 
     const syncAction = useAsyncAction(async () => {
         setStatus('Syncing…')
         setDrift(false)
+        setBehind(0)
         try {
             const result = await sync()
             setSyncState(result)
@@ -30,8 +53,10 @@ export function SyncButton({
                 }
             } else if (result === 'skipped-dirty') {
                 setStatus('Local edits present — sync skipped.')
+                await measureBehind()
             } else if (result === 'skipped-diverged') {
                 setStatus('Local branch diverged — sync skipped.')
+                await measureBehind()
             } else {
                 setStatus(result)
             }
@@ -55,6 +80,7 @@ export function SyncButton({
             setSyncState(result)
             if (result === 'synced') {
                 setStatus('Up to date — new suites are ready.')
+                setBehind(0)
                 onSynced?.() // refresh the suite list after a reset+sync too
                 try {
                     setDrift(await isInDrift())
@@ -114,7 +140,7 @@ export function SyncButton({
             </div>
             {needsReset ? (
                 <Banner
-                    text="Sync skipped — working copy has uncommitted edits or diverged."
+                    text={skippedBannerText(behind)}
                     actionLabel="Reset to clean & sync"
                     onClick={() => void resetAction.run()}
                     busy={busy}
