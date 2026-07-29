@@ -160,9 +160,14 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
-- **Revocation** is manual: remove the entry from `keyring.json`, run `qar rekey`,
-  land via PR. A revoked user can still read OLD secrets they already pulled —
-  rotate the actual password/MFA seed (and `set-secret` it) if truly sensitive.
+- **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
+  `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
+  key**, not by row, so a user with duplicate entries (`addMember` dedupes on name
+  only, so re-running `request-access` with different `--name` spellings appends
+  rather than replaces) doesn't keep a working key behind. Refuses to remove the
+  last recipient, which would leave the secrets unrecoverable.
+  A revoked user can still read OLD secrets they already pulled — rotate the actual
+  password/MFA seed (and `set-secret` it) if truly sensitive.
 
 Trust is enforced by **GitHub** (who can merge keyring PRs), not by the app.
 
@@ -263,11 +268,20 @@ Build it:
 engine ships as a bundle), and `pnpm qar` alone wouldn't work in the Claude PTY
 there. So the committed **`bin/qar`** shim (on PATH) dispatches to the bundled engine
 or `pnpm qar` (dev). `qarBinValue()` (`gui/paths.go`) is the single source of the
-`QAR_BIN` string (= `"<node> --import tsx <bundle>"`, packaged only); `withGuiPath()`
-(`gui/app.go`) exports it AND prepends `<repoDir()>/bin` to PATH, so a bare `qar
-<args>` works in the Claude sessions (authoring/validation/companion) in both dev and
-the packaged app. The skills therefore invoke bare **`qar <args>`** — not `pnpm qar`
-or `$QAR_BIN`. The `Bash(qar:*)` allowlist entry (`gui/app.go`) matches this shim.
+engine location, exported as **two** vars — `QAR_NODE` and `QAR_BUNDLE` (packaged
+only); `withGuiPath()` (`gui/app.go`) exports them AND prepends `<repoDir()>/bin` to
+PATH, so a bare `qar <args>` works in the Claude sessions (authoring/validation/
+companion) in both dev and the packaged app. The skills therefore invoke bare **`qar
+<args>`** — not `pnpm qar`, and not the raw vars. The `Bash(qar:*)` allowlist entry
+(`gui/app.go`) matches this shim.
+
+They are two vars rather than one `"<node> --import tsx <bundle>"` command string
+**because the installed app path contains a space** (`/Applications/SI QA
+Runner.app/…`). A packed string leaves the shim no good option: unquoted it
+word-splits at the space (`/Applications/SI: No such file or directory`, exit 127 on
+every `qar` call in the packaged app); quoted it becomes one nonexistent command
+name. Split into one path per var, each expansion is a single word and quotes
+correctly. Don't recombine them.
 
 ## Validating by PR number (Jira card inference)
 
@@ -377,7 +391,10 @@ through the issue attachment endpoint only.
 - `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
-  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`/`QAR_BIN`)
+  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine via
+  the `bin/qar` shim)
+- `scripts/revoke-access.sh "<name>" [--no-pr] [--yes]` — remove a user from the
+  keyring, rekey to the survivors, and open a revocation PR
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)

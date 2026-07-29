@@ -59,7 +59,7 @@ func withGuiPath() []string {
 		}
 	}
 	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
-	// (bin/qar), which dispatches to QAR_BIN (packaged) or `pnpm qar` (dev). This is
+	// (bin/qar), which dispatches to QAR_NODE/QAR_BUNDLE (packaged) or `pnpm qar` (dev). This is
 	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
 	if binDir := filepath.Join(repoDir(), "bin"); !strings.Contains(path, binDir) {
 		path = binDir + ":" + path
@@ -79,12 +79,10 @@ func withGuiPath() []string {
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
-	// and export QAR_BIN (packaged only) so the `bin/qar` shim — and thus a bare `qar`
-	// in the Claude PTY — runs the bundled engine where there is no `pnpm`.
+	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
+	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
-	if qb := qarBinValue(); qb != "" {
-		out = append(out, "QAR_BIN="+qb)
-	}
+	out = append(out, qarBinEnv()...)
 	return out
 }
 
@@ -472,9 +470,23 @@ type ValidationStart struct {
 // we infer the card from it up front so the Verdict button works for the whole
 // session; if inference fails the session still starts and the prompt asks Claude
 // to identify the ticket from the PR.
-func (a *App) StartValidationSession(env, pr, jiraCard, instructions string) (ValidationStart, error) {
+//
+// With a PR, the deployment checks must be green first — see the ciContextPrefix
+// gate below. `force` skips that gate for a tester who has read the warning and
+// wants to proceed anyway.
+func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, force bool) (ValidationStart, error) {
 	if strings.TrimSpace(pr) == "" && strings.TrimSpace(jiraCard) == "" {
 		return ValidationStart{}, errors.New("a PR number or a Jira card is required")
+	}
+	// Gate BEFORE spawning anything: validating against a preview URL that CI hasn't
+	// finished building tests the previous commit (or 404s), and a green-looking pass
+	// on stale code is worse than no validation at all. Re-checked here rather than
+	// trusting the UI's probe because the state can change between the two, and
+	// because a session can be started by a caller that never probed.
+	if !force {
+		if status := prCIStatus(pr); status.Blocking() {
+			return ValidationStart{}, errors.New(status.Warning)
+		}
 	}
 	// Infer BEFORE spawning the browser: a failed lookup is then just a missing
 	// card, not an orphaned session we'd have to tear down.
@@ -1715,6 +1727,177 @@ func inferJiraCard(pr string) string {
 		return ""
 	}
 	return inferJiraCardFrom(v.Title, v.HeadRefName, v.Body)
+}
+
+// ciContextPrefix selects the checks that gate a validation. The Jenkins statuses
+// (continuous-integration/jenkins/pr-head, .../branch) are the ones that BUILD AND
+// DEPLOY the PR preview — until they finish green, prN.qa.safeinsights.org either
+// doesn't exist or is still serving the PREVIOUS commit's build. Validating then
+// tests code that isn't the code under review. The GitHub Actions checks (lint,
+// unit, e2e, CodeQL) are deliberately NOT gated on: they don't affect what's
+// deployed, and a failing lint job shouldn't block a tester from looking at a
+// feature that's live on the preview.
+const ciContextPrefix = "continuous-integration/"
+
+// PrCIStatus is the verdict on a PR's deployment checks. State is one of:
+// "ok" (all matching checks succeeded), "pending" (at least one still running),
+// "failed" (at least one concluded badly), "none" (the PR has no matching check
+// yet — Jenkins hasn't reported), or "unknown" (we couldn't ask GitHub).
+// Warning is a human sentence for the UI; empty when State is "ok".
+type PrCIStatus struct {
+	State   string   `json:"state"`
+	Warning string   `json:"warning"`
+	Checks  []string `json:"checks"`
+}
+
+// Blocking reports whether this status should stop a validation from starting.
+// "unknown" does NOT block: an offline laptop or an unauthenticated gh is our
+// problem, not evidence the deployment is stale, and blocking on it would strand a
+// tester with no way forward. "none" DOES block — Jenkins not having reported is
+// the exact case where the preview URL isn't built yet.
+func (s PrCIStatus) Blocking() bool {
+	return s.State == "pending" || s.State == "failed" || s.State == "none"
+}
+
+// ciRollupEntry is the subset of `gh pr view --json statusCheckRollup` we read.
+// The rollup mixes two GraphQL types: CheckRun (GitHub Actions — Status +
+// Conclusion) and StatusContext (third-party commit statuses like Jenkins —
+// Context + State, with NO status field). The Jenkins checks we gate on are
+// StatusContexts, so State is what carries their result.
+type ciRollupEntry struct {
+	TypeName   string `json:"__typename"`
+	Name       string `json:"name"`
+	Context    string `json:"context"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+// label is the check's display name across both rollup types.
+func (e ciRollupEntry) label() string {
+	if e.Context != "" {
+		return e.Context
+	}
+	return e.Name
+}
+
+// pending reports whether the check hasn't reached a verdict yet. A CheckRun is
+// pending until Status is COMPLETED; a StatusContext is pending while its State is
+// PENDING (Jenkins sets that when it accepts the build and again while it runs).
+func (e ciRollupEntry) pending() bool {
+	if e.TypeName == "CheckRun" {
+		return !strings.EqualFold(e.Status, "COMPLETED")
+	}
+	return strings.EqualFold(e.State, "PENDING") || strings.EqualFold(e.State, "EXPECTED")
+}
+
+// succeeded reports a green verdict. SKIPPED and NEUTRAL count as green: a check
+// that deliberately didn't run is not a reason to withhold the preview.
+func (e ciRollupEntry) succeeded() bool {
+	result := e.Conclusion
+	if result == "" {
+		result = e.State
+	}
+	return strings.EqualFold(result, "SUCCESS") ||
+		strings.EqualFold(result, "SKIPPED") ||
+		strings.EqualFold(result, "NEUTRAL")
+}
+
+// classifyCIRollup reduces a PR's rollup to a single verdict over the checks whose
+// name starts with ciContextPrefix. Worst state wins — one pending check among ten
+// green ones still means the deployment is mid-flight.
+//
+// GitHub returns one entry PER RUN, so a re-run leaves several entries with the
+// SAME name; we keep the LAST of each name because the rollup is in run order and
+// the latest run is the one that reflects the current commit. Without that, an old
+// failed attempt would veto a passing re-run forever.
+func classifyCIRollup(entries []ciRollupEntry) PrCIStatus {
+	latest := map[string]ciRollupEntry{}
+	var order []string
+	for _, e := range entries {
+		name := e.label()
+		if !strings.HasPrefix(name, ciContextPrefix) {
+			continue
+		}
+		if _, seen := latest[name]; !seen {
+			order = append(order, name)
+		}
+		latest[name] = e
+	}
+
+	if len(order) == 0 {
+		return PrCIStatus{
+			State: "none",
+			Warning: "No " + ciContextPrefix + "* check has reported on this PR yet. " +
+				"The preview deployment is probably not built — wait for CI, then start again.",
+		}
+	}
+
+	var names, pending, failed []string
+	for _, name := range order {
+		names = append(names, name)
+		switch e := latest[name]; {
+		case e.pending():
+			pending = append(pending, name)
+		case !e.succeeded():
+			failed = append(failed, name)
+		}
+	}
+
+	switch {
+	case len(failed) > 0:
+		return PrCIStatus{
+			State: "failed",
+			Warning: "CI failed on this PR (" + strings.Join(failed, ", ") + "). " +
+				"The preview deployment may be missing or stale, so validating now " +
+				"would test the wrong code.",
+			Checks: names,
+		}
+	case len(pending) > 0:
+		return PrCIStatus{
+			State: "pending",
+			Warning: "CI is still running on this PR (" + strings.Join(pending, ", ") + "). " +
+				"The preview deployment isn't updated yet — wait for it to finish, " +
+				"then start again.",
+			Checks: names,
+		}
+	}
+	return PrCIStatus{State: "ok", Checks: names}
+}
+
+// prCIStatus asks GitHub for PR `pr`'s check rollup and classifies it. A lookup
+// failure yields "unknown", which is non-blocking (see Blocking).
+func prCIStatus(pr string) PrCIStatus {
+	pr = strings.TrimSpace(pr)
+	if pr == "" {
+		return PrCIStatus{State: "ok"}
+	}
+	out, err := runToolFull("gh", "pr", "view", pr, "--repo", managementAppSlug,
+		"--json", "statusCheckRollup")
+	if err != nil {
+		return PrCIStatus{
+			State:   "unknown",
+			Warning: "Could not read CI status for PR " + pr + " from GitHub: " + out,
+		}
+	}
+	var v struct {
+		StatusCheckRollup []ciRollupEntry `json:"statusCheckRollup"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return PrCIStatus{
+			State:   "unknown",
+			Warning: "Could not parse the CI status GitHub returned for PR " + pr + ".",
+		}
+	}
+	return classifyCIRollup(v.StatusCheckRollup)
+}
+
+// CheckPrCI is the UI-facing probe: the Validation tab calls it as the PR input
+// settles so a tester sees a warning BEFORE pressing Start, rather than having the
+// start call rejected. StartValidationSession re-checks (see there) — this is the
+// early warning, not the gate.
+func (a *App) CheckPrCI(pr string) PrCIStatus {
+	return prCIStatus(pr)
 }
 
 // accessPROpen reports whether an access PR opened BY THIS USER (head branch
