@@ -138,6 +138,21 @@ func TestWithGuiPathDropsInheritedQarBin(t *testing.T) {
 	}
 }
 
+// isolateAppSupport points appSupportDir() at a per-test temp dir so tests that
+// write the diagnostic log neither see each other's entries nor touch the real one.
+//
+// Redirecting HOME alone is NOT enough: os.UserConfigDir() prefers $XDG_CONFIG_HOME
+// on Unix and only falls back to $HOME/.config. CI sets XDG_CONFIG_HOME, so a
+// HOME-only override left every test writing to one shared real path — which failed
+// TestRecentDiagLogMarkdownAbsent (it found another test's entries) and, worse, wrote
+// into the developer's actual config dir on Linux.
+func isolateAppSupport(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+}
+
 // readMcpServers reads a written MCP config file back into its mcpServers map.
 func readMcpServers(t *testing.T, path string) map[string]map[string]any {
 	t.Helper()
@@ -213,7 +228,7 @@ func TestWriteValidationMcpConfigNoJira(t *testing.T) {
 // logDiag must write a timestamped, category-tagged line that recentDiagLogMarkdown
 // can read back. HOME is redirected so the test never touches the real log.
 func TestDiagLogRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateAppSupport(t)
 
 	logDiag("mcp", "chrome-devtools exited: %v", "boom")
 
@@ -232,7 +247,7 @@ func TestDiagLogRoundTrip(t *testing.T) {
 // An absent log must degrade to an explanatory note, not an error or empty section —
 // an issue report always renders this block.
 func TestRecentDiagLogMarkdownAbsent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateAppSupport(t)
 	if md := recentDiagLogMarkdown(); !strings.Contains(md, "no diagnostic log") {
 		t.Fatalf("recentDiagLogMarkdown() with no file = %q, want an explanatory note", md)
 	}
@@ -266,7 +281,7 @@ func TestProbeMcpServersLogsUnreachableBrowser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("probe spawns npx and waits for it; skipped under -short")
 	}
-	t.Setenv("HOME", t.TempDir())
+	isolateAppSupport(t)
 
 	probeMcpServers(59999) // nothing is listening here
 
@@ -277,6 +292,12 @@ func TestProbeMcpServersLogsUnreachableBrowser(t *testing.T) {
 	got := string(data)
 	if !strings.Contains(got, "session start: cdpPort=59999") {
 		t.Fatalf("log missing the session header: %q", got)
+	}
+	// Without npx the probe returns before reaching the CDP check — a valid outcome
+	// (CI runners and containers often lack node), and it must still say WHY. Asserting
+	// the CDP line unconditionally made this fail wherever npx is absent.
+	if strings.Contains(got, "npx not found") {
+		return
 	}
 	// The dead browser must be called out separately from the MCP server, since
 	// conflating the two is what sent the original bug report down the wrong path.
@@ -326,7 +347,7 @@ func TestProbeMcpServersLeavesNoOrphans(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns npx and waits out the probe window; skipped under -short")
 	}
-	t.Setenv("HOME", t.TempDir())
+	isolateAppSupport(t)
 
 	before := countMcpProcs()
 	probeMcpServers(59998) // nothing listening; the server itself still starts
