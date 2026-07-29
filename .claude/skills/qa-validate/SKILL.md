@@ -133,7 +133,7 @@ values back onto the account. It prompts before writing.
 
 ## Posting findings to Jira (button-driven or on request)
 When the user presses **Validated** / **Rejected** (or asks you in the session):
-1. Capture a screenshot of the relevant screen(s) with the chrome-devtools MCP,
+1. Capture a screenshot of **all relevant screen(s)** with the chrome-devtools MCP,
    saving to **`.tmp/`** in the repo (create it with `mkdir -p .tmp` if needed).
    Everything you write during a session — screenshots, the verdict `.md` below —
    goes there: it's gitignored, so session output never shows up as untracked noise
@@ -155,6 +155,52 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    `[text](url)` links all render. (Do NOT use the MCP's `jira_add_comment` for a
    comment with screenshots: it can only emit text, so image syntax renders as
    LITERAL TEXT — upstream bug mcp-atlassian#608.)
+
+   **Follow this template.** Every validation comment uses the same sections so the
+   team can scan a card's history without re-reading prose, and so the verdict is
+   never ambiguous:
+
+   ```markdown
+   ## VALIDATED ✅
+   <!-- or: REJECTED ❌ -->
+
+   Validated on **<env>** as a **<role>**, against PR [#<n>](<pr-url>).
+
+   **Setup / replication steps followed:** <the state you had to build to get to
+   the thing under test — created a study, submitted a decision, etc.>
+
+   ### Acceptance criteria
+
+   **1. <criterion, quoted from the ticket> — PASS**
+   <what you observed that proves it: the exact text, the measured value, the
+   state transition.>
+
+   **2. <criterion> — FAIL**
+   <what you observed instead, and why it doesn't satisfy the criterion.>
+
+   {{image:1}}
+
+   ### Also observed
+   <Anything true but outside the criteria: extra changes the PR made, or a
+   concern that is NOT blocking. Say explicitly that it isn't a failure. Omit
+   this section when there's nothing.>
+
+   ### Verdict
+   <One or two sentences: which criteria held, on which env, and the call.>
+   **VALIDATED.**
+   ```
+
+   Rules for filling it in:
+   - **One numbered entry per acceptance criterion, in the ticket's order**, each
+     tagged `— PASS` or `— FAIL`. A criterion you could NOT test gets its own
+     `— NOT TESTED` entry saying why; never silently drop one.
+   - **Evidence, not assertion.** "Reads: *'<exact string>'*" or "measured
+     **40.00px**" — not "looks correct".
+   - **Any FAIL makes the whole verdict REJECTED**, and the heading must say so.
+   - Place `{{image:N}}` next to the criterion it evidences; screenshots with no
+     specific home just append after the body.
+   - Keep "Also observed" strictly separate from the criteria — a non-blocking
+     note must never read as a failure.
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
