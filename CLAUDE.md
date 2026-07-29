@@ -263,11 +263,44 @@ Build it:
 engine ships as a bundle), and `pnpm qar` alone wouldn't work in the Claude PTY
 there. So the committed **`bin/qar`** shim (on PATH) dispatches to the bundled engine
 or `pnpm qar` (dev). `qarBinValue()` (`gui/paths.go`) is the single source of the
-`QAR_BIN` string (= `"<node> --import tsx <bundle>"`, packaged only); `withGuiPath()`
-(`gui/app.go`) exports it AND prepends `<repoDir()>/bin` to PATH, so a bare `qar
-<args>` works in the Claude sessions (authoring/validation/companion) in both dev and
-the packaged app. The skills therefore invoke bare **`qar <args>`** — not `pnpm qar`
-or `$QAR_BIN`. The `Bash(qar:*)` allowlist entry (`gui/app.go`) matches this shim.
+`QAR_BIN` string (= `"'<node>' --import tsx '<bundle>'"`, packaged only);
+`withGuiPath()` (`gui/app.go`) exports it AND prepends `<repoDir()>/bin` to PATH, so a
+bare `qar <args>` works in the Claude sessions (authoring/validation/companion) in both
+dev and the packaged app. The skills therefore invoke bare **`qar <args>`** — not
+`pnpm qar` or `$QAR_BIN`. The `Bash(qar:*)` allowlist entry (`gui/app.go`) matches this
+shim.
+
+Its two paths are **shell-quoted** (`shellQuote()`), so the one consumer that reads
+`QAR_BIN` — `bin/qar` — must **`eval`** the value, never word-split it. The packaged
+app lives under `/Applications/SI QA Review.app/…`, so an unquoted `exec ${QAR_BIN}`
+split on that space and died with `/Applications/SI: No such file or directory`,
+breaking every `qar` call (and so every Claude session) in the shipped app.
+
+The shim tries **three** tiers, in order: `$QAR_BIN`; then `pnpm qar`; then an
+installed `.app`'s bundle, rediscovered without `QAR_BIN`. That third tier exists for
+the case the first two miss — **the packaged app's clone opened outside the GUI**
+(a plain terminal, or `wails dev`, where `qarBinValue()` returns `""`). There, `pnpm
+qar` cannot work either: the clone's `node_modules` is a **symlink into
+`<Resources>/engine/node_modules`**, the app's runtime-only tree, which carries tsx
+and Playwright but none of the repo's own deps — so `tsx bin/qar.ts` dies on
+`import 'age-encryption'`. Hence the tier-2 gate is not `command -v pnpm` but *"pnpm
+answers `--version`"* **and** *"`node_modules/age-encryption` exists"* — a broken pnpm
+release (v11.13.0 shipped without a working binary) passes the former check and fails
+the latter. Tier 3 imports tsx by **absolute** path (`…/tsx/dist/loader.mjs`, its `.`
+export) rather than the bare `tsx` that `QAR_BIN` uses, because a bare specifier
+resolves against cwd, which need not be the repo. `QAR_RESOURCES` overrides discovery.
+Every tier preserves the caller's cwd — args like `--body-file .tmp/x.md` are relative
+to it.
+
+**`scripts/approve-access.sh` therefore does NOT decide how to run the engine** — it
+calls `bin/qar` and lets the shim choose. It used to duplicate the guess
+(`QAR="${QAR_BIN:-pnpm qar}"`) and so broke in the packaged app's own clone, where
+neither branch works. Note the quoting flips with that change: a multi-token
+`${QAR_BIN:-pnpm qar}` had to be `eval`'d/unquoted, but a single shim path must be
+**quoted** (`"$QAR" rekey`) — this repo's own path contains a space
+(`…/Application Support/…`), and under `bash` an unquoted `$QAR` splits it into
+`/Users/…/Library/Application`. Any future consumer should call the shim, not re-derive
+the dispatch.
 
 ## Validating by PR number (Jira card inference)
 
@@ -377,7 +410,8 @@ through the issue attachment endpoint only.
 - `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
-  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`/`QAR_BIN`)
+  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine through
+  the `bin/qar` shim)
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)

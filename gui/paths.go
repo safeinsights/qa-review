@@ -222,12 +222,25 @@ func devSourceRepo() string {
 	return ""
 }
 
+// shellQuote wraps s in single quotes so it survives the shell word-splitting that
+// QAR_BIN's consumers perform. Load-bearing for the packaged app: its paths live
+// under "/Applications/SI QA Review.app/…", and an unquoted value word-splits on
+// that space into an exec of "/Applications/SI". A single quote inside s is closed,
+// escaped, and reopened ('\'') — the only character single quotes can't carry.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // qarBinValue is the single source of truth for the QAR_BIN string — the multi-token
 // command that runs the bundled engine in a packaged .app
-// ("<node> --import tsx <bundle>"). It is exported both to the engine subprocess
+// ("'<node>' --import tsx '<bundle>'"). It is exported both to the engine subprocess
 // (engineCmd) and to the Claude PTY env (withGuiPath), where the `bin/qar` shim
 // consumes it so a bare `qar …` works. Under `wails dev` there is no Resources
 // bundle, so it returns "" and the shim falls back to `pnpm qar`.
+//
+// The paths are shell-quoted because every consumer is a shell that has to split
+// the string back into tokens (bin/qar, scripts/approve-access.sh). They `eval` it
+// rather than word-splitting it, so the quoting round-trips whitespace intact.
 func qarBinValue() string {
 	res := resourcesDir()
 	if res == "" {
@@ -235,7 +248,7 @@ func qarBinValue() string {
 	}
 	node := filepath.Join(res, "runtime", "node")
 	bundle := filepath.Join(res, "engine", "qar.bundle.mjs")
-	return node + " --import tsx " + bundle
+	return shellQuote(node) + " --import tsx " + shellQuote(bundle)
 }
 
 // engineCmd builds the command that runs the bundled engine with the given qar

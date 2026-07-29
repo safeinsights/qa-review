@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,6 +46,69 @@ func TestQarBinValueEmptyInDevMode(t *testing.T) {
 	}
 	if got := qarBinValue(); got != "" {
 		t.Fatalf("dev-mode qarBinValue()=%q, want empty", got)
+	}
+}
+
+// shellQuote must protect the characters that would otherwise be re-split when
+// QAR_BIN's shell consumers eval it.
+func TestShellQuote(t *testing.T) {
+	cases := map[string]string{
+		"/Applications/SI QA Review.app/Contents/Resources/runtime/node": `'/Applications/SI QA Review.app/Contents/Resources/runtime/node'`,
+		"/plain/path": `'/plain/path'`,
+		"/it's/here":  `'/it'\''s/here'`,
+	}
+	for in, want := range cases {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+// The committed bin/qar shim must dispatch to QAR_BIN even when its paths contain
+// spaces — the packaged app always does ("/Applications/SI QA Review.app/…").
+// Regression: the shim word-split an unquoted QAR_BIN and died with
+// "/Applications/SI: No such file or directory", breaking every `qar` call (and so
+// every Claude session) in the packaged app.
+//
+// Runs the REAL shim against a stub interpreter placed under a directory whose name
+// contains a space, and asserts the stub received the whole argv intact.
+func TestQarShimDispatchesWithSpacesInQarBin(t *testing.T) {
+	shim, err := filepath.Abs(filepath.Join("..", "bin", "qar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(shim); err != nil {
+		t.Skipf("bin/qar shim not present: %v", err)
+	}
+
+	resources := filepath.Join(t.TempDir(), "SI QA Review.app", "Contents", "Resources")
+	runtime := filepath.Join(resources, "runtime")
+	if err := os.MkdirAll(runtime, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubNode := filepath.Join(runtime, "node")
+	if err := os.WriteFile(stubNode, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(resources, "engine", "qar.bundle.mjs")
+
+	cmd := exec.Command("bash", shim, "run", "--suite", "create study")
+	cmd.Env = append(os.Environ(),
+		"QAR_BIN="+shellQuote(stubNode)+" --import tsx "+shellQuote(bundle))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shim failed: %v\noutput: %s", err, out)
+	}
+
+	want := []string{"--import", "tsx", bundle, "run", "--suite", "create study"}
+	got := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("shim passed %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("shim arg %d = %q, want %q (full: %#v)", i, got[i], want[i], got)
+		}
 	}
 }
 

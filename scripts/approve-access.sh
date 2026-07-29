@@ -12,8 +12,8 @@
 #   scripts/approve-access.sh 10
 #   scripts/approve-access.sh 10 --no-merge      # rekey + push, but leave merging to you
 #
-# Honors QAR_REPO_DIR (the packaged app's clone) and QAR_BIN (the bundled engine);
-# falls back to this checkout + `pnpm qar` for dev.
+# Honors QAR_REPO_DIR (the packaged app's clone), falling back to this checkout. How
+# to RUN the engine is delegated to the `bin/qar` shim rather than decided here.
 set -euo pipefail
 
 PR=""
@@ -40,8 +40,11 @@ CHECKOUT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
 # The clone to operate on: the app's user-writable clone if set, else this checkout.
 REPO="${QAR_REPO_DIR:-$CHECKOUT}"
-# How to run the engine: the bundled node+bundle if the app exported it, else pnpm.
-QAR="${QAR_BIN:-pnpm qar}"
+# How to run the engine is the shim's problem, not ours: it already picks between
+# $QAR_BIN, `pnpm qar`, and an installed .app's bundle, and it knows the cases where
+# `pnpm qar` looks available but cannot work. Duplicating a "${QAR_BIN:-pnpm qar}"
+# guess here is what made this script fail in the packaged app's own clone.
+QAR="$CHECKOUT/bin/qar"
 
 cd "$REPO"
 
@@ -66,10 +69,16 @@ git checkout "$BRANCH" --quiet
 git pull --ff-only --quiet
 
 # Re-encrypt every secret to the keyring on this branch (now including the new
-# recipient) and refresh keyring.lock. QAR may be "pnpm qar" (two words), so it
-# must stay unquoted for word-splitting.
+# recipient) and refresh keyring.lock. QAR is a single executable path, so it is
+# QUOTED, not eval'd: this repo's own path contains spaces ("…/Application Support/…"),
+# and the eval this line used to need — for a multi-token "${QAR_BIN:-pnpm qar}" —
+# would now split that path apart. Scoped to a subshell so the exported QAR_REPO_DIR
+# doesn't leak into the rest of the script; the shim defers to it.
 echo "==> Rekeying secrets to the updated keyring..." >&2
-QAR_REPO_DIR="$REPO" $QAR rekey 1>&2
+(
+    export QAR_REPO_DIR="$REPO"
+    "$QAR" rekey
+) 1>&2
 
 if git diff --quiet; then
     echo "==> Nothing to rekey (secrets already encrypted to this keyring)." >&2

@@ -2,15 +2,74 @@
 # qar — thin dispatcher so a bare `qar …` works in dev AND the packaged app.
 #
 # There is no `qar` binary: it's a pnpm script (`"qar": "tsx bin/qar.ts"`), so a
-# bare `qar …` would 127. The GUI puts this dir on PATH and exports QAR_BIN
-# (packaged: "<node> --import tsx <bundle>") via withGuiPath(), so prefer it. In a
-# dev checkout QAR_BIN is unset, so fall back to `pnpm qar`.
+# bare `qar …` would 127. Three tiers, tried in order:
+#   1. $QAR_BIN  — exported by the packaged app's withGuiPath(); authoritative.
+#   2. pnpm qar  — a dev checkout, preferred so engine edits take effect at once.
+#   3. an installed .app's bundle — for a clone whose own source tree can't run.
+# Every tier keeps the caller's cwd, since args like `--body-file .tmp/x.md` are
+# resolved relative to it.
 set -euo pipefail
+
 if [ -n "${QAR_BIN:-}" ]; then
-  exec ${QAR_BIN} "$@" # unquoted on purpose: QAR_BIN is a multi-token command
+  # QAR_BIN is a multi-token command whose paths are SHELL-QUOTED by qarBinValue(),
+  # so it has to be eval'd rather than word-split: the packaged paths contain a space
+  # ("/Applications/SI QA Review.app/…") and plain `exec ${QAR_BIN}` would split on it
+  # and try to exec "/Applications/SI". eval re-parses the quoting, then "$@" appends
+  # this invocation's own args untouched.
+  eval "set -- $QAR_BIN \"\$@\""
+  exec "$@"
 fi
-if command -v pnpm >/dev/null 2>&1; then
-  exec pnpm qar "$@"
+
+# Resolve this checkout without hard-depending on BASH_SOURCE (unset under zsh),
+# matching scripts/approve-access.sh.
+if [ -n "${BASH_SOURCE:-}" ]; then SELF="${BASH_SOURCE[0]}"; else SELF="${0:-}"; fi
+REPO="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+# Physical path of node_modules: in a clone the packaged app owns, it is a SYMLINK
+# into "<Resources>/engine/node_modules" — used both to reject tier 2 below and to
+# locate that .app in tier 3.
+NM="$(cd -P "$REPO/node_modules" 2>/dev/null && pwd || true)"
+case "$NM" in
+  */engine/node_modules) LINKED_RESOURCES="${NM%/engine/node_modules}" ;;
+  *) LINKED_RESOURCES="" ;;
+esac
+
+# Tier 2 is only viable if the source tree can ACTUALLY run, and two independent
+# things break that — neither of which `command -v pnpm` would catch:
+#   - pnpm itself can be unusable. v11.13.0 shipped without a working binary, so
+#     `pnpm qar` dies with a release-is-broken error before ever reaching tsx.
+#   - node_modules can be the app's runtime-only tree (LINKED_RESOURCES above). It
+#     carries tsx and Playwright but none of the repo's own dependencies, so the
+#     first `import 'age-encryption'` — which every command reaches through
+#     src/engine/settings.ts — dies with ERR_MODULE_NOT_FOUND. age-encryption is
+#     therefore the sentinel for "a real pnpm install", not an arbitrary pick.
+if pnpm --version >/dev/null 2>&1 && [ -e "$REPO/node_modules/age-encryption" ]; then
+  # -C keeps this independent of where the caller invoked us from; pnpm would
+  # otherwise walk up from cwd looking for package.json and miss outside the repo.
+  exec pnpm -C "$REPO" qar "$@"
 fi
-echo "qar: neither QAR_BIN nor pnpm available" >&2
+
+# Tier 3: run the engine out of an installed .app — the same command shape
+# qarBinValue() builds, rediscovered because nothing exported it. tsx is imported by
+# ABSOLUTE path (its "." export is dist/loader.mjs) rather than as the bare `tsx`
+# QAR_BIN uses: a bare specifier resolves against cwd, which need not be the repo.
+# The engine takes its paths from QAR_REPO_DIR, so pin it to this clone.
+for RES in "${QAR_RESOURCES:-}" "$LINKED_RESOURCES" \
+  "/Applications/SI QA Review.app/Contents/Resources" \
+  "$HOME/Applications/SI QA Review.app/Contents/Resources"; do
+  [ -n "$RES" ] || continue
+  NODE="$RES/runtime/node"
+  BUNDLE="$RES/engine/qar.bundle.mjs"
+  LOADER="$RES/engine/node_modules/tsx/dist/loader.mjs"
+  if [ -x "$NODE" ] && [ -f "$BUNDLE" ] && [ -f "$LOADER" ]; then
+    export QAR_REPO_DIR="${QAR_REPO_DIR:-$REPO}"
+    exec "$NODE" --import "$LOADER" "$BUNDLE" "$@"
+  fi
+done
+
+echo "qar: no way to run the engine." >&2
+echo "  QAR_BIN is unset; \`pnpm qar\` is unavailable (pnpm broken, or deps not" >&2
+echo "  installed in $REPO/node_modules); and no packaged app was found." >&2
+echo "  Fix one of them: \`pnpm install\` here, or set QAR_RESOURCES to an" >&2
+echo "  installed app's Contents/Resources." >&2
 exit 127
