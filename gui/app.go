@@ -57,7 +57,7 @@ func withGuiPath() []string {
 		}
 	}
 	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
-	// (bin/qar), which dispatches to QAR_BIN (packaged) or `pnpm qar` (dev). This is
+	// (bin/qar), which dispatches to QAR_NODE/QAR_BUNDLE (packaged) or `pnpm qar` (dev). This is
 	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
 	if binDir := filepath.Join(repoDir(), "bin"); !strings.Contains(path, binDir) {
 		path = binDir + ":" + path
@@ -77,12 +77,10 @@ func withGuiPath() []string {
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
-	// and export QAR_BIN (packaged only) so the `bin/qar` shim — and thus a bare `qar`
-	// in the Claude PTY — runs the bundled engine where there is no `pnpm`.
+	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
+	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
-	if qb := qarBinValue(); qb != "" {
-		out = append(out, "QAR_BIN="+qb)
-	}
+	out = append(out, qarBinEnv()...)
 	return out
 }
 
