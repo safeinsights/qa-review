@@ -6,6 +6,7 @@ import {
     addMember,
     fingerprint,
     isInDrift,
+    type Member,
     readKeyring,
     readLock,
     recipients,
@@ -64,5 +65,59 @@ describe('keyring', () => {
         writeLock(dir, fingerprint(recipients(readKeyring(dir))))
         expect(readLock(dir)).toBe(fingerprint(['age1a']))
         expect(isInDrift(dir)).toBe(false)
+    })
+})
+
+const ada: Member = {
+    name: 'Ada Lovelace',
+    publicKey: 'age1ada',
+    email: 'ada@x.com',
+    addedDate: '2026-07-28',
+}
+
+describe('addMember', () => {
+    it('adds a new member', () => {
+        expect(addMember([], ada)).toHaveLength(1)
+    })
+
+    // Re-running request-access must not error: that error is what pushed users
+    // into renaming themselves and filing a duplicate access PR.
+    it('is a no-op when the same name and key are re-added', () => {
+        const next = addMember([ada], { ...ada, addedDate: '2026-08-01' })
+        expect(next).toEqual([ada])
+    })
+
+    it('still rejects a different key under a taken name', () => {
+        expect(() => addMember([ada], { ...ada, publicKey: 'age1other' })).toThrow(
+            /already in the keyring/
+        )
+    })
+
+    // The rename path: same key (same person), different name. Before the fix,
+    // addMember only checked uniqueness by name, so this silently APPENDED a
+    // second entry — one public key controlling two keyring rows, which is the
+    // exact duplicate the request-access branch selection bug also produced.
+    it('updates the existing entry in place when the same key reappears under a new name', () => {
+        const next = addMember([ada], { ...ada, name: 'Ada L' })
+        expect(next).toHaveLength(1)
+        expect(next[0]).toMatchObject({ name: 'Ada L', publicKey: ada.publicKey })
+    })
+
+    // The byKey rename branch must not bypass the name-uniqueness guard: renaming
+    // Ada's key to "Bob" while a DIFFERENT member already owns that name is the
+    // same "two people collide on a name" conflict as the append path, just
+    // approached from the rename side. Without this check it silently produced
+    // two rows both named "Bob" (one holding Ada's key, one Bob's) — a corrupted
+    // human-facing roster, even though recipients()/decryption are unaffected.
+    it('still rejects a rename that collides with a DIFFERENT member already holding that name', () => {
+        const bob: Member = {
+            name: 'Bob',
+            publicKey: 'age1bob',
+            email: 'bob@x.com',
+            addedDate: '2026-07-28',
+        }
+        expect(() => addMember([ada, bob], { ...ada, name: 'Bob' })).toThrow(
+            /already in the keyring/
+        )
     })
 })

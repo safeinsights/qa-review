@@ -150,9 +150,25 @@ passphrase. The pieces:
 
 Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 
-- `pnpm qar request-access --name "Your Name"` — generates the local identity,
+- `pnpm qar request-access [--name "Your Name"]` — generates the local identity,
   adds your public key to `keyring.json`, branches, and opens a PR via `gh`. A
   reviewer runs `qar rekey` on that branch before merging (atomic — no drift gap).
+  `--name` is optional: it defaults to `git config user.name` (an EMPTY `--name ""`
+  is treated as absent, not as an explicit name — the GUI sends one). Re-running is
+  safe and idempotent: the same key reuses its keyring entry and its branch, and an
+  already-open PR is reported rather than duplicated.
+- `pnpm qar access-status` — report where your access request stands, as JSON:
+  `no-identity`, `no-branch`, `branch-no-pr`, `pr-open`, `pr-closed`,
+  `merged-awaiting-rekey`, `ready`. Keyed on the local age **public key** (stored
+  with `# name:`/`# branch:` in `config/age-identity.txt`), NOT on a typed-in name —
+  which is what makes a repeat request incapable of opening a second PR. A GitHub or
+  local-file failure degrades to the best local answer with a `note` and never
+  reports "no request"; that downgrade is what used to restart the duplicate loop.
+  Identity files predating this feature have no `# name:`/`# branch:` lines; those
+  fields come back empty and the branch falls back to `git config user.name`.
+- `pnpm qar open-access-pr` — open (or report) the PR for an already-pushed access
+  branch. This is the retry path for the real state where the branch push succeeded
+  but PR creation didn't, which nothing could previously re-drive.
 - `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
 - `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
@@ -388,7 +404,10 @@ through the issue attachment endpoint only.
 - `pnpm qar run --suite create-study --role researcher --env qa`
 - `pnpm qar run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`
 - `pnpm qar migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
-- `pnpm qar request-access --name "..."` — generate your identity + open a keyring PR
+- `pnpm qar request-access [--name "..."]` — generate your identity + open a keyring PR
+  (name defaults to `git config user.name`; re-running is idempotent)
+- `pnpm qar access-status` — where your access request stands, as JSON
+- `pnpm qar open-access-pr` — open/report the PR for an already-pushed access branch
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
   branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine via

@@ -1,19 +1,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { openAccessPr } from '@/cli/commands/open-access-pr'
+import { branchForName, readIdentityMeta } from '@/engine/access-request'
 import { createIdentity } from '@/engine/identity'
 import { addMember, readKeyring, writeKeyring } from '@/engine/keyring'
 import { repoDir } from '@/engine/paths'
 import { configDir } from '@/engine/settings'
 
 const execFileAsync = promisify(execFile)
-
-// A slug for the access branch name, e.g. "Jane Smith" -> "jane-smith".
-function slug(name: string): string {
-    return name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-}
 
 // Injectable git runner so the core is unit-testable. Default shells out to git.
 export type GitRunner = (args: string[]) => Promise<string>
@@ -29,13 +23,26 @@ export interface RequestAccessOptions {
     git?: GitRunner
 }
 
-// Core: create-or-reuse identity, add to keyring, branch + commit + push the
-// keyring change. Returns the public key and whether the identity was created.
+// Create-or-reuse the identity, add it to the keyring, and push the access branch.
+// Every step is idempotent: re-running for the same person reuses the same key, the
+// same keyring entry, and the same branch rather than producing a second request.
 export async function requestAccess(
     opts: RequestAccessOptions
 ): Promise<{ publicKey: string; created: boolean; branch: string }> {
     const git = opts.git ?? realGit
-    const { publicKey, created } = await createIdentity(opts.dir)
+
+    // An identity file's stored branch/name (if any) is the source of truth for
+    // WHICH branch this key's request lives on. Deriving the branch fresh from
+    // opts.name every time meant a later request under a different name (e.g. git
+    // config was edited, or the first request used an explicit --name) computed a
+    // DIFFERENT slug and pushed a second branch + a second keyring entry sharing
+    // the same key. Once a request exists for this key, its branch never moves —
+    // an explicit --name still updates the keyring entry's display name, but is
+    // not allowed to fork a second branch for the same person.
+    const existingMeta = readIdentityMeta(opts.dir)
+    const name = existingMeta?.name ?? opts.name
+    const branch = existingMeta?.branch ?? branchForName(opts.name)
+    const { publicKey, created } = await createIdentity(opts.dir, { name, branch })
 
     const next = addMember(readKeyring(opts.dir), {
         name: opts.name,
@@ -45,14 +52,24 @@ export async function requestAccess(
     })
     writeKeyring(opts.dir, next)
 
-    const branch = `access/${slug(opts.name)}`
-    await git(['checkout', '-b', branch])
+    // Reuse the branch if it exists — `checkout -b` fails on a second run, which is
+    // half of what forced users to rename themselves to get a fresh slug.
+    try {
+        await git(['rev-parse', '--verify', branch])
+        await git(['checkout', branch])
+    } catch {
+        await git(['checkout', '-b', branch])
+    }
     await git(['add', 'config/keyring.json'])
-    await git(['commit', '-m', `Add ${opts.name} to keyring`])
+    // Nothing to commit on a re-run (the entry is already there); that is fine.
+    try {
+        await git(['commit', '-m', `Add ${opts.name} to keyring`])
+    } catch {
+        // no-op: the keyring entry was already committed on a previous attempt
+    }
     await git(['push', '-u', 'origin', branch])
     // Return to the user's prior branch so a later `qar sync` doesn't get stuck
-    // on the (diverged) access branch. Best-effort — don't fail the request if it
-    // can't switch back.
+    // on the (diverged) access branch. Best-effort.
     try {
         await git(['checkout', '-'])
     } catch {
@@ -61,11 +78,30 @@ export async function requestAccess(
     return { publicKey, created, branch }
 }
 
+// Injectable so a test can pin both branches of the fallback without shelling
+// out to git. Default resolves via `git config user.name`.
+export type NameResolver = () => Promise<string>
+
+// Resolves the --name flag against a name resolver (default: git config user.name).
+// An empty string is not a meaningful explicit name (the GUI sends '' to mean
+// "derive it"), so it is treated the same as an absent flag, not as an explicit
+// value — `||`, not `??`, since parseArgs always yields a string and '' is the
+// one falsy value opts.name can take.
+export async function resolveRequestAccessName(
+    opts: Record<string, string>,
+    resolveName: NameResolver = safeGitConfigName
+): Promise<string> {
+    const name = opts.name || (await resolveName())
+    if (!name) {
+        throw new Error('request-access: --name "Your Name" is required (git user.name is unset)')
+    }
+    return name
+}
+
 // CLI wrapper: resolves name/email/date, runs requestAccess, then opens a PR via
 // `gh` (falling back to printed instructions if gh is unavailable).
 export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
-    const name = opts.name
-    if (!name) throw new Error('request-access: --name "Your Name" is required')
+    const name = await resolveRequestAccessName(opts)
     const email = opts.email ?? (await safeGitConfigEmail())
     const date = new Date().toISOString().slice(0, 10)
     const { branch, created } = await requestAccess({ dir: configDir(), name, email, date })
@@ -74,43 +110,25 @@ export async function requestAccessCommand(opts: Record<string, string>): Promis
     )
 
     try {
-        // Pass --head explicitly: requestAccess() has already switched back to the
-        // user's prior branch, so `gh pr create` without --head would target the
-        // wrong branch and fail with "no commits between origin/main and <branch>".
-        await execFileAsync(
-            'gh',
-            [
-                'pr',
-                'create',
-                '--base',
-                'main',
-                '--head',
-                branch,
-                '--title',
-                `Add ${name} to keyring`,
-                '--body',
-                `Adds my age public key to the keyring so I can decrypt the shared QA secrets.
-
-**Reviewer:** run \`scripts/approve-access.sh <this PR's number>\` from a qa-review checkout — do NOT just merge.
-
-That script checks out this branch, re-encrypts every secret to the updated keyring, refreshes \`keyring.lock\`, pushes, and merges, all in one step. Merging without it leaves me in the keyring but unable to decrypt anything, and leaves \`keyring.lock\` showing drift for everyone else.
-
-You must already be a keyring recipient yourself — rekey decrypts the current secrets with your identity before re-encrypting them.`,
-            ],
-            { cwd: repoDir() }
+        const { url, created: prCreated } = await openAccessPr({ branch, name })
+        console.log(
+            prCreated
+                ? `Opened ${url} — a teammate will approve + rekey, then merge.`
+                : `A pull request is already open: ${url}`
         )
-        console.log('Opened a pull request. A teammate will approve + rekey, then merge.')
     } catch (e) {
-        // Surface the real reason (gh prints it to stderr) instead of guessing.
         const detail =
             e instanceof Error ? (e as { stderr?: string }).stderr || e.message : String(e)
         console.log(`Could not open a PR automatically:\n${detail.trim()}`)
-        console.log(
-            `Open it manually: push branch "${branch}" and create a PR titled "Add ${name} to keyring".\n` +
-                'In the description, tell the reviewer to run `scripts/approve-access.sh <pr#>` ' +
-                'rather than merging directly — a plain merge leaves you in the keyring but ' +
-                'unable to decrypt anything.'
-        )
+        console.log(`Retry with: qar open-access-pr`)
+    }
+}
+
+async function safeGitConfigName(): Promise<string> {
+    try {
+        return (await execFileAsync('git', ['config', 'user.name'])).stdout.trim()
+    } catch {
+        return ''
     }
 }
 

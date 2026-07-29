@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -1177,12 +1178,64 @@ func (a *App) syncKeyringFiles(dir string) string {
 	return ""
 }
 
-// KeyringAccess is the first-launch encryption-access state: whether the local
-// identity exists and whether it's a recipient in the (freshly pulled) keyring.
+// KeyringAccess is the encryption-access state shown by the first-launch gate:
+// whether the local identity exists, whether it can decrypt, and — from the engine's
+// access-status — where the access request itself stands.
 type KeyringAccess struct {
-	HasIdentity bool   `json:"hasIdentity"` // config/age-identity.txt exists
-	IsRecipient bool   `json:"isRecipient"` // its public key is in config/keyring.json
-	Note        string `json:"note"`        // non-fatal pull note (offline / skipped), if any
+	HasIdentity     bool   `json:"hasIdentity"`     // config/age-identity.txt exists
+	IsRecipient     bool   `json:"isRecipient"`     // its public key decrypts the committed secrets
+	Note            string `json:"note"`            // non-fatal pull note (offline / skipped), if any
+	State           string `json:"state"`           // engine access-status state, "" if unavailable
+	Branch          string `json:"branch"`          // the access branch for this key
+	PrNumber        int    `json:"prNumber"`        // 0 when there is no PR
+	PrURL           string `json:"prURL"`           // "" when there is no PR
+	GithubReachable bool   `json:"githubReachable"` // false when gh/network failed
+}
+
+type engineAccessPR struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
+	URL    string `json:"url"`
+}
+
+type engineAccessStatus struct {
+	State           string          `json:"state"`
+	Branch          string          `json:"branch"`
+	Name            string          `json:"name"`
+	PublicKey       string          `json:"publicKey"`
+	PR              *engineAccessPR `json:"pr"`
+	GithubReachable bool            `json:"githubReachable"`
+	Note            string          `json:"note"`
+}
+
+func parseAccessStatus(raw []byte) (engineAccessStatus, error) {
+	var s engineAccessStatus
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &s); err != nil {
+		return engineAccessStatus{}, err
+	}
+	return s, nil
+}
+
+// accessStatusOutput runs the engine's access-status and returns its stdout. A var
+// (not a direct engineCmd call) so tests can substitute a stub that fails or returns
+// garbage, to pin accessStatus's non-fatal fallback without shelling out for real.
+var accessStatusOutput = func() ([]byte, error) {
+	return engineCmd("access-status").Output()
+}
+
+// accessStatus shells the engine's access-status. A failure is NON-FATAL: the gate
+// still renders from the local decrypt check, with a note. Never let this turn an
+// existing request into "no request".
+func (a *App) accessStatus() (engineAccessStatus, string) {
+	out, err := accessStatusOutput()
+	if err != nil {
+		return engineAccessStatus{}, "Couldn't check your access request status."
+	}
+	status, perr := parseAccessStatus(out)
+	if perr != nil {
+		return engineAccessStatus{}, "Couldn't read the access request status."
+	}
+	return status, status.Note
 }
 
 // CheckKeyringAccess pulls the latest keyring + secrets (only those files) and
@@ -1210,7 +1263,27 @@ func (a *App) CheckKeyringAccess(cwd string) (KeyringAccess, error) {
 			canDecrypt = isRecipient
 		}
 	}
-	return KeyringAccess{HasIdentity: has, IsRecipient: canDecrypt, Note: note}, nil
+	status, statusNote := a.accessStatus()
+	if statusNote != "" {
+		if note == "" {
+			note = statusNote
+		} else {
+			note = note + " " + statusNote
+		}
+	}
+	access := KeyringAccess{
+		HasIdentity:     has,
+		IsRecipient:     canDecrypt,
+		Note:            note,
+		State:           status.State,
+		Branch:          status.Branch,
+		GithubReachable: status.GithubReachable,
+	}
+	if status.PR != nil {
+		access.PrNumber = status.PR.Number
+		access.PrURL = status.PR.URL
+	}
+	return access, nil
 }
 
 // RequestAccess runs the bundled engine's `request-access --name <name>` (generate
@@ -1221,6 +1294,16 @@ func (a *App) RequestAccess(cwd, name string) (string, error) {
 	out, err := engineCmd("request-access", "--name", name).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("request-access failed: %s\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+// OpenAccessPr runs the engine's open-access-pr for an already-pushed access branch
+// — the retry path for a request whose push succeeded but whose PR creation didn't.
+func (a *App) OpenAccessPr(cwd string) (string, error) {
+	out, err := engineCmd("open-access-pr").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("open-access-pr failed: %s\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
 }
