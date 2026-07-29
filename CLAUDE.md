@@ -266,6 +266,33 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
+## PATH order decides which `node` npx runs
+
+`guiPathDirs` is a **priority ranking**, not a set — its order picks which of
+several installed toolchains wins. `withGuiPath()` builds the final PATH through
+`prependPathDirs()`, which places those dirs at the front **in one pass**.
+Prepending them one at a time (the old code) REVERSES them: each prepend pushes
+the previous one back, so `/opt/homebrew/bin` — declared first — ended up last
+among them. A Finder-launched app inherits neither Homebrew nor `/usr/local/bin`,
+so both got prepended and `/usr/local/bin` won.
+
+That is issue #36: a user with Node 26 in Homebrew and Node **21.1.0** in
+`/usr/local/bin` got the 21.1.0. `chrome-devtools-mcp` declares
+`engines: ^20.19.0 || ^22.12.0 || >=23`, and 21.x is in the gap — it uses
+`import.meta.dirname` (Node 21.2.0+), which is `undefined` there, so the server
+throws ``The "path" argument must be of type string`` at import. The message
+names neither node nor a version, so every session silently came up with no
+browser tools. Reproduced directly: the same server binary crashes on 21.1.0 and
+exits 0 on 25.2.0.
+
+Two guards now exist, and both should stay:
+- `nodeVersionProblem()` mirrors that engines range. **The Setup Doctor fails the
+  Node row** on an unsupported version — it previously reported a green
+  `✓ Node.js v21.1.0` because it only checked that `node` *ran*. An unparseable
+  version is deliberately NOT flagged (a doctor that cries wolf is worse).
+- `probeMcpServers()` logs the node version it resolved and flags an unsupported
+  one, so the diagnostic log names the cause instead of showing a bare crash.
+
 ## Debugging "the run does nothing / no steps appear"
 
 The GUI shows "No steps yet — press Run" and "No live session" even after Run,

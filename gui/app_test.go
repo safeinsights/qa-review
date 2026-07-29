@@ -958,3 +958,102 @@ func TestHelperIgnoresSigterm(t *testing.T) {
 	signal.Ignore(syscall.SIGTERM)
 	time.Sleep(30 * time.Second)
 }
+
+// The order of guiPathDirs is a PRIORITY RANKING, and prepending its entries one at
+// a time reversed it — each prepend pushed the previous one back. prependPathDirs
+// builds the result in a single pass instead. See issue #36.
+func TestPrependPathDirsHonorsPriorityOverInherited(t *testing.T) {
+	// The user's inherited PATH already contains /usr/local/bin.
+	got := prependPathDirs("/usr/local/bin:/usr/bin:/bin", []string{
+		"/Users/x/.local/bin", "/Users/x/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+	})
+	dirs := strings.Split(got, ":")
+
+	idx := func(want string) int {
+		for i, d := range dirs {
+			if d == want {
+				return i
+			}
+		}
+		t.Fatalf("%q missing from %q", want, got)
+		return -1
+	}
+	if idx("/opt/homebrew/bin") > idx("/usr/local/bin") {
+		t.Fatalf("Homebrew must outrank /usr/local/bin, got %q", got)
+	}
+	// No duplicates: an inherited dir is relocated, not repeated.
+	seen := map[string]bool{}
+	for _, d := range dirs {
+		if seen[d] {
+			t.Fatalf("duplicate %q in %q", d, got)
+		}
+		seen[d] = true
+	}
+	// Inherited-only entries survive.
+	if !strings.Contains(got, "/usr/bin") {
+		t.Fatalf("inherited dirs were dropped: %q", got)
+	}
+}
+
+// The Doctor showed a green "✓ Node.js v21.1.0" while every session came up with no
+// browser tools: it only checked that node RAN, never that npx could run the MCP
+// servers on it. Versions here are chrome-devtools-mcp's declared engines.
+func TestNodeVersionProblem(t *testing.T) {
+	unsupported := []string{
+		"v21.1.0",  // issue #36: predates import.meta.dirname; crashes at import
+		"v21.7.3",  // no 21.x satisfies the range
+		"v20.11.0", // has import.meta.dirname but below the ^20.19.0 floor
+		"v22.11.0", // below the ^22.12.0 floor
+		"v18.20.4",
+	}
+	for _, v := range unsupported {
+		if nodeVersionProblem(v) == "" {
+			t.Errorf("nodeVersionProblem(%q) = ok, want a problem", v)
+		}
+	}
+	for _, v := range []string{"v20.19.0", "v22.12.0", "v22.21.0", "v23.0.0", "v26.1.0"} {
+		if why := nodeVersionProblem(v); why != "" {
+			t.Errorf("nodeVersionProblem(%q) = %q, want ok", v, why)
+		}
+	}
+	// An unrecognized format must NOT be reported as a problem — a doctor that cries
+	// wolf on an unexpected version string is worse than one that stays quiet.
+	for _, v := range []string{"", "not-a-version", "v22"} {
+		if why := nodeVersionProblem(v); why != "" {
+			t.Errorf("nodeVersionProblem(%q) = %q, want silence on unparseable input", v, why)
+		}
+	}
+}
+
+// The end-to-end guard for issue #36: withGuiPath() itself must rank Homebrew ahead
+// of /usr/local/bin even when the inherited PATH already contains /usr/local/bin.
+// TestPrependPathDirsHonorsPriorityOverInherited covers the helper in isolation, but
+// only this exercises the code path that actually built the user's broken PATH.
+func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
+	// The PATH a Finder-launched app inherits: neither Homebrew nor /usr/local/bin is
+	// present, so the old loop prepended each in turn and EVERY prepend pushed the
+	// previous one back — reversing guiPathDirs and leaving Homebrew last among them.
+	// This input reproduces the reporter's PATH exactly, /usr/sbin:/sbin tail included.
+	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+
+	var pathVal string
+	for _, e := range withGuiPath() {
+		if strings.HasPrefix(e, "PATH=") {
+			pathVal = strings.TrimPrefix(e, "PATH=")
+		}
+	}
+	dirs := strings.Split(pathVal, ":")
+	pos := func(want string) int {
+		for i, d := range dirs {
+			if d == want {
+				return i
+			}
+		}
+		t.Fatalf("%q missing from PATH %q", want, pathVal)
+		return -1
+	}
+	if pos("/opt/homebrew/bin") > pos("/usr/local/bin") {
+		t.Fatalf("PATH puts /usr/local/bin ahead of Homebrew, so npx picks the wrong node: %q", pathVal)
+	}
+}

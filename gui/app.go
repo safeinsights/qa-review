@@ -20,6 +20,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,12 +54,14 @@ func guiPathDirsWithHome() []string {
 // on PATH, so exec.Command can find dev tools regardless of how the app launched.
 func withGuiPath() []string {
 	env := os.Environ()
-	path := os.Getenv("PATH")
-	for _, d := range guiPathDirsWithHome() {
-		if !strings.Contains(path, d) {
-			path = d + ":" + path
-		}
-	}
+	// Put guiPathDirs at the FRONT in their declared order. The old loop prepended
+	// each missing dir one at a time, so every prepend pushed the previous one back —
+	// REVERSING the list. A Finder-launched app inherits neither /opt/homebrew/bin nor
+	// /usr/local/bin, so both were prepended and Homebrew (declared FIRST, meaning
+	// highest priority) ended up LAST among them. On the machine in issue #36 that put
+	// Node 21.1.0 from /usr/local/bin ahead of Node 26 from Homebrew, and npx crashed
+	// chrome-devtools-mcp at import on every session. Order here IS which tool wins.
+	path := prependPathDirs(os.Getenv("PATH"), guiPathDirsWithHome())
 	// Prepend the repo's bin dir so a bare `qar` resolves to the committed shim
 	// (bin/qar), which dispatches to QAR_NODE/QAR_BUNDLE (packaged) or `pnpm qar` (dev). This is
 	// what makes the skills' bare-`qar` commands and the `Bash(qar:*)` allowlist real.
@@ -92,6 +95,28 @@ func withGuiPath() []string {
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
 	out = append(out, qarBinEnv()...)
 	return out
+}
+
+// prependPathDirs returns `path` with `dirs` moved to the front in their given
+// order, de-duplicated. Building the result in one pass is what preserves the order;
+// prepending dirs one at a time reverses them. Entries already on `path` are
+// RELOCATED rather than skipped, so the ranking holds however the app was launched.
+func prependPathDirs(path string, dirs []string) string {
+	seen := make(map[string]bool, len(dirs))
+	out := make([]string, 0, len(dirs)+8)
+	for _, d := range dirs {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	for _, d := range filepath.SplitList(path) {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return strings.Join(out, string(filepath.ListSeparator))
 }
 
 // guiPath extracts the PATH value from a withGuiPath() env slice.
@@ -2148,6 +2173,57 @@ func (a *App) accessPROpen() bool {
 	return len(prs) > 0
 }
 
+// nodeVersionProblem returns a human explanation if `ver` (e.g. "v21.1.0") is a node
+// the MCP servers can't run on, or "" if it's fine. It mirrors chrome-devtools-mcp's
+// declared engines — "^20.19.0 || ^22.12.0 || >=23" — so the supported set is
+// 20.19+, 22.12+, or 23+. Node 21.x and early 20.x/22.x are the real traps: 21.1.0
+// predates import.meta.dirname (added in 21.2.0/20.11.0), so the server throws
+// `The "path" argument must be of type string` at import, naming neither node nor
+// the version. An unparseable version is NOT reported as a problem — a doctor that
+// cries wolf on an unexpected format is worse than one that stays quiet.
+func nodeVersionProblem(ver string) string {
+	major, minor, ok := parseNodeVersion(ver)
+	if !ok {
+		return ""
+	}
+	const supported = "chrome-devtools-mcp needs Node 20.19+, 22.12+, or 23+"
+	switch {
+	case major >= 23:
+		return ""
+	case major == 22:
+		if minor >= 12 {
+			return ""
+		}
+		return supported
+	case major == 21:
+		// No 21.x satisfies the engines range, whatever the minor.
+		return supported
+	case major == 20:
+		if minor >= 19 {
+			return ""
+		}
+		return supported
+	default:
+		return supported
+	}
+}
+
+// parseNodeVersion pulls major/minor out of a `node --version` string ("v21.1.0").
+func parseNodeVersion(ver string) (major, minor int, ok bool) {
+	m := nodeVersionRE.FindStringSubmatch(strings.TrimSpace(ver))
+	if m == nil {
+		return 0, 0, false
+	}
+	major, err1 := strconv.Atoi(m[1])
+	minor, err2 := strconv.Atoi(m[2])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return major, minor, true
+}
+
+var nodeVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.`)
+
 // RunDoctor checks every prerequisite app/state and validates it (not just "on
 // PATH"): required CLIs and their versions, gh authentication, Chrome, the cloned
 // repo, and the keyring identity. The Settings "Setup Doctor" modal renders one
@@ -2171,6 +2247,20 @@ func (a *App) RunDoctor() []DoctorCheck {
 		if err != nil {
 			checks = append(checks, DoctorCheck{Name: t.label, OK: false, Detail: "found but `" + t.bin + " " + t.flag + "` failed: " + ver, Hint: t.hint, DocURL: t.docURL})
 			continue
+		}
+		// Presence is not enough for node: npx runs the MCP servers, and an
+		// unsupported node crashes them at import with a message that names neither
+		// node nor the version (issue #36 — a green "✓ Node.js v21.1.0" row while
+		// every session came up with no browser tools).
+		if t.bin == "node" {
+			if why := nodeVersionProblem(ver); why != "" {
+				checks = append(checks, DoctorCheck{
+					Name: t.label, OK: false, Detail: ver + " — " + why,
+					Hint:   "Install a supported Node (brew install node) and make sure it comes FIRST on PATH.",
+					DocURL: t.docURL,
+				})
+				continue
+			}
 		}
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
 	}
