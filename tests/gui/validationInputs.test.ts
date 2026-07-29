@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { isPrNumber, parseJiraCard, parsePrNumber } from '@/gui/components/validationInputs'
+import {
+    ciBlocks,
+    isPrNumber,
+    parseJiraCard,
+    parsePrNumber,
+} from '@/gui/components/validationInputs'
 
 // Both validation inputs accept a pasted URL. The parsed value is what reaches the
 // engine (`--pr`), the PR preview base URL, and `gh pr view` — so a URL that isn't
@@ -99,5 +104,33 @@ describe('parseJiraCard', () => {
 
     it('returns empty for empty input', () => {
         expect(parseJiraCard('')).toBe('')
+    })
+})
+
+// ciBlocks decides whether the Start button is swapped for "Start anyway". It has
+// to agree with PrCIStatus.Blocking() in gui/app.go — Go is the real gate, so a
+// disagreement either blocks a start the UI said was fine, or offers a plain Start
+// that Go then rejects.
+describe('ciBlocks', () => {
+    it('blocks while the preview deployment is not green', () => {
+        expect(ciBlocks('pending')).toBe(true)
+        expect(ciBlocks('failed')).toBe(true)
+        expect(ciBlocks('none')).toBe(true)
+    })
+
+    it('does not block when CI succeeded', () => {
+        expect(ciBlocks('ok')).toBe(false)
+    })
+
+    // Being unable to ASK GitHub (offline, gh unauthenticated) is not evidence the
+    // deployment is stale; blocking on it would strand a tester with no way forward.
+    it('does not block when the status could not be read', () => {
+        expect(ciBlocks('unknown')).toBe(false)
+    })
+
+    // No probe has resolved yet — the tab renders before the debounced check runs.
+    it('does not block before a verdict exists', () => {
+        expect(ciBlocks(null)).toBe(false)
+        expect(ciBlocks(undefined)).toBe(false)
     })
 })
