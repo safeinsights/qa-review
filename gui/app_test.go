@@ -1057,3 +1057,61 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 		t.Fatalf("PATH puts /usr/local/bin ahead of Homebrew, so npx picks the wrong node: %q", pathVal)
 	}
 }
+
+// A Finder-launched .app inherits NO TERM (launchd sets none — only a shell does),
+// so `claude` saw a capability-less terminal and emitted plain text: the embedded
+// xterm rendered black-and-white. Under `wails dev` the launching shell's TERM leaked
+// in, which is why it only reproduced in the packaged app. withGuiPath() must declare
+// the terminal itself so both paths behave identically.
+func TestWithGuiPathDeclaresColorTerminal(t *testing.T) {
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+
+	get := func(env []string, key string) (string, bool) {
+		var val string
+		var found bool
+		// Last assignment wins, matching how exec applies a duplicated env key.
+		for _, e := range env {
+			if strings.HasPrefix(e, key+"=") {
+				val, found = strings.TrimPrefix(e, key+"="), true
+			}
+		}
+		return val, found
+	}
+
+	t.Run("sets TERM and COLORTERM when the parent has none", func(t *testing.T) {
+		os.Unsetenv("TERM")
+		os.Unsetenv("COLORTERM")
+		env := withGuiPath()
+		if term, ok := get(env, "TERM"); !ok || term != "xterm-256color" {
+			t.Fatalf("TERM = %q (found=%v), want xterm-256color", term, ok)
+		}
+		if ct, ok := get(env, "COLORTERM"); !ok || ct != "truecolor" {
+			t.Fatalf("COLORTERM = %q (found=%v), want truecolor", ct, ok)
+		}
+	})
+
+	// Under `wails dev` the shell's TERM is inherited. A dumb/unset-capability value
+	// must not survive, or dev and packaged would render differently.
+	t.Run("overrides an inherited TERM rather than passing it through", func(t *testing.T) {
+		t.Setenv("TERM", "dumb")
+		env := withGuiPath()
+		if term, _ := get(env, "TERM"); term != "xterm-256color" {
+			t.Fatalf("inherited TERM=dumb survived as %q", term)
+		}
+		for _, e := range env {
+			if e == "TERM=dumb" {
+				t.Fatal("stale TERM=dumb still present in env")
+			}
+		}
+	})
+
+	// NO_COLOR overrides TERM entirely, so a user who exports it for their shell would
+	// get a monochrome embedded terminal with no indication why.
+	t.Run("drops an inherited NO_COLOR", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		env := withGuiPath()
+		if _, ok := get(env, "NO_COLOR"); ok {
+			t.Fatal("NO_COLOR survived into the child env; the terminal would be monochrome")
+		}
+	})
+}

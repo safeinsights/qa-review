@@ -87,12 +87,31 @@ func withGuiPath() []string {
 		if strings.HasPrefix(e, "CLAUDE_CODE_") {
 			continue
 		}
+		// Drop inherited terminal-capability vars; we set our own below. NO_COLOR is
+		// dropped too — it overrides TERM entirely, so a user who exports it for their
+		// shell would otherwise get a monochrome embedded terminal with no way to tell
+		// why. The xterm we render into is always color-capable regardless.
+		if strings.HasPrefix(e, "TERM=") || strings.HasPrefix(e, "COLORTERM=") ||
+			strings.HasPrefix(e, "NO_COLOR=") {
+			continue
+		}
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
 	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
 	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// Declare the terminal we actually render into. A Finder-launched .app inherits
+	// NO TERM (launchd sets none, only a shell does), so `claude` saw a terminal with
+	// no declared capabilities and emitted plain text — the embedded xterm rendered
+	// black-and-white. Under `wails dev` the launching shell's TERM leaked in, which
+	// is why this only ever reproduced in the packaged app. Setting it unconditionally
+	// (paired with the strip above) makes dev and packaged behave identically instead
+	// of depending on how the app happened to be started.
+	//
+	// xterm.js implements xterm-256color and supports truecolor SGR, so both values
+	// describe the real frontend rather than overstating it.
+	out = append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 	out = append(out, qarBinEnv()...)
 	return out
 }
