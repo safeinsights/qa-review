@@ -84,7 +84,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | session | jira-comment |
+  request-access | rekey | set-secret | get-secret | sync | session | jira-comment |
   jira-delete-comment`.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
   See "Posting Jira comments with inline screenshots" below for why this exists
@@ -173,6 +173,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
 - `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
   recipients (the GUI Settings "save secret" path).
+- `pnpm qar get-secret --name <VAR> [--force]` — the READ half: prints one decrypted
+  value to stdout. The var is named with **`--name`, not `--key`** — `BOOLEANS` in
+  `bin/qar.ts` is ONE list shared by every subcommand and `key` is already in it
+  (`fix-account`'s valueless switch), so `--key FOO` would parse to `true`, drop
+  `FOO`, and look up a var literally named "true" — a silent wrong answer, not an
+  error. Writes NO trailing newline, so a PEM stays byte-exact, and refuses to print
+  to a TTY without `--force` (keeps private keys out of scrollback):
+  `qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem`.
+  `*.pem` is gitignored, but delete the extracted file when done anyway — it's a
+  live results-decryption key on disk.
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
