@@ -157,6 +157,13 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   is treated as absent, not as an explicit name — the GUI sends one). Re-running is
   safe and idempotent: the same key reuses its keyring entry and its branch, and an
   already-open PR is reported rather than duplicated.
+  It **refuses to start without `git config user.name`/`user.email`**, and a failing
+  `git commit` is now fatal instead of being swallowed as "already committed". Those
+  two are the same bug: git can't author a commit without an identity, the old catch
+  read that failure as a no-op, and the branch was pushed with NOTHING on it — so
+  `gh pr create` died with `No commits between main and access/<name>`, which
+  `open-access-pr` could not repair (it only retries the create). `git diff --cached
+  --quiet` now decides which case it is: nothing staged = genuinely already committed.
 - `pnpm qar access-status` — report where your access request stands, as JSON:
   `no-identity`, `no-branch`, `branch-no-pr`, `pr-open`, `pr-closed`,
   `merged-awaiting-rekey`, `ready`. Keyed on the local age **public key** (stored
@@ -168,7 +175,11 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   fields come back empty and the branch falls back to `git config user.name`.
 - `pnpm qar open-access-pr` — open (or report) the PR for an already-pushed access
   branch. This is the retry path for the real state where the branch push succeeded
-  but PR creation didn't, which nothing could previously re-drive.
+  but PR creation didn't, which nothing could previously re-drive. It special-cases
+  GitHub's `No commits between …` rejection — the one create failure retrying can
+  never fix — and tells the user to set their git identity and re-run
+  `request-access` instead of relaying the raw GraphQL error. That check runs only
+  AFTER the "is a PR already open?" lookup, so a healthy already-open PR still wins.
 - `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
 - `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all

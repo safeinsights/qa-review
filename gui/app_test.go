@@ -1057,3 +1057,34 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 		t.Fatalf("PATH puts /usr/local/bin ahead of Homebrew, so npx picks the wrong node: %q", pathVal)
 	}
 }
+
+// git with no user.name/user.email can't author a commit. That surfaced only much
+// later — as an access branch pushed with no commit on it and a PR that failed with
+// "No commits between main and access/<name>" — so the doctor names it up front.
+func TestGitIdentityCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, gitName, gitEmail, wantDetail string
+		wantOK                              bool
+	}{
+		{"both set", "Ada Lovelace", "ada@x.com", "Ada Lovelace <ada@x.com>", true},
+		{"neither set", "", "", "no user.name or user.email", false},
+		{"no name", "", "ada@x.com", "no user.name", false},
+		{"no email", "Ada Lovelace", "", "no user.email", false},
+		// `git config user.name ""` yields a blank line, not an error — treating that
+		// as configured would put the user back in the failing commit.
+		{"whitespace only", "  ", "\t", "no user.name or user.email", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gitIdentityCheck(tc.gitName, tc.gitEmail)
+			if got.OK != tc.wantOK {
+				t.Fatalf("gitIdentityCheck(%q, %q).OK = %v, want %v", tc.gitName, tc.gitEmail, got.OK, tc.wantOK)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if !tc.wantOK && got.Hint == "" {
+				t.Fatal("a failing git identity check must carry a hint with the fix")
+			}
+		})
+	}
+}

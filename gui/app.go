@@ -2265,6 +2265,21 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
 	}
 
+	// git must know who the user is. Without it `git commit` refuses, which used to
+	// surface only much later as a pushed-but-empty access branch and a PR that
+	// failed with "No commits between main and access/<name>".
+	if toolOnPath("git") {
+		name, nameErr := runTool("git", "config", "user.name")
+		email, emailErr := runTool("git", "config", "user.email")
+		if nameErr != nil {
+			name = ""
+		}
+		if emailErr != nil {
+			email = ""
+		}
+		checks = append(checks, gitIdentityCheck(name, email))
+	}
+
 	// gh must be authenticated (PR + issue + clone flows depend on it).
 	if toolOnPath("gh") {
 		out, err := runTool("gh", "auth", "status")
@@ -2319,6 +2334,29 @@ func (a *App) RunDoctor() []DoctorCheck {
 	checks = append(checks, jiraCheck(a.readJiraConfig()))
 
 	return checks
+}
+
+// gitIdentityCheck reports whether git can author a commit. It is kept separate from
+// RunDoctor (which shells out) so the missing/partial/complete cases are testable
+// without a git config on the machine running the tests.
+//
+// `git config user.name` exits non-zero when the key is unset, so callers pass "" for
+// both the error and empty-output cases — they are the same condition.
+func gitIdentityCheck(name, email string) DoctorCheck {
+	const label = "git identity"
+	const hint = "Run `git config --global user.name \"Your Name\"` and `git config --global user.email \"you@example.com\"`."
+	const docURL = "https://docs.github.com/en/get-started/getting-started-with-git/setting-your-username-in-git"
+
+	name, email = strings.TrimSpace(name), strings.TrimSpace(email)
+	switch {
+	case name == "" && email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name or user.email — git can't author commits, so an access request can't be committed", Hint: hint, DocURL: docURL}
+	case name == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name (email is " + email + ")", Hint: hint, DocURL: docURL}
+	case email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.email (name is " + name + ")", Hint: hint, DocURL: docURL}
+	}
+	return DoctorCheck{Name: label, OK: true, Detail: name + " <" + email + ">"}
 }
 
 // jiraCheck validates that validation verdicts can actually be posted. The token is
