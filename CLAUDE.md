@@ -276,6 +276,52 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
+## The Claude command sandbox blocks three things QA sessions need
+
+Claude Code runs Bash in a sandbox that confines both **network egress** and
+**filesystem writes**. That sandbox is what a validation session actually trips over,
+and all three failures look like broken tooling rather than a permissions boundary —
+so each one gets retried, guessed at, or reported as a bug in `qar`:
+
+- **`qar jira-comment` → `fetch failed`.** `openstax.atlassian.net` was not on the
+  allowlist. Node's `fetch` rejects with a bare `TypeError: fetch failed` for *every*
+  transport failure, naming neither host nor cause. `jiraFetch()`
+  (`src/engine/jira.ts`) now wraps all four Jira calls and rewrites that into
+  "Could not reach `<host>` … add it to `sandbox.network.allowedDomains`".
+- **`gh` → `x509: failed to verify certificate: OSStatus -26276`.** Not auth, not
+  network: `gh` is a Go binary that verifies TLS through the macOS keychain, and the
+  sandbox blocks the `com.apple.trustd.agent` Mach service it needs.
+  `sandbox.enableWeakerNetworkIsolation` re-opens exactly that service.
+- **`qar study-state` → `Failed to create a ProcessSingleton for your profile
+  directory`.** Misleading — no other Chromium held the profile. The real lines are
+  above it: `Failed to create socket directory` and `open …/Chrome/Crashpad/
+  settings.dat: Operation not permitted`. It launches its OWN Playwright Chrome (it
+  needs an admin token, so it does not reuse the session browser), and that browser
+  writes outside the sandbox's writable set.
+
+`.claude/settings.json` carries the config. Two things to know about it:
+
+- The **network allowlist is `sandbox.network.allowedDomains`**. Hosts also arrive
+  from `WebFetch(domain:…)` permission rules, which is why a host can work for
+  whoever accumulated that rule in their **gitignored** `.claude/settings.local.json`
+  and fail for everyone else. Put shared hosts in the committed file. Wildcards are
+  supported: `*.qa.safeinsights.org` covers `app.qa` AND every `pr<N>.qa` preview
+  host from `prBaseUrl()` — a bare `app.qa.safeinsights.org` entry would make QA
+  runs work while PR-preview runs fail with the same unnamed transport error. The
+  list also carries every non-Jira host the engine reaches via Node `fetch`
+  (currently `api.mail.tm`, the signup suite's disposable-inbox API) — a new
+  outbound host in the engine needs a matching entry here.
+- **`sandbox.excludedCommands` did NOT take effect.** The key is schema-valid and has
+  listed `qar`/`pnpm qar`/`gh` since the file was created, yet sandboxed `gh` still
+  failed the keychain check while its host WAS allowlisted — proof the command ran
+  sandboxed anyway. Treat exclusion as unreliable and make the sandboxed path work;
+  don't delete the key, but don't count on it either.
+
+Sandbox settings are read at **session start**, so an edit here changes nothing until
+a new session. `qar study-state` and `pnpm vitest`/`pnpm typecheck` still need
+`dangerouslyDisableSandbox` — vitest because `node_modules` symlinks into the `.app`
+(read-only), which surfaces as `EPERM … mkdir node_modules/.vite-temp`.
+
 ## PATH order decides which `node` npx runs
 
 `guiPathDirs` is a **priority ranking**, not a set — its order picks which of

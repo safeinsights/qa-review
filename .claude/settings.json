@@ -8,6 +8,17 @@
   },
   "sandbox": {
     "enabled": true,
+    "network": {
+      "allowedDomains": [
+        "openstax.atlassian.net",
+        "*.qa.safeinsights.org",
+        "app.staging.safeinsights.org",
+        "app.safeinsights.org",
+        "api.github.com",
+        "api.mail.tm"
+      ]
+    },
+    "enableWeakerNetworkIsolation": true,
     "excludedCommands": [
       "pnpm qar",
       "qar",
