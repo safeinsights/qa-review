@@ -2265,9 +2265,11 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
 	}
 
-	// git must know who the user is. Without it `git commit` refuses, which used to
-	// surface only much later as a pushed-but-empty access branch and a PR that
-	// failed with "No commits between main and access/<name>".
+	// Advisory: without an explicit identity, git commits fall back to the
+	// auto-detected `<username>@<hostname>` — and when even that auto-detection
+	// fails, `git commit` refuses, which used to surface only much later as a
+	// pushed-but-empty access branch and a PR that failed with "No commits
+	// between main and access/<name>".
 	if toolOnPath("git") {
 		name, nameErr := runTool("git", "config", "user.name")
 		email, emailErr := runTool("git", "config", "user.email")
@@ -2336,9 +2338,13 @@ func (a *App) RunDoctor() []DoctorCheck {
 	return checks
 }
 
-// gitIdentityCheck reports whether git can author a commit. It is kept separate from
-// RunDoctor (which shells out) so the missing/partial/complete cases are testable
-// without a git config on the machine running the tests.
+// gitIdentityCheck reports whether git has an author identity configured. Unset
+// config does NOT usually stop a commit — with the default user.useConfigOnly=false,
+// git auto-detects `<username>@<hostname>` and commits with a warning — so this row
+// is advisory: it flags the poor attribution a fallback identity produces, not a
+// guaranteed failure. It is kept separate from RunDoctor (which shells out) so the
+// missing/partial/complete cases are testable without a git config on the machine
+// running the tests.
 //
 // `git config user.name` exits non-zero when the key is unset, so callers pass "" for
 // both the error and empty-output cases — they are the same condition.
@@ -2350,7 +2356,7 @@ func gitIdentityCheck(name, email string) DoctorCheck {
 	name, email = strings.TrimSpace(name), strings.TrimSpace(email)
 	switch {
 	case name == "" && email == "":
-		return DoctorCheck{Name: label, OK: false, Detail: "no user.name or user.email — git can't author commits, so an access request can't be committed", Hint: hint, DocURL: docURL}
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name or user.email — commits fall back to <username>@<hostname>", Hint: hint, DocURL: docURL}
 	case name == "":
 		return DoctorCheck{Name: label, OK: false, Detail: "no user.name (email is " + email + ")", Hint: hint, DocURL: docURL}
 	case email == "":

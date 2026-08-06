@@ -46,27 +46,24 @@ function gitErrorText(e: unknown): string {
     return String(e)
 }
 
-export interface GitIdentity {
-    name: string
-    email: string
-}
+// There is deliberately NO up-front `git config user.name/user.email` check here:
+// unset config alone doesn't stop git — with the default user.useConfigOnly=false it
+// auto-detects `<username>@<hostname>` and commits fine, so a pre-check would lock
+// out users whose commits work. git only refuses when auto-detection ALSO fails (or
+// useConfigOnly is set), and that refusal is recognizable from its stderr — so the
+// fix instructions ride on the failure that actually happens.
+const identityFailure =
+    /author identity unknown|please tell me who you are|empty ident|unable to auto-detect email/i
 
-// git refuses to commit without an author identity, and that refusal used to be
-// swallowed into an empty access branch. Checking it UP FRONT means the user is
-// told what to set before any branch is pushed, instead of after the PR fails.
-export function gitIdentityProblem(identity: GitIdentity): string {
-    const missing = [
-        identity.name.trim() ? '' : 'user.name',
-        identity.email.trim() ? '' : 'user.email',
-    ].filter(Boolean)
-    if (missing.length === 0) return ''
+export function commitFailureMessage(gitError: string): string {
+    const base = `Could not commit your keyring entry: ${gitError}`
+    if (!identityFailure.test(gitError)) return base
     return [
-        `git has no ${missing.join(' or ')} configured, so it can't author your keyring commit.`,
-        'Set it with:',
-        ...missing.map(
-            key =>
-                `  git config --global ${key} "${key === 'user.name' ? 'Your Name' : 'you@example.com'}"`
-        ),
+        base,
+        '',
+        'git has no author identity it can use. Set one with:',
+        '  git config --global user.name "Your Name"',
+        '  git config --global user.email "you@example.com"',
         'Then run this again.',
     ].join('\n')
 }
@@ -122,7 +119,7 @@ export async function requestAccess(
         try {
             await git(['commit', '-m', `Add ${opts.name} to keyring`])
         } catch (e) {
-            throw new Error(`Could not commit your keyring entry: ${gitErrorText(e)}`)
+            throw new Error(commitFailureMessage(gitErrorText(e)))
         }
     }
     await git(['push', '-u', 'origin', branch])
@@ -161,12 +158,6 @@ export async function resolveRequestAccessName(
 export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
     const name = await resolveRequestAccessName(opts)
     const email = opts.email || (await safeGitConfigEmail())
-
-    // Fail before pushing anything. A commit that can't be authored used to leave a
-    // branch on the remote with no commits on it, which nothing could recover from.
-    const problem = gitIdentityProblem({ name: await safeGitConfigName(), email })
-    if (problem) throw new Error(problem)
-
     const date = new Date().toISOString().slice(0, 10)
     const { branch, created } = await requestAccess({ dir: configDir(), name, email, date })
     console.log(

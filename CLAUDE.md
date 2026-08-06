@@ -157,13 +157,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   is treated as absent, not as an explicit name — the GUI sends one). Re-running is
   safe and idempotent: the same key reuses its keyring entry and its branch, and an
   already-open PR is reported rather than duplicated.
-  It **refuses to start without `git config user.name`/`user.email`**, and a failing
-  `git commit` is now fatal instead of being swallowed as "already committed". Those
-  two are the same bug: git can't author a commit without an identity, the old catch
-  read that failure as a no-op, and the branch was pushed with NOTHING on it — so
-  `gh pr create` died with `No commits between main and access/<name>`, which
-  `open-access-pr` could not repair (it only retries the create). `git diff --cached
-  --quiet` now decides which case it is: nothing staged = genuinely already committed.
+  A failing `git commit` is **fatal** instead of being swallowed as "already
+  committed": the old catch read every commit failure as a no-op, so a commit git
+  refused pushed a branch with NOTHING on it and `gh pr create` died with `No
+  commits between main and access/<name>`, which `open-access-pr` could not repair
+  (it only retries the create). `git diff --cached --quiet` now decides which case
+  it is (nothing staged = genuinely already committed), and an identity-shaped
+  failure gets the exact `git config` commands appended (`commitFailureMessage`).
+  There is deliberately NO up-front `git config` gate — unset config alone doesn't
+  stop git (it auto-detects `<username>@<hostname>` and commits with a warning), so
+  a pre-check would lock out users whose commits work fine.
 - `pnpm qar access-status` — report where your access request stands, as JSON:
   `no-identity`, `no-branch`, `branch-no-pr`, `pr-open`, `pr-closed`,
   `merged-awaiting-rekey`, `ready`. Keyed on the local age **public key** (stored

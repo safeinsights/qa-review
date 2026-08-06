@@ -1058,9 +1058,10 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 	}
 }
 
-// git with no user.name/user.email can't author a commit. That surfaced only much
-// later — as an access branch pushed with no commit on it and a PR that failed with
-// "No commits between main and access/<name>" — so the doctor names it up front.
+// The doctor row is advisory: git with no user.name/user.email usually still
+// commits (auto-detected `<username>@<hostname>`), which makes for poor keyring
+// attribution — and when auto-detection also fails, the commit is refused
+// outright. Either way the doctor should name the unset config up front.
 func TestGitIdentityCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name, gitName, gitEmail, wantDetail string
@@ -1071,7 +1072,7 @@ func TestGitIdentityCheck(t *testing.T) {
 		{"no name", "", "ada@x.com", "no user.name", false},
 		{"no email", "Ada Lovelace", "", "no user.email", false},
 		// `git config user.name ""` yields a blank line, not an error — treating that
-		// as configured would put the user back in the failing commit.
+		// as configured would report a green row for an identity git won't use.
 		{"whitespace only", "  ", "\t", "no user.name or user.email", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

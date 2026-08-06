@@ -3,7 +3,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-    gitIdentityProblem,
+    commitFailureMessage,
     requestAccess,
     resolveRequestAccessName,
 } from '@/cli/commands/request-access'
@@ -174,32 +174,33 @@ describe('request-access', () => {
     })
 })
 
-// Checked up front so the user is told what to set BEFORE a branch is pushed —
-// after the push, the failure mode is an empty branch that only `request-access`
-// (not the "Open pull request" button the GUI offers) can repair.
-describe('gitIdentityProblem', () => {
-    it('is silent when both are set', () => {
-        expect(gitIdentityProblem({ name: 'Ada', email: 'ada@x.com' })).toBe('')
+// The fix instructions ride on the commit failure that actually happens — there is
+// no up-front `git config` gate, because unset config alone doesn't stop git (it
+// auto-detects `<username>@<hostname>` and commits). Only an identity-shaped stderr
+// earns the `git config` hint; every other failure surfaces untouched.
+describe('commitFailureMessage', () => {
+    it('appends the git config commands when git refused for lack of identity', () => {
+        const message = commitFailureMessage(
+            '*** Please tell me who you are.\nfatal: unable to auto-detect email address'
+        )
+        expect(message).toMatch(/Could not commit your keyring entry/)
+        expect(message).toMatch(/git config --global user\.name/)
+        expect(message).toMatch(/git config --global user\.email/)
     })
 
-    it('names both when neither is set, and shows the commands', () => {
-        const problem = gitIdentityProblem({ name: '', email: '' })
-        expect(problem).toMatch(/user\.name or user\.email/)
-        expect(problem).toMatch(/git config --global user\.name/)
-        expect(problem).toMatch(/git config --global user\.email/)
+    it('recognizes the "Author identity unknown" variant', () => {
+        expect(commitFailureMessage('Author identity unknown')).toMatch(
+            /git config --global user\.name/
+        )
     })
 
-    it('names only the missing one', () => {
-        const problem = gitIdentityProblem({ name: 'Ada', email: '' })
-        expect(problem).toMatch(/user\.email/)
-        expect(problem).not.toMatch(/user\.name or/)
-    })
-
-    // Whitespace-only is what `git config user.name` yields for a key set to "" —
-    // treating it as present would put the user right back in the failing commit.
-    it('treats whitespace-only values as missing', () => {
-        expect(gitIdentityProblem({ name: '   ', email: '\t' })).toMatch(
-            /user\.name or user\.email/
+    // A hook rejection (or locked index, or signing failure) has nothing to do with
+    // git identity — appending the config hint there would send the user down the
+    // wrong path, so git's real error must pass through untouched.
+    it('passes a non-identity failure through without the hint', () => {
+        const message = commitFailureMessage('husky - pre-commit hook exited with code 1')
+        expect(message).toBe(
+            'Could not commit your keyring entry: husky - pre-commit hook exited with code 1'
         )
     })
 })
