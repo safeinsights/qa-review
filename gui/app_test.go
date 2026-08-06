@@ -1058,6 +1058,38 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 	}
 }
 
+// The doctor row is advisory: git with no user.name/user.email usually still
+// commits (auto-detected `<username>@<hostname>`), which makes for poor keyring
+// attribution — and when auto-detection also fails, the commit is refused
+// outright. Either way the doctor should name the unset config up front.
+func TestGitIdentityCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, gitName, gitEmail, wantDetail string
+		wantOK                              bool
+	}{
+		{"both set", "Ada Lovelace", "ada@x.com", "Ada Lovelace <ada@x.com>", true},
+		{"neither set", "", "", "no user.name or user.email", false},
+		{"no name", "", "ada@x.com", "no user.name", false},
+		{"no email", "Ada Lovelace", "", "no user.email", false},
+		// `git config user.name ""` yields a blank line, not an error — treating that
+		// as configured would report a green row for an identity git won't use.
+		{"whitespace only", "  ", "\t", "no user.name or user.email", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gitIdentityCheck(tc.gitName, tc.gitEmail)
+			if got.OK != tc.wantOK {
+				t.Fatalf("gitIdentityCheck(%q, %q).OK = %v, want %v", tc.gitName, tc.gitEmail, got.OK, tc.wantOK)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if !tc.wantOK && got.Hint == "" {
+				t.Fatal("a failing git identity check must carry a hint with the fix")
+			}
+		})
+	}
+}
+
 // A Finder-launched .app inherits NO TERM (launchd sets none — only a shell does),
 // so `claude` saw a capability-less terminal and emitted plain text: the embedded
 // xterm rendered black-and-white. Under `wails dev` the launching shell's TERM leaked
