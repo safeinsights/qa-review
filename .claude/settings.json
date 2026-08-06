@@ -11,9 +11,11 @@
     "network": {
       "allowedDomains": [
         "openstax.atlassian.net",
-        "app.qa.safeinsights.org",
+        "*.qa.safeinsights.org",
         "app.staging.safeinsights.org",
-        "api.github.com"
+        "app.safeinsights.org",
+        "api.github.com",
+        "api.mail.tm"
       ]
     },
     "enableWeakerNetworkIsolation": true,

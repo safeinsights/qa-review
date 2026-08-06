@@ -304,7 +304,13 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
 - The **network allowlist is `sandbox.network.allowedDomains`**. Hosts also arrive
   from `WebFetch(domain:…)` permission rules, which is why a host can work for
   whoever accumulated that rule in their **gitignored** `.claude/settings.local.json`
-  and fail for everyone else. Put shared hosts in the committed file.
+  and fail for everyone else. Put shared hosts in the committed file. Wildcards are
+  supported: `*.qa.safeinsights.org` covers `app.qa` AND every `pr<N>.qa` preview
+  host from `prBaseUrl()` — a bare `app.qa.safeinsights.org` entry would make QA
+  runs work while PR-preview runs fail with the same unnamed transport error. The
+  list also carries every non-Jira host the engine reaches via Node `fetch`
+  (currently `api.mail.tm`, the signup suite's disposable-inbox API) — a new
+  outbound host in the engine needs a matching entry here.
 - **`sandbox.excludedCommands` did NOT take effect.** The key is schema-valid and has
   listed `qar`/`pnpm qar`/`gh` since the file was created, yet sandboxed `gh` still
   failed the keychain check while its host WAS allowlisted — proof the command ran

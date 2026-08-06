@@ -83,7 +83,8 @@ export async function jiraFetch(url: string, init: RequestInit): Promise<Respons
         throw new Error(
             `Could not reach ${host} (${reason}). Either you are offline, or the command ` +
                 `sandbox is blocking the host — add "${host}" to sandbox.network.allowedDomains ` +
-                'in .claude/settings.json, or re-run with the sandbox disabled.',
+                'in .claude/settings.json (takes effect in a NEW session), or re-run with the ' +
+                'sandbox disabled.',
             { cause }
         )
     }

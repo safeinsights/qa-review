@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
     buildCommentAdf,
@@ -132,39 +132,28 @@ describe('splitBodyIntoSegments', () => {
 describe('jiraFetch', () => {
     const offline = () => Promise.reject(new TypeError('fetch failed'))
 
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
     it('names the unreachable host and the sandbox allowlist fix', async () => {
-        const original = globalThis.fetch
-        globalThis.fetch = offline as unknown as typeof fetch
-        try {
-            await expect(
-                jiraFetch('https://openstax.atlassian.net/rest/api/3/issue/OTTER-1/comment', {})
-            ).rejects.toThrow(/openstax\.atlassian\.net.*sandbox\.network\.allowedDomains/s)
-        } finally {
-            globalThis.fetch = original
-        }
+        vi.stubGlobal('fetch', offline)
+        await expect(
+            jiraFetch('https://openstax.atlassian.net/rest/api/3/issue/OTTER-1/comment', {})
+        ).rejects.toThrow(/openstax\.atlassian\.net.*sandbox\.network\.allowedDomains/s)
     })
 
     it('preserves the original error as the cause', async () => {
-        const original = globalThis.fetch
-        globalThis.fetch = offline as unknown as typeof fetch
-        try {
-            const error = await jiraFetch('https://openstax.atlassian.net/x', {}).catch(e => e)
-            expect((error as Error).cause).toBeInstanceOf(TypeError)
-        } finally {
-            globalThis.fetch = original
-        }
+        vi.stubGlobal('fetch', offline)
+        const error = await jiraFetch('https://openstax.atlassian.net/x', {}).catch(e => e)
+        expect((error as Error).cause).toBeInstanceOf(TypeError)
     })
 
     // Success must pass straight through — the wrapper only translates rejections.
     it('returns the response untouched when the request succeeds', async () => {
-        const original = globalThis.fetch
         const response = new Response('ok', { status: 200 })
-        globalThis.fetch = (() => Promise.resolve(response)) as unknown as typeof fetch
-        try {
-            await expect(jiraFetch('https://openstax.atlassian.net/x', {})).resolves.toBe(response)
-        } finally {
-            globalThis.fetch = original
-        }
+        vi.stubGlobal('fetch', () => Promise.resolve(response))
+        await expect(jiraFetch('https://openstax.atlassian.net/x', {})).resolves.toBe(response)
     })
 })
 
