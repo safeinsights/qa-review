@@ -65,6 +65,30 @@ function authHeader(config: JiraConfig): string {
     return `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')}`
 }
 
+// `fetch` rejects with a bare `TypeError: fetch failed` for every transport-level
+// failure — offline, DNS, or (the one that actually bites here) the Claude command
+// sandbox blocking the host. That message names neither the host nor the cause, so a
+// sandbox-blocked `qar jira-comment` was indistinguishable from a broken command and
+// cost a validation session two retries. Name the host and the fix instead.
+export async function jiraFetch(url: string, init: RequestInit): Promise<Response> {
+    try {
+        return await fetch(url, init)
+    } catch (cause) {
+        const reason = cause instanceof Error ? cause.message : String(cause)
+        // A malformed baseUrl would throw here too; fall back to the raw URL.
+        let host = url
+        try {
+            host = new URL(url).host
+        } catch {}
+        throw new Error(
+            `Could not reach ${host} (${reason}). Either you are offline, or the command ` +
+                `sandbox is blocking the host — add "${host}" to sandbox.network.allowedDomains ` +
+                'in .claude/settings.json, or re-run with the sandbox disabled.',
+            { cause }
+        )
+    }
+}
+
 async function assertOk(response: Response, what: string): Promise<void> {
     if (response.ok) return
     const body = await response.text().catch(() => '')
@@ -119,7 +143,7 @@ export async function uploadAttachment(
     const data = fs.readFileSync(absolute)
     const form = new FormData()
     form.append('file', new Blob([data]), path.basename(absolute))
-    const response = await fetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/attachments`, {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/attachments`, {
         method: 'POST',
         headers: {
             Authorization: authHeader(config),
@@ -137,7 +161,7 @@ export async function uploadAttachment(
 
 // Resolves an attachment's Media Services UUID from the content endpoint's redirect.
 export async function resolveMediaId(config: JiraConfig, attachmentId: string): Promise<string> {
-    const response = await fetch(
+    const response = await jiraFetch(
         `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`,
         { method: 'GET', headers: { Authorization: authHeader(config) }, redirect: 'manual' }
     )
@@ -157,7 +181,7 @@ export async function addCommentAdf(
     issueKey: string,
     adf: Record<string, unknown>
 ): Promise<{ id: string; url: string }> {
-    const response = await fetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
         method: 'POST',
         headers: {
             Authorization: authHeader(config),
@@ -178,7 +202,7 @@ export async function deleteComment(
     issueKey: string,
     commentId: string
 ): Promise<void> {
-    const response = await fetch(
+    const response = await jiraFetch(
         `${config.baseUrl}/rest/api/3/issue/${issueKey}/comment/${commentId}`,
         { method: 'DELETE', headers: { Authorization: authHeader(config) } }
     )

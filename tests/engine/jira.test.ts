@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
-import { buildCommentAdf, extractMediaId, jiraConfig, jiraConfigFromEnv } from '@/engine/jira'
+import {
+    buildCommentAdf,
+    extractMediaId,
+    jiraConfig,
+    jiraConfigFromEnv,
+    jiraFetch,
+} from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
 
@@ -117,6 +123,48 @@ describe('splitBodyIntoSegments', () => {
     it('leaves a placeholder pointing at a missing image as literal text', () => {
         const segments = splitBodyIntoSegments('text {{image:9}}', [])
         expect(segments).toEqual([{ type: 'text', text: 'text {{image:9}}' }])
+    })
+})
+
+// A sandbox-blocked host and a genuine outage both surface as `TypeError: fetch failed`,
+// which names neither. These assert the wrapper turns that into something actionable —
+// the failure that cost a real validation session two retries.
+describe('jiraFetch', () => {
+    const offline = () => Promise.reject(new TypeError('fetch failed'))
+
+    it('names the unreachable host and the sandbox allowlist fix', async () => {
+        const original = globalThis.fetch
+        globalThis.fetch = offline as unknown as typeof fetch
+        try {
+            await expect(
+                jiraFetch('https://openstax.atlassian.net/rest/api/3/issue/OTTER-1/comment', {})
+            ).rejects.toThrow(/openstax\.atlassian\.net.*sandbox\.network\.allowedDomains/s)
+        } finally {
+            globalThis.fetch = original
+        }
+    })
+
+    it('preserves the original error as the cause', async () => {
+        const original = globalThis.fetch
+        globalThis.fetch = offline as unknown as typeof fetch
+        try {
+            const error = await jiraFetch('https://openstax.atlassian.net/x', {}).catch(e => e)
+            expect((error as Error).cause).toBeInstanceOf(TypeError)
+        } finally {
+            globalThis.fetch = original
+        }
+    })
+
+    // Success must pass straight through — the wrapper only translates rejections.
+    it('returns the response untouched when the request succeeds', async () => {
+        const original = globalThis.fetch
+        const response = new Response('ok', { status: 200 })
+        globalThis.fetch = (() => Promise.resolve(response)) as unknown as typeof fetch
+        try {
+            await expect(jiraFetch('https://openstax.atlassian.net/x', {})).resolves.toBe(response)
+        } finally {
+            globalThis.fetch = original
+        }
     })
 })
 
