@@ -84,7 +84,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | session | jira-comment |
+  request-access | rekey | set-secret | get-secret | sync | session | jira-comment |
   jira-delete-comment`.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
   See "Posting Jira comments with inline screenshots" below for why this exists
@@ -187,6 +187,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
 - `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
   recipients (the GUI Settings "save secret" path).
+- `pnpm qar get-secret --name <VAR> [--force]` — the READ half: prints one decrypted
+  value to stdout. The var is named with **`--name`, not `--key`** — `BOOLEANS` in
+  `bin/qar.ts` is ONE list shared by every subcommand and `key` is already in it
+  (`fix-account`'s valueless switch), so `--key FOO` would parse to `true`, drop
+  `FOO`, and look up a var literally named "true" — a silent wrong answer, not an
+  error. Writes NO trailing newline, so a PEM stays byte-exact, and refuses to print
+  to a TTY without `--force` (keeps private keys out of scrollback):
+  `qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem`.
+  `*.pem` is gitignored, but delete the extracted file when done anyway — it's a
+  live results-decryption key on disk.
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
@@ -385,12 +395,20 @@ every `qar` call in the packaged app); quoted it becomes one nonexistent command
 name. Split into one path per var, each expansion is a single word and quotes
 correctly. Don't recombine them.
 
-**The shim does NOT fall back to `pnpm` when `QAR_REPO_DIR` is set but `QAR_NODE`
-isn't.** That combination means a PACKAGED app whose `Resources/engine/qar.bundle.mjs`
-wasn't found (`resourcesDir()` returned `""`), and the `pnpm qar` fallback is for a
-DEV CHECKOUT — there, `node_modules` is a symlink into the `.app`, so pnpm dead-ends
-on a node-version or pinned-pnpm error that names nothing real. The shim exits 127
-with the actual cause instead. `withGuiPath()` correspondingly STRIPS inherited
+**`QAR_REPO_DIR` set without `QAR_NODE`/`QAR_BUNDLE` is ambiguous, and the shim
+resolves it by looking for `bin/qar.ts` in that dir.** The combination has two
+causes with opposite fixes: (a) a DEV CHECKOUT pinning the repo explicitly — both
+`wails dev` (where `resourcesDir()` is `""` by design) and `scripts/approve-access.sh`,
+which sets `QAR_REPO_DIR="$REPO"` to target a clone; and (b) a PACKAGED app whose
+`Resources/engine/qar.bundle.mjs` wasn't found. `pnpm qar` is right for (a) and
+cannot work for (b) — there `node_modules` is a symlink into the `.app`, so pnpm
+dead-ends on a node-version or pinned-pnpm error that names nothing real.
+`bin/qar.ts` is the engine SOURCE: present in every checkout, never shipped in the
+`.app` (`Resources/engine/` holds only the bundle + `node_modules`), so its presence
+separates the two. The shim exits 127 with the real cause only for (b).
+Treating the var alone as "packaged" broke `approve-access.sh` in an ordinary dev
+checkout (`tests/cli/qar-shim.test.ts` pins this).
+`withGuiPath()` correspondingly STRIPS inherited
 `QAR_NODE`/`QAR_BUNDLE` (it already stripped `PATH`/`QAR_REPO_DIR`): `QAR_REPO_DIR` is
 appended unconditionally while the pair is packaged-only, so without stripping, the
 two halves of the shim's contract can disagree.
@@ -509,8 +527,10 @@ through the issue attachment endpoint only.
 - `pnpm qar open-access-pr` — open/report the PR for an already-pushed access branch
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
-  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine via
-  the `bin/qar` shim)
+  branch, `qar rekey`, push, approve, and merge (honors `QAR_REPO_DIR`; runs the
+  engine via the `bin/qar` shim). The approve step satisfies the org `require-pr`
+  ruleset (1 review on the default branch, not admin-bypassable); since GitHub
+  forbids self-approval, a PR you opened yourself still needs a second reviewer
 - `scripts/revoke-access.sh "<name>" [--no-pr] [--yes]` — remove a user from the
   keyring, rekey to the survivors, and open a revocation PR
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)

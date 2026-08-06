@@ -140,7 +140,20 @@ the GUI shows a "rekey needed" banner.
 ```bash
 qar rekey                               # re-encrypt all secrets to the current keyring
 qar set-secret --key <VAR> --value <v>  # encrypt one secret to all recipients
+qar get-secret --name <VAR>             # print one decrypted secret to stdout
 ```
+
+`get-secret` takes **`--name`**, not `--key` (the parser's booleans list is shared
+across subcommands, and `--key` is already `fix-account`'s valueless switch). It emits
+no trailing newline so a PEM stays byte-exact, and refuses to write to a terminal
+without `--force`. Extracting the reviewer's results key, for example:
+
+```bash
+qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem
+```
+
+`*.pem` is gitignored, so it won't be committed by accident — but delete the file
+when you're done anyway: it's a live results-decryption key sitting on disk.
 
 **Onboarding is a PR.** `request-access` adds your key to the keyring and opens a PR; a
 reviewer runs `qar rekey` on that branch before merging, so there's never a window where
@@ -186,7 +199,7 @@ make dmg            # signed + notarized .dmg (needs DEVELOPER_ID + NOTARY_PROFI
 |------|------|
 | `src/engine/` | The run engine — `runEngine()`, env resolution, suite registry |
 | `src/suites/` | The actual suites (`signin`, `create-study`, `study-happy-path`, `discover`) |
-| `src/cli/` · `bin/qar.ts` | CLI: `run · login · cleanup · codegen · list · migrate · request-access · rekey · set-secret · sync · session` |
+| `src/cli/` · `bin/qar.ts` | CLI: `run · login · cleanup · codegen · list · migrate · request-access · rekey · set-secret · get-secret · sync · session` |
 | `gui/` | Wails app — Go backend (`app.go`, `settings.go`) + React/Vite frontend |
 | `config/` | Environments + layered settings + the keyring |
 

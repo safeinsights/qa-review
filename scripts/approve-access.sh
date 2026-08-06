@@ -2,12 +2,16 @@
 #
 # Approve a keyring access-request PR (reviewer step). Given the PR number, this
 # checks out its branch, re-encrypts the shared secrets to include the new
-# recipient (`qar rekey`), pushes, and merges — the atomic "add a teammate" flow
-# from CLAUDE.md, done in one command instead of five.
+# recipient (`qar rekey`), pushes, approves, and merges — the atomic "add a
+# teammate" flow from CLAUDE.md, done in one command instead of five.
 #
 # You must ALREADY be a keyring recipient: rekey decrypts the existing secrets
 # with YOUR identity before re-encrypting to everyone. A brand-new member can't
 # approve their own request.
+#
+# The approval is required by the org's `require-pr` ruleset (1 approving review on
+# the default branch) and cannot be bypassed with admin rights. Since GitHub forbids
+# self-approval, running this on a PR YOU opened still needs a second reviewer.
 #
 #   scripts/approve-access.sh 10
 #   scripts/approve-access.sh 10 --no-merge      # rekey + push, but leave merging to you
@@ -81,6 +85,19 @@ else
 fi
 
 if [[ "$MERGE" == "1" ]]; then
+    # The org-level `require-pr` ruleset requires 1 approving review on the default
+    # branch, so a merge without one is refused ("base branch policy prohibits the
+    # merge"). Approve first — but never let that abort the run (set -e is on):
+    # GitHub REFUSES self-approval, so this legitimately fails when the reviewer is
+    # also the requester. The merge below is the real gate; let IT report the problem.
+    if [[ "$(gh pr view "$PR" --json reviewDecision --jq .reviewDecision)" == "APPROVED" ]]; then
+        echo "==> PR #${PR} is already approved." >&2
+    else
+        echo "==> Approving PR #${PR}..." >&2
+        gh pr review "$PR" --approve 1>&2 ||
+            echo "warning: could not approve #$PR (GitHub forbids self-approval) — another reviewer must approve it." >&2
+    fi
+
     echo "==> Merging PR #${PR}..." >&2
     gh pr merge "$PR" --squash --delete-branch 1>&2
     # Land on a real branch and pull the merge so the local clone reflects it.
