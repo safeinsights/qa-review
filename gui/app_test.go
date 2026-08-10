@@ -1090,6 +1090,87 @@ func TestGitIdentityCheck(t *testing.T) {
 	}
 }
 
+// The figma row is parsed from `claude mcp list`, whose health check is the same
+// view a session gets (the per-session --mcp-config is additive, not exclusive).
+// "Connected" doubles as the access check: an unauthenticated remote figma server
+// reports "Needs authentication", never "Connected".
+func TestFigmaMcpCheck(t *testing.T) {
+	// Real `claude mcp list` output shape, figma via the Claude Code plugin.
+	healthy := "Checking MCP server health…\n\n" +
+		"chrome-devtools: npx chrome-devtools-mcp@1.6.0 - ✔ Connected\n" +
+		"plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected\n" +
+		"jira-atlassian: uvx mcp-atlassian - ✔ Connected"
+
+	for _, tc := range []struct {
+		name, out, wantDetail, wantHint string
+		err                             error
+		wantOK                          bool
+	}{
+		{name: "plugin connected", out: healthy, wantOK: true, wantDetail: "plugin:figma:figma"},
+		{
+			name:       "needs authentication",
+			out:        "plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ⚠ Needs authentication",
+			wantOK:     false,
+			wantDetail: "Needs authentication",
+			wantHint:   "/mcp",
+		},
+		{
+			name:       "failed to connect",
+			out:        "figma: https://mcp.figma.com/mcp (HTTP) - ✘ Failed to connect",
+			wantOK:     false,
+			wantDetail: "Failed to connect",
+			wantHint:   "/mcp",
+		},
+		{
+			name:       "no figma server",
+			out:        "chrome-devtools: npx chrome-devtools-mcp@1.6.0 - ✔ Connected",
+			wantOK:     false,
+			wantDetail: "no figma server",
+			wantHint:   "claude mcp add",
+		},
+		{
+			// Only the server NAME may match: a command line that mentions figma (a
+			// wrapper script, a proxy) is not a figma server.
+			name:       "figma only in the command",
+			out:        "designproxy: npx figma-proxy - ✔ Connected",
+			wantOK:     false,
+			wantDetail: "no figma server",
+		},
+		{
+			name:       "claude mcp list fails",
+			out:        "some error output",
+			err:        errors.New("exit status 1"),
+			wantOK:     false,
+			wantDetail: "`claude mcp list` failed",
+		},
+		{
+			// Two figma entries where one is healthy: the connected one wins — the
+			// stale/broken duplicate shouldn't fail a working setup.
+			name: "one of two connected",
+			out: "figma-old: npx old-figma-mcp - ✘ Failed to connect\n" +
+				"plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected",
+			wantOK:     true,
+			wantDetail: "plugin:figma:figma",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := figmaMcpCheck(tc.out, tc.err)
+			if got.OK != tc.wantOK {
+				t.Fatalf("figmaMcpCheck().OK = %v, want %v (detail: %s)", got.OK, tc.wantOK, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if tc.wantHint != "" && !strings.Contains(got.Hint, tc.wantHint) {
+				t.Fatalf("Hint = %q, want it to mention %q", got.Hint, tc.wantHint)
+			}
+			if !tc.wantOK && got.Hint == "" {
+				t.Fatal("a failing figma check must carry a Hint with the fix")
+			}
+		})
+	}
+}
+
 // A Finder-launched .app inherits NO TERM (launchd sets none — only a shell does),
 // so `claude` saw a capability-less terminal and emitted plain text: the embedded
 // xterm rendered black-and-white. Under `wails dev` the launching shell's TERM leaked
