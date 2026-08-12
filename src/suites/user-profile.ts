@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import type { RunContext, Suite } from './types'
 
-// Regression coverage for the Profile feature (/researcher/profile).
+// Regression coverage for the User Profile feature (/researcher/profile).
 //
 // The page is four independently-saved cards — Personal information, Highest
 // level of education, Current institutional information, Research details. Each
@@ -17,6 +17,11 @@ import type { RunContext, Suite } from './types'
 // cleanup-based — a profile is a singleton per user, not a created entity, so
 // there is nothing to hand to ctx.trackStudy/trackUser. Each run overwrites the
 // same known values, and the personal-name check restores what it found.
+//
+// Each step also re-establishes what it needs rather than inheriting on-screen
+// state from the step before it. The engine can jump to, or retry, one step in
+// isolation (see applyJump in engine/run.ts), so a step that assumed its
+// predecessor had just run would fail there in a way that says nothing useful.
 //
 // Sections are addressed through their Mantine Paper card (`sectionCard`) because
 // the four "Save changes" buttons are otherwise indistinguishable, and one of
@@ -54,6 +59,9 @@ const RESEARCH = {
     featured: ['https://doi.org/10.1234/qa-review-one', 'https://doi.org/10.1234/qa-review-two'],
 }
 const INVALID_URL = 'not-a-valid-url'
+// The research-interests field caps at five, so clearing it can never need more
+// clicks than that plus slack. Bounds the removal loop in setInterests.
+const MAX_PILL_REMOVALS = 10
 
 const sectionCard = (page: Page, heading: string): Locator =>
     page.locator('.mantine-Paper-root').filter({
@@ -116,7 +124,16 @@ const pills = (section: Locator): Locator => section.locator('.mantine-Pill-root
 async function setInterests(section: Locator, values: string[]): Promise<void> {
     const input = section.locator('#researchInterests')
     const remove = section.locator('.mantine-Pill-remove')
-    while ((await remove.count()) > 0) {
+    // Bounded, not `while (count > 0)`: if a click ever stops removing (disabled
+    // control, a pill that re-adds itself) an unbounded loop spins until the global
+    // step timeout with nothing said about why. The field caps at five, so anything
+    // past a handful of iterations is a real defect worth naming.
+    for (let i = 0; (await remove.count()) > 0; i++) {
+        if (i >= MAX_PILL_REMOVALS) {
+            throw new Error(
+                `research-interest pills are not clearing: ${await remove.count()} still present after ${i} removals`
+            )
+        }
         await remove.first().click()
     }
     await expect(pills(section)).toHaveCount(0)
@@ -125,6 +142,32 @@ async function setInterests(section: Locator, values: string[]): Promise<void> {
         await input.press('Enter')
     }
     await expect(pills(section)).toHaveCount(values.length)
+}
+
+// The account's name as it should be left behind, cached on ctx.state so the two
+// personal-information steps agree on one value within a run.
+//
+// Read from the form rather than passed between steps: the engine can jump to or
+// retry an individual step, so a step that assumed its predecessor had populated
+// ctx.state would crash there rather than simply re-deriving what it needs.
+//
+// The `-QA` strip absorbs a run that died between the rename and its restore —
+// the suffix is stripped repeatedly, so a dirty account converges on the original
+// name instead of accumulating "-QA-QA".
+async function originalName(
+    ctx: RunContext,
+    section: Locator
+): Promise<{ first: string; last: string }> {
+    const cached = ctx.state.originalName as { first: string; last: string } | undefined
+    if (cached) return cached
+
+    await openForEdit(section, '#firstName')
+    const original = {
+        first: (await section.locator('#firstName').inputValue()).trim(),
+        last: (await section.locator('#lastName').inputValue()).trim().replace(/(-QA)+$/, ''),
+    }
+    ctx.state.originalName = original
+    return original
 }
 
 async function gotoProfile(ctx: RunContext): Promise<void> {
@@ -136,9 +179,9 @@ async function gotoProfile(ctx: RunContext): Promise<void> {
     await expect(page.getByRole('heading', { level: 1, name: PROFILE_HEADING })).toBeVisible()
 }
 
-export const profileSuite: Suite = {
-    name: 'Profile',
-    description: 'Regression: Profile — all four cards save, validate and persist',
+export const userProfileSuite: Suite = {
+    name: 'user-profile',
+    description: 'Regression: User Profile, all four cards save, validate and persist',
     roles: ['admin', 'researcher', 'reviewer'],
     steps: [
         {
@@ -170,15 +213,7 @@ export const profileSuite: Suite = {
                     await expect(section.locator('#email')).toBeDisabled()
 
                     const firstName = section.locator('#firstName')
-                    const original = {
-                        first: (await firstName.inputValue()).trim(),
-                        // Strip a suffix left by a previous interrupted run so the
-                        // restore below converges instead of stacking "-QA-QA".
-                        last: (await section.locator('#lastName').inputValue())
-                            .trim()
-                            .replace(/(-QA)+$/, ''),
-                    }
-                    ctx.state.originalName = original
+                    const original = await originalName(ctx, section)
 
                     await firstName.fill('')
                     await expect(saveButton(section)).toBeDisabled()
@@ -191,8 +226,11 @@ export const profileSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const { page } = ctx
-                    const original = ctx.state.originalName as { first: string; last: string }
                     const section = sectionCard(page, SECTION.personal)
+                    // Re-derive rather than requiring the previous step's state: the engine
+                    // can jump to or retry a single step, and reading ctx.state blindly
+                    // fails there with an undefined-destructure instead of anything useful.
+                    const original = await originalName(ctx, section)
                     const renamed = `${original.last}-QA`
 
                     await section.locator('#lastName').fill(renamed)
@@ -248,7 +286,10 @@ export const profileSuite: Suite = {
                 ctx.step(async () => {
                     const { page } = ctx
                     const section = sectionCard(page, SECTION.education)
-                    const pursuing = section.getByRole('checkbox')
+                    // Named, not a bare getByRole('checkbox'): an unscoped match would
+                    // become an ambiguous-locator error the moment this card gains a
+                    // second checkbox, instead of a legible selector mismatch.
+                    const pursuing = section.getByRole('checkbox', { name: /currently pursuing/i })
                     if (!(await pursuing.isChecked())) await pursuing.check()
 
                     await saveSection(page, section, 'Education updated')
@@ -315,6 +356,15 @@ export const profileSuite: Suite = {
                 ctx.step(async () => {
                     const { page } = ctx
                     const section = sectionCard(page, SECTION.institutional)
+                    // Re-establish the form rather than saving whatever the previous step
+                    // left on screen: run on its own against a saved profile this card is
+                    // a read-only table, and saveSection would time out waiting for a
+                    // "Save changes" button that is not rendered.
+                    await openPositionForEdit(section)
+                    await section.locator('#affiliation').fill(PRIMARY_POSITION.affiliation)
+                    await section.locator('#position').fill(PRIMARY_POSITION.position)
+                    await section.locator('#profileUrl').fill(PRIMARY_POSITION.profileUrl)
+
                     await saveSection(page, section, 'Current institutional information updated')
 
                     await expect(
@@ -379,6 +429,7 @@ export const profileSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const section = sectionCard(ctx.page, SECTION.research)
+                    await openForEdit(section, '#detailedPublicationsUrl')
                     await section.locator('#detailedPublicationsUrl').fill(INVALID_URL)
                     await section.locator('#featured0').fill(INVALID_URL)
 
@@ -397,6 +448,12 @@ export const profileSuite: Suite = {
                         'aria-invalid',
                         'true'
                     )
+
+                    // Clear the deliberately-bad values before leaving. The next step would
+                    // overwrite them anyway, but a run that stops here should not strand the
+                    // card mid-error for whoever opens the page next.
+                    await section.locator('#detailedPublicationsUrl').fill(RESEARCH.detailedUrl)
+                    await section.locator('#featured0').fill(RESEARCH.featured[0])
                 }),
         },
         {
@@ -405,6 +462,7 @@ export const profileSuite: Suite = {
                 ctx.step(async () => {
                     const { page } = ctx
                     const section = sectionCard(page, SECTION.research)
+                    await openForEdit(section, '#detailedPublicationsUrl')
                     await section.locator('#detailedPublicationsUrl').fill(RESEARCH.detailedUrl)
                     await section.locator('#featured0').fill(RESEARCH.featured[0])
                     await section.locator('#featured1').fill(RESEARCH.featured[1])
