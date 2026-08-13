@@ -2354,6 +2354,14 @@ func (a *App) RunDoctor() []DoctorCheck {
 
 	checks = append(checks, jiraCheck(a.readJiraConfig()))
 
+	// Figma MCP + access — `claude mcp list` health-checks every server claude is
+	// configured with (the same set a session inherits alongside its --mcp-config),
+	// so one shell-out answers both "is a figma server set up" and "is it connected".
+	if toolOnPath("claude") {
+		out, err := runToolFull("claude", "mcp", "list")
+		checks = append(checks, figmaMcpCheck(out, err))
+	}
+
 	return checks
 }
 
@@ -2511,6 +2519,73 @@ func jiraMissingPermissions(cfg JiraCfg) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+// figmaMcpCheck reports whether a Figma MCP server is configured for `claude` and
+// actually connected, from the output of `claude mcp list`. Sessions launch claude
+// with a per-session --mcp-config, but that file is ADDITIVE, not exclusive — user-
+// level servers (including the Figma plugin's) load alongside it, so `claude mcp
+// list`, which health-checks every configured server, sees the same Figma server a
+// session gets. "Connected" on the remote Figma server also proves the OAuth grant
+// is live — an unauthenticated server reports "Needs authentication" instead — so
+// one probe covers both "is the MCP working" and "do we have Figma access".
+//
+// Kept separate from RunDoctor (which shells out) so the parse/verdict cases are
+// testable without a claude install or a Figma account.
+func figmaMcpCheck(out string, err error) DoctorCheck {
+	const name = "Figma MCP"
+	const docURL = "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server"
+
+	if err != nil {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "`claude mcp list` failed: " + firstLines(out, 3),
+			Hint:   "Fix the Claude Code install first (see its row above), then re-run the doctor.",
+		}
+	}
+
+	// Server lines look like:
+	//   plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected
+	//   chrome-devtools: npx chrome-devtools-mcp@latest - ✘ Failed to connect
+	// Match on the server NAME (before the first ": ") so an endpoint or command that
+	// merely mentions figma (a wrapper script path, a proxy) doesn't count as one.
+	type server struct{ name, status string }
+	var figmas []server
+	for _, ln := range strings.Split(out, "\n") {
+		dash := strings.LastIndex(ln, " - ")
+		colon := strings.Index(ln, ": ")
+		if dash < 0 || colon < 0 || colon > dash {
+			continue
+		}
+		sName := strings.TrimSpace(ln[:colon])
+		if !strings.Contains(strings.ToLower(sName), "figma") {
+			continue
+		}
+		figmas = append(figmas, server{name: sName, status: strings.TrimSpace(ln[dash+len(" - "):])})
+	}
+
+	if len(figmas) == 0 {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "no figma server in `claude mcp list`",
+			Hint: "Add the Figma MCP server to Claude Code: `claude mcp add --transport http figma https://mcp.figma.com/mcp`, " +
+				"then authenticate it with `/mcp` inside a claude session.",
+			DocURL: docURL,
+		}
+	}
+	for _, s := range figmas {
+		// Both checkmark glyphs: the CLI emits ✔ (U+2714) but ✓ has appeared in other
+		// terminals/versions; "Connected" alone also matches in case the glyph changes.
+		if strings.Contains(s.status, "Connected") || strings.Contains(s.status, "✔") || strings.Contains(s.status, "✓") {
+			return DoctorCheck{Name: name, OK: true, Detail: s.name + " — " + s.status}
+		}
+	}
+	return DoctorCheck{
+		Name: name, OK: false,
+		Detail: figmas[0].name + " — " + figmas[0].status,
+		Hint:   "Start a `claude` session and run `/mcp` to reconnect (or re-authenticate) the figma server.",
+		DocURL: docURL,
+	}
 }
 
 const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"
