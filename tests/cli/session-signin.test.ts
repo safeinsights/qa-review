@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { signInRequestFor } from '@/cli/commands/session-signin'
+import { assertSignedInAtMfa, signInRequestFor } from '@/cli/commands/session-signin'
 import { SIGNUP_PASSWORD } from '@/engine/flows/signup'
 
 // `qar session-signin` is the only path that reaches the auth screens' FAILURE
@@ -32,5 +32,35 @@ describe('qar session-signin', () => {
         // The GUI and shell wrappers can pass an empty flag value; a blank password
         // would fail Clerk in a way that looks like wrong credentials.
         expect(signInRequestFor({ email: 'a@b.co', password: '' }).password).toBe(SIGNUP_PASSWORD)
+    })
+})
+
+// A long-lived session runs whatever engine build was current when it started, while
+// this client is whatever the clone has now. An older session has no `signin` case in
+// its action switch, so it falls through and reports success with an empty payload.
+// Without the `atMfa` check that prints a false success while the browser sits
+// untouched — and the clone routinely runs ahead of the packaged app, so this is the
+// normal upgrade state rather than an edge case.
+describe('assertSignedInAtMfa', () => {
+    it('accepts a session that reports reaching the MFA step', () => {
+        expect(() =>
+            assertSignedInAtMfa({ id: '1', ok: true, atMfa: true }, 'a@b.co')
+        ).not.toThrow()
+    })
+
+    it('rejects an ok-but-empty result from an older session build', () => {
+        expect(() => assertSignedInAtMfa({ id: '1', ok: true }, 'a@b.co')).toThrow(
+            /older engine build/
+        )
+    })
+
+    it('surfaces the session error when the sign-in itself failed', () => {
+        expect(() =>
+            assertSignedInAtMfa({ id: '1', ok: false, error: 'bad credentials' }, 'a@b.co')
+        ).toThrow(/bad credentials/)
+    })
+
+    it('reports a missing result as a timeout rather than a version problem', () => {
+        expect(() => assertSignedInAtMfa(null, 'a@b.co')).toThrow(/timed out/)
     })
 })
