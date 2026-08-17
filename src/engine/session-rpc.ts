@@ -27,7 +27,15 @@ export interface CreateStudyRequest {
     action: 'create-study'
 }
 
-export type SessionAction = LoginRequest | CreateUserRequest | CreateStudyRequest
+// Sign in as an arbitrary (throwaway) account and stop at the second-factor code
+// entry, so the caller can drive the auth screens' failure states by hand.
+export interface SignInRequest {
+    action: 'signin'
+    email: string
+    password: string
+}
+
+export type SessionAction = LoginRequest | CreateUserRequest | CreateStudyRequest | SignInRequest
 
 export interface SessionRequest {
     id: string
@@ -43,6 +51,7 @@ export interface SessionResult {
     userId?: string
     email?: string
     studyId?: string
+    atMfa?: boolean
 }
 
 // Write a request atomically and return its id so the caller can match the result.

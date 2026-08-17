@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import type { Page } from '@playwright/test'
 import { sessionLine } from '@/cli/step-stream'
-import { loginAs } from '@/engine/auth'
+import { loginAs, signInStopAtMfa } from '@/engine/auth'
 import { launchChromeWithCdp } from '@/engine/cdp-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { createUserViaInvite } from '@/engine/flows/signup'
@@ -144,6 +144,10 @@ async function runAction(
         case 'create-study': {
             const studyId = await createStudyFromScratch(page, env)
             return { studyId }
+        }
+        case 'signin': {
+            await signInStopAtMfa(page, env, action.email, action.password)
+            return { email: action.email, atMfa: true }
         }
     }
 }

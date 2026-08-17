@@ -17,6 +17,7 @@ import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
+import { sessionSignInCommand } from '@/cli/commands/session-signin'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { studyStateCommand } from '@/cli/commands/study-state'
 import { syncCommand } from '@/cli/commands/sync'
@@ -88,6 +89,8 @@ async function main() {
             return sessionCommand(opts, await loadSettings())
         case 'session-login':
             return sessionLoginCommand(opts)
+        case 'session-signin':
+            return sessionSignInCommand(opts)
         case 'session-create-user':
             return sessionCreateUserCommand(opts)
         case 'session-create-study':
