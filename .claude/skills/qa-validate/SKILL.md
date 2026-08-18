@@ -104,7 +104,9 @@ and print the created id as JSON so you can clean it up afterward:
 
   Attached files are sent as PLAINTEXT and encrypted server-side to the reviewing
   org, so that org needs a results public key enrolled — if you get
-  `no public keys enrolled`, run `qar fix-account --role reviewer --env <env>` first.
+  `no public keys enrolled`, enroll one with `qar fix-account --role reviewer --key
+  --yes` (add `--pr <n>` on a PR preview, `--env <env>` otherwise) first. See
+  "Results won't decrypt" below.
   Artifacts attach to the study's LATEST job, so the study must already have one
   (i.e. it was submitted).
 
@@ -129,7 +131,52 @@ page-free bits, these pre-approved `qar` helpers exist too:
 
 If a shared account's password or results key has drifted from settings (login fails,
 or results won't decrypt), `qar fix-account --role <r> --env <e>` pushes the settings
-values back onto the account. It prompts before writing.
+values back onto the account. Pass `--yes` to skip its confirm prompt — it reads the
+answer from stdin, so without `--yes` it just hangs in this session.
+
+### Results won't decrypt (expect this on a PR preview)
+The reviewer decrypts results with the private key in settings; the app stores only
+the matching PUBLIC key on the account. When those disagree, results are wrapped to a
+key we can't unwrap and the reviewer's results view fails to decrypt (or
+`study-state` reports `no public keys enrolled`).
+
+**A PR preview is a fresh database**, so its accounts start with whatever public key
+that env seeded — not ours. Assume the key needs pushing the first time you view
+results on a PR:
+
+```
+qar fix-account --role reviewer --pr <n> --key --yes
+```
+
+`--key` pushes only the public key (omitting it would rewrite the password too).
+Then re-run the step that reads results.
+
+There is **no per-PR key to set**: PR previews reuse the QA key (`privateKeyEnvFor()`
+maps anything that isn't staging/production to `qa`), which is why a PR run is
+identical to a QA run except for the base URL. So this pushes the public half of
+`<ROLE>_RESULTS_PRIVATE_KEY_QA` — nothing to configure per PR.
+
+To inspect the private key itself (rare — `fix-account` derives the public half for
+you, so you do NOT need this to fix drift), `qar get-secret` is the read half of
+`set-secret`:
+
+```
+qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > .tmp/reviewer-qa.pem
+```
+
+The var is named with **`--name`, not `--key`** — `--key` is `fix-account`'s valueless
+boolean and the parser shares one booleans list across subcommands, so `--key <VAR>`
+silently resolves to `true` instead of erroring. Output carries no trailing newline
+(a PEM stays byte-exact) and printing to a terminal is refused without `--force`, so
+always redirect. Write it under `.tmp/` and **delete it when done** — this key
+decrypts real study results, and leaving it on disk outlives the session that needed
+it. (`.tmp/` and `*.pem` are both gitignored, so it won't reach a commit — but that
+is not a reason to leave it lying around.)
+
+Use `--pr <n>`, not `--env`, on a preview — `--env qa` would push the key to the
+shared QA environment instead. Rotating a key orphans results already wrapped to the
+old one; that's harmless on an ephemeral PR preview, but on `qa` or `staging` it
+destroys other people's data — ask the user first there.
 
 ## Posting findings to Jira (button-driven or on request)
 When the user presses **Validated** / **Rejected** (or asks you in the session):

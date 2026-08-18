@@ -3,6 +3,7 @@ import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
+import { getSecretCommand } from '@/cli/commands/get-secret'
 import { inviteCommand } from '@/cli/commands/invite'
 import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
@@ -39,6 +40,8 @@ const BOOLEANS = [
     'password',
     'key',
     'yes',
+    // get-secret: valueless switch that permits printing a secret to a terminal.
+    'force',
 ]
 
 async function main() {
@@ -83,6 +86,8 @@ async function main() {
             return rekeyCommand()
         case 'set-secret':
             return setSecretCommand(opts)
+        case 'get-secret':
+            return getSecretCommand(opts, await loadSettings())
         case 'sync':
             return syncCommand()
         case 'session':

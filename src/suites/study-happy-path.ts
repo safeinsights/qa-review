@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
@@ -56,6 +57,29 @@ const RESULTS_POLL_INTERVAL_MS = 15_000
 // key box (or error) to actually render before deciding the results aren't ready
 // yet. Covers the reload + SPA hydration so a not-yet-rendered box isn't missed.
 const RESULTS_RENDER_WAIT_MS = 8_000
+// The reviewer's decrypt field has carried two different wordings ("Enter your
+// Results Key to access encrypted content." and, now, "Enter your security key"
+// with aria-label "Security key"), so match on the part that survived rather
+// than on a full literal — an exact-copy locator silently turned "results are
+// ready" into "still running" and burned the whole results timeout.
+//
+// Restricted to the TEXTBOX role on purpose: the header profile menu holds a
+// hidden menu item also named "Security key", so a plain getByLabel/text match
+// resolves to that button in DOM order and then waits forever for a control
+// that is never visible — the same failure with a new cause.
+const RESULTS_KEY_COPY = /(results|security) key/i
+
+// The two files the enclave returns, named exactly as the outputs table lists them.
+const SECURITY_LOG_FILE = 'security-scan-log.txt'
+const RESULTS_FILE = 'results.csv'
+
+function resultsKeyBox(ctx: RunContext) {
+    return ctx.page
+        .getByRole('textbox', { name: RESULTS_KEY_COPY })
+        .or(ctx.page.getByPlaceholder(RESULTS_KEY_COPY))
+        .first()
+}
+
 // Short settle after isReactHydrated before clicking the "Proceed to step 3"
 // next/link button: the App Router route entry for the /agreements segment wires
 // up just after initial hydration, and a click in that gap no-ops silently.
@@ -425,73 +449,80 @@ export const studyHappyPathSuite: Suite = {
             name: 'Reviewer decrypts and views the results',
             run: ctx =>
                 ctx.step(async () => {
-                    const key = ctx.resultsKey
-                    if (!key) {
-                        throw new Error(
-                            'Missing reviewer results key for this environment: set the Reviewer "Results private key" ' +
-                                'for this env (qa/staging) in the Settings panel.'
-                        )
-                    }
-                    await ctx.page
-                        .getByPlaceholder('Enter your Results Key to access encrypted content.')
-                        .fill(key)
-                    await ctx.page.getByRole('button', { name: /Decrypt Files/i }).click()
-                    // Open the RESULTS file's preview — NOT a run log — and confirm it
-                    // actually rendered the decrypted output, not just that a View
-                    // button exists. The decrypted-file table lists several rows
-                    // (the results output plus code-run / security / packaging logs);
-                    // each has its own "View" button, so we open the one on the results
-                    // row (its "File Type" cell reads "Results"; log rows read "… Log")
-                    // rather than blindly taking the first View button.
-                    const resultsRow = ctx.page
-                        .getByRole('row')
-                        .filter({ has: ctx.page.getByRole('cell', { name: 'results' }) })
-                        .first()
-                    const viewButton = resultsRow.getByRole('button', { name: 'View' })
-                    await viewButton.waitFor({ state: 'visible', timeout: 20_000 })
-                    await viewButton.click()
-                    // Assert the open results-preview modal actually rendered the decrypted
-                    // output. The results file is a CSV, previewed as a mantine-datatable
-                    // grid whose rows the app builds from the CSV — so a successful decrypt
-                    // shows data rows, while a decrypt-but-empty/garbled result shows a
-                    // header-only (or empty) grid. Wait for a populated data row and confirm
-                    // it carries content, rather than a specific value so it survives
-                    // run-to-run data changes.
-                    const dialog = ctx.page.getByRole('dialog')
-                    await dialog.waitFor({ state: 'visible', timeout: 20_000 })
-                    const firstRow = dialog.locator('table tbody tr').first()
-                    await firstRow.waitFor({ state: 'visible', timeout: 15_000 })
-                    const text = (await firstRow.innerText())?.trim() ?? ''
-                    if (!text) {
-                        const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
-                        throw new Error(
-                            `Results preview modal rendered an empty grid row. Modal text:\n${modalText}`
-                        )
-                    }
-                    // Close the preview so it doesn't overlay the Approve button.
-                    // The Mantine modal's close control is an icon-only CloseButton
-                    // with no accessible name (no aria-label/title/text), so a
-                    // name-based role locator can't find it — target the stable
-                    // Mantine class instead, and fall back to Escape.
-                    const closeButton = dialog.locator('.mantine-Modal-close')
-                    if (await closeButton.count()) {
-                        await closeButton.first().click()
-                    } else {
-                        await ctx.page.keyboard.press('Escape')
-                    }
-                    await dialog.waitFor({ state: 'hidden' }).catch(() => {})
+                    // Land on the review page ourselves rather than inheriting whatever
+                    // state the previous step left behind, then decrypt.
+                    await gotoReview(ctx, id(ctx))
+                    await ensureOutputsDecrypted(ctx)
+                    // Both decrypted outputs must be viewable AND downloadable, so
+                    // exercise each end-to-end. The security scan log is checked first
+                    // because it is what a reviewer reads before trusting the results.
+                    await viewOutputFile(ctx, SECURITY_LOG_FILE, 'text')
+                    await downloadOutputFile(ctx, SECURITY_LOG_FILE)
+                    await viewOutputFile(ctx, RESULTS_FILE, 'grid')
+                    await downloadOutputFile(ctx, RESULTS_FILE)
                 }),
         },
         {
             name: 'Reviewer approves the results',
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.getByRole('button', { name: /Approve/ }).click()
-                    // Approving results redirects to the reviewer dashboard.
+                    // A retry can start with the confirm dialog still open from the
+                    // previous attempt, and it blocks every control behind it — so
+                    // dismiss it before touching the form underneath.
+                    const openConfirm = ctx.page
+                        .getByRole('dialog')
+                        .filter({ hasText: /submit your decision/i })
+                    if (await openConfirm.isVisible().catch(() => false)) {
+                        await openConfirm.getByRole('button', { name: /^cancel$/i }).click()
+                        await openConfirm.waitFor({ state: 'hidden' })
+                    }
+                    // The decision controls only exist once the outputs are decrypted,
+                    // and a reload drops that state — so re-establish it rather than
+                    // assuming the previous step's page is still on screen.
+                    await ensureOutputsDecrypted(ctx)
+                    // The single "Approve" button is gone. The decision is now a radio
+                    // pair ("Share outputs and feedback" = approve, "Share feedback only"
+                    // = withhold the outputs), a required rich-text feedback box, and a
+                    // "Submit decision" button.
                     await ctx.page
-                        .locator('text=Review Studies')
-                        .first()
-                        .waitFor({ state: 'visible' })
+                        .getByRole('radio', { name: /share outputs and feedback/i })
+                        .check()
+                    const feedback = ctx.page.getByRole('textbox', { name: /decision feedback/i })
+                    await feedback.click()
+                    // ctx.state.study is generated ONCE, at the start of the run, and
+                    // persists across step retries — so a run already in flight when a
+                    // new content field is added carries the older object and yields
+                    // undefined here. Fall back rather than fail a late step over text
+                    // that only has to be non-empty.
+                    const decisionFeedback =
+                        content(ctx).resultsApprovalFeedback ??
+                        `Outputs reviewed, no sensitive or restricted data found. (QA ${ctx.tag})`
+                    // Clear before typing: on a replay the editor still holds the
+                    // previous attempt's text, and keyboard.type APPENDS. (Typed rather
+                    // than filled because this is a rich-text editor — fill() sets the
+                    // DOM without the input events the editor tracks its model with.)
+                    await ctx.page.keyboard.press('ControlOrMeta+A')
+                    await ctx.page.keyboard.press('Backspace')
+                    await ctx.page.keyboard.type(decisionFeedback)
+                    // Opens a "Submit your decision?" confirm dialog, whose own
+                    // "Submit decision" button is the one that commits. Both exist at
+                    // that point, so the confirm click has to be scoped to the dialog —
+                    // confirmDialog does that, and retries until the dialog closes.
+                    await ctx.page.getByRole('button', { name: /submit decision/i }).click()
+                    await confirmDialog(ctx, /^Submit decision$/i)
+                    // Submitting stays on this Review outputs step and swaps the decision
+                    // form for a confirmation alert — NOT the reviewer dashboard this
+                    // used to wait for, which the app never navigates to here.
+                    //
+                    // The alert headline mirrors the decision that was made: approving
+                    // with outputs reads "Outputs and feedback shared", while the
+                    // "Share feedback only" radio yields a feedback-only variant. Asserting
+                    // the outputs wording is therefore what distinguishes a real approval
+                    // from a withhold, and it's the only approval signal on the page (the
+                    // old "Approved on <date>" stamp is gone, so there's no date to
+                    // freshness-check — the study is created fresh in step 3 of this run
+                    // anyway, so a stale approval of the same id isn't reachable here).
+                    await expect(ctx.page.getByText(/outputs and feedback shared/i)).toBeVisible()
                 }),
         },
         // ---- Researcher: confirm the approved results are visible ----
@@ -575,6 +606,94 @@ async function deleteStudyAndVerify(ctx: RunContext, studyId: string): Promise<v
 function fixtureFiles(): string[] {
     const dir = path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]
+}
+
+// Put the review page into the decrypted state, entering the reviewer's results
+// key if it is being asked for. Decryption is client-side and does NOT survive a
+// reload, so every step that needs the outputs has to be able to re-do this — a
+// step that assumes the previous one left them on screen dies on any retry that
+// follows a page load, with a locator timeout that names a control the app never
+// had a chance to render.
+async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
+    const keyBox = resultsKeyBox(ctx)
+    const outputsReady = ctx.page.getByRole('button', { name: RESULTS_FILE, exact: true })
+    // Whichever renders first tells us which of the two states the page is in.
+    await Promise.race([
+        keyBox.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
+        outputsReady.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
+    ])
+    if (await outputsReady.isVisible().catch(() => false)) return
+    const key = ctx.resultsKey
+    if (!key) {
+        throw new Error(
+            'Missing reviewer results key for this environment: set the Reviewer "Results private key" ' +
+                'for this env (qa/staging) in the Settings panel.'
+        )
+    }
+    await keyBox.fill(key)
+    // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
+    // can't drift onto the per-file buttons in the outputs table below, which don't
+    // exist until this click succeeds.
+    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+    await outputsReady.waitFor({ state: 'visible', timeout: 20_000 })
+}
+
+// Open one output file's preview, assert it actually rendered decrypted content,
+// and close it again. The preview shape depends on the file: the CSV renders as a
+// mantine-datatable grid built from its rows, the scan log as a <pre>. Asserting
+// the WRONG shape is the trap here — a table-row assertion against the log waits
+// out its timeout on a modal that is on screen and perfectly correct.
+//
+// Content is asserted as "non-empty", not as a fixed value, so the check survives
+// run-to-run data changes while still failing a decrypt that yields empty/garbled
+// output — the failure this step exists to catch.
+async function viewOutputFile(
+    ctx: RunContext,
+    fileName: string,
+    preview: 'grid' | 'text'
+): Promise<void> {
+    // exact:true keeps this off the row's "Download <fileName>" button, whose
+    // accessible name CONTAINS the file name.
+    const openButton = ctx.page.getByRole('button', { name: fileName, exact: true })
+    await openButton.waitFor({ state: 'visible', timeout: 20_000 })
+    await openButton.click()
+    const dialog = ctx.page.getByRole('dialog')
+    await dialog.waitFor({ state: 'visible', timeout: 20_000 })
+    const body =
+        preview === 'grid' ? dialog.locator('table tbody tr').first() : dialog.locator('pre')
+    await body.waitFor({ state: 'visible', timeout: 15_000 })
+    const text = (await body.innerText())?.trim() ?? ''
+    if (!text) {
+        const modalText = (await dialog.innerText())?.slice(0, 500) ?? ''
+        throw new Error(`Preview of ${fileName} rendered empty. Modal text:\n${modalText}`)
+    }
+    // The Mantine modal's close control is an icon-only CloseButton with no
+    // accessible name, so a name-based role locator can't find it — target the
+    // stable Mantine class instead, and fall back to Escape.
+    const closeButton = dialog.locator('.mantine-Modal-close')
+    if (await closeButton.count()) {
+        await closeButton.first().click()
+    } else {
+        await ctx.page.keyboard.press('Escape')
+    }
+    await dialog.waitFor({ state: 'hidden' })
+}
+
+// Download one output file from the table's Actions column and assert the browser
+// actually received bytes. The app builds a blob URL and clicks a generated
+// `<a download>`, so Playwright sees a real download event — asserting only that
+// the button is clickable would pass even if the decrypt produced nothing.
+async function downloadOutputFile(ctx: RunContext, fileName: string): Promise<void> {
+    const downloadPromise = ctx.page.waitForEvent('download')
+    await ctx.page.getByRole('button', { name: `Download ${fileName}`, exact: true }).click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toBe(fileName)
+    const savedPath = await download.path()
+    if (!savedPath) {
+        throw new Error(`Download of ${fileName} produced no file: ${await download.failure()}`)
+    }
+    const { size } = await stat(savedPath)
+    if (!size) throw new Error(`Downloaded ${fileName} is empty (0 bytes)`)
 }
 
 async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
@@ -757,8 +876,7 @@ async function fillCoderMfa(ide: Page, code: string): Promise<void> {
 // react the instant either renders; a short sleep only spaces genuine retries.
 async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
     const deadline = Date.now() + RESULTS_TIMEOUT_MS
-    const keyBox = () =>
-        ctx.page.getByPlaceholder('Enter your Results Key to access encrypted content.')
+    const keyBox = () => resultsKeyBox(ctx)
     const errored = () => ctx.page.getByText(/The code errored/i)
     while (Date.now() < deadline) {
         await gotoReview(ctx, studyId)

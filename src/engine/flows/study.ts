@@ -19,6 +19,7 @@ export interface StudyContent {
     changeRequestFeedback: string
     resubmissionNote: string
     codeApprovalFeedback: string
+    resultsApprovalFeedback: string
 }
 
 // Realistic-but-synthetic study + review text via faker, using English-word
@@ -53,6 +54,7 @@ export function generateStudyContent(tag: string): StudyContent {
         changeRequestFeedback: `Requesting revisions before approval. ${body(1)}`,
         resubmissionNote: `Addressed reviewer feedback. ${body(1)}`,
         codeApprovalFeedback: `Code approved and ready to run. ${body(1)}`,
+        resultsApprovalFeedback: `Outputs reviewed, no sensitive or restricted data found. ${body(1)}`,
     }
 }
 

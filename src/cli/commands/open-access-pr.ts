@@ -46,6 +46,20 @@ You must already be a keyring recipient yourself — rekey decrypts the current 
 // so it's safe to always attempt; a genuine failure (auth, network, ...) still
 // surfaces because the list will be empty and the ORIGINAL error is rethrown, not
 // a confusing secondary one from the list call.
+// GitHub rejects a PR whose head has no commits beyond base with "No commits
+// between main and <branch> (createPullParameters)" — accurate, but it names
+// neither the cause nor a fix, and this command is the button the GUI offers as
+// the retry. Retrying `gh pr create` against an empty branch can NEVER succeed,
+// so detect it and say what will.
+export function emptyBranchProblem(branch: string): string {
+    return [
+        `Your access branch (${branch}) was pushed but has no keyring commit on it, so there is nothing to open a pull request for.`,
+        '',
+        'This happens when the commit could not be created — most often because git had no user.name/user.email set at the time.',
+        'Check with `git config user.name` and `git config user.email`, set anything missing, then run `qar request-access` again to commit and push your keyring entry.',
+    ].join('\n')
+}
+
 export async function openAccessPr(opts: {
     branch: string
     name: string
@@ -78,9 +92,22 @@ export async function openAccessPr(opts: {
             'number,url',
         ]).catch(() => '')
         const prs = safeParsePrs(listed)
-        if (prs.length === 0) throw e
-        return { url: prs[0].url, created: false }
+        if (prs.length > 0) return { url: prs[0].url, created: false }
+        // No PR exists, so the create error is real. "No commits between" is the one
+        // case with an actionable local fix, and retrying this command can't be it.
+        // Checked only AFTER the lookup: an already-open PR is still success.
+        if (/no commits between/i.test(errorText(e))) {
+            throw new Error(emptyBranchProblem(opts.branch))
+        }
+        throw e
     }
+}
+
+// gh reports the GraphQL rejection on stderr; execFile hangs it off the error
+// object rather than folding it into .message, so both have to be searched.
+function errorText(e: unknown): string {
+    if (e instanceof Error) return `${e.message} ${(e as { stderr?: string }).stderr ?? ''}`
+    return String(e)
 }
 
 export async function openAccessPrCommand(_opts: Record<string, string>): Promise<void> {

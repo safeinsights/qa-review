@@ -87,12 +87,31 @@ func withGuiPath() []string {
 		if strings.HasPrefix(e, "CLAUDE_CODE_") {
 			continue
 		}
+		// Drop inherited terminal-capability vars; we set our own below. NO_COLOR is
+		// dropped too — it overrides TERM entirely, so a user who exports it for their
+		// shell would otherwise get a monochrome embedded terminal with no way to tell
+		// why. The xterm we render into is always color-capable regardless.
+		if strings.HasPrefix(e, "TERM=") || strings.HasPrefix(e, "COLORTERM=") ||
+			strings.HasPrefix(e, "NO_COLOR=") {
+			continue
+		}
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
 	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
 	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// Declare the terminal we actually render into. A Finder-launched .app inherits
+	// NO TERM (launchd sets none, only a shell does), so `claude` saw a terminal with
+	// no declared capabilities and emitted plain text — the embedded xterm rendered
+	// black-and-white. Under `wails dev` the launching shell's TERM leaked in, which
+	// is why this only ever reproduced in the packaged app. Setting it unconditionally
+	// (paired with the strip above) makes dev and packaged behave identically instead
+	// of depending on how the app happened to be started.
+	//
+	// xterm.js implements xterm-256color and supports truecolor SGR, so both values
+	// describe the real frontend rather than overstating it.
+	out = append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 	out = append(out, qarBinEnv()...)
 	return out
 }
@@ -2265,6 +2284,23 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
 	}
 
+	// Advisory: without an explicit identity, git commits fall back to the
+	// auto-detected `<username>@<hostname>` — and when even that auto-detection
+	// fails, `git commit` refuses, which used to surface only much later as a
+	// pushed-but-empty access branch and a PR that failed with "No commits
+	// between main and access/<name>".
+	if toolOnPath("git") {
+		name, nameErr := runTool("git", "config", "user.name")
+		email, emailErr := runTool("git", "config", "user.email")
+		if nameErr != nil {
+			name = ""
+		}
+		if emailErr != nil {
+			email = ""
+		}
+		checks = append(checks, gitIdentityCheck(name, email))
+	}
+
 	// gh must be authenticated (PR + issue + clone flows depend on it).
 	if toolOnPath("gh") {
 		out, err := runTool("gh", "auth", "status")
@@ -2318,7 +2354,42 @@ func (a *App) RunDoctor() []DoctorCheck {
 
 	checks = append(checks, jiraCheck(a.readJiraConfig()))
 
+	// Figma MCP + access — `claude mcp list` health-checks every server claude is
+	// configured with (the same set a session inherits alongside its --mcp-config),
+	// so one shell-out answers both "is a figma server set up" and "is it connected".
+	if toolOnPath("claude") {
+		out, err := runToolFull("claude", "mcp", "list")
+		checks = append(checks, figmaMcpCheck(out, err))
+	}
+
 	return checks
+}
+
+// gitIdentityCheck reports whether git has an author identity configured. Unset
+// config does NOT usually stop a commit — with the default user.useConfigOnly=false,
+// git auto-detects `<username>@<hostname>` and commits with a warning — so this row
+// is advisory: it flags the poor attribution a fallback identity produces, not a
+// guaranteed failure. It is kept separate from RunDoctor (which shells out) so the
+// missing/partial/complete cases are testable without a git config on the machine
+// running the tests.
+//
+// `git config user.name` exits non-zero when the key is unset, so callers pass "" for
+// both the error and empty-output cases — they are the same condition.
+func gitIdentityCheck(name, email string) DoctorCheck {
+	const label = "git identity"
+	const hint = "Run `git config --global user.name \"Your Name\"` and `git config --global user.email \"you@example.com\"`."
+	const docURL = "https://docs.github.com/en/get-started/getting-started-with-git/setting-your-username-in-git"
+
+	name, email = strings.TrimSpace(name), strings.TrimSpace(email)
+	switch {
+	case name == "" && email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name or user.email — commits fall back to <username>@<hostname>", Hint: hint, DocURL: docURL}
+	case name == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name (email is " + email + ")", Hint: hint, DocURL: docURL}
+	case email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.email (name is " + name + ")", Hint: hint, DocURL: docURL}
+	}
+	return DoctorCheck{Name: label, OK: true, Detail: name + " <" + email + ">"}
 }
 
 // jiraCheck validates that validation verdicts can actually be posted. The token is
@@ -2448,6 +2519,73 @@ func jiraMissingPermissions(cfg JiraCfg) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+// figmaMcpCheck reports whether a Figma MCP server is configured for `claude` and
+// actually connected, from the output of `claude mcp list`. Sessions launch claude
+// with a per-session --mcp-config, but that file is ADDITIVE, not exclusive — user-
+// level servers (including the Figma plugin's) load alongside it, so `claude mcp
+// list`, which health-checks every configured server, sees the same Figma server a
+// session gets. "Connected" on the remote Figma server also proves the OAuth grant
+// is live — an unauthenticated server reports "Needs authentication" instead — so
+// one probe covers both "is the MCP working" and "do we have Figma access".
+//
+// Kept separate from RunDoctor (which shells out) so the parse/verdict cases are
+// testable without a claude install or a Figma account.
+func figmaMcpCheck(out string, err error) DoctorCheck {
+	const name = "Figma MCP"
+	const docURL = "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server"
+
+	if err != nil {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "`claude mcp list` failed: " + firstLines(out, 3),
+			Hint:   "Fix the Claude Code install first (see its row above), then re-run the doctor.",
+		}
+	}
+
+	// Server lines look like:
+	//   plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected
+	//   chrome-devtools: npx chrome-devtools-mcp@latest - ✘ Failed to connect
+	// Match on the server NAME (before the first ": ") so an endpoint or command that
+	// merely mentions figma (a wrapper script path, a proxy) doesn't count as one.
+	type server struct{ name, status string }
+	var figmas []server
+	for _, ln := range strings.Split(out, "\n") {
+		dash := strings.LastIndex(ln, " - ")
+		colon := strings.Index(ln, ": ")
+		if dash < 0 || colon < 0 || colon > dash {
+			continue
+		}
+		sName := strings.TrimSpace(ln[:colon])
+		if !strings.Contains(strings.ToLower(sName), "figma") {
+			continue
+		}
+		figmas = append(figmas, server{name: sName, status: strings.TrimSpace(ln[dash+len(" - "):])})
+	}
+
+	if len(figmas) == 0 {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "no figma server in `claude mcp list`",
+			Hint: "Add the Figma MCP server to Claude Code: `claude mcp add --transport http figma https://mcp.figma.com/mcp`, " +
+				"then authenticate it with `/mcp` inside a claude session.",
+			DocURL: docURL,
+		}
+	}
+	for _, s := range figmas {
+		// Both checkmark glyphs: the CLI emits ✔ (U+2714) but ✓ has appeared in other
+		// terminals/versions; "Connected" alone also matches in case the glyph changes.
+		if strings.Contains(s.status, "Connected") || strings.Contains(s.status, "✔") || strings.Contains(s.status, "✓") {
+			return DoctorCheck{Name: name, OK: true, Detail: s.name + " — " + s.status}
+		}
+	}
+	return DoctorCheck{
+		Name: name, OK: false,
+		Detail: figmas[0].name + " — " + figmas[0].status,
+		Hint:   "Start a `claude` session and run `/mcp` to reconnect (or re-authenticate) the figma server.",
+		DocURL: docURL,
+	}
 }
 
 const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"
