@@ -510,33 +510,19 @@ export const studyHappyPathSuite: Suite = {
                     // confirmDialog does that, and retries until the dialog closes.
                     await ctx.page.getByRole('button', { name: /submit decision/i }).click()
                     await confirmDialog(ctx, /^Submit decision$/i)
-                    // Submitting lands on Study Details, whose Study Status panel (right
-                    // column) is the real confirmation — NOT the reviewer dashboard this
+                    // Submitting stays on this Review outputs step and swaps the decision
+                    // form for a confirmation alert — NOT the reviewer dashboard this
                     // used to wait for, which the app never navigates to here.
-                    const approvedOn = ctx.page.getByText(/^Approved on \w+ \d{1,2}, \d{4}$/)
-                    await expect(approvedOn).toBeVisible()
-                    await expect(
-                        ctx.page.getByText(/results and logs have been approved and shared/i)
-                    ).toBeVisible()
-                    // The stamp must be from THIS approval, not one left by an earlier
-                    // review of the same study — so check the date, not just its shape.
-                    // Compared midnight-to-midnight with a ±1 day tolerance: the app
-                    // renders a bare date with no timezone, and the runner's clock need
-                    // not agree with the server's about which day it is.
-                    const stamp = (await approvedOn.innerText()).replace(/^Approved on\s*/i, '')
-                    const approved = new Date(stamp)
-                    if (Number.isNaN(approved.getTime())) {
-                        throw new Error(`Could not parse the approval timestamp: "${stamp}"`)
-                    }
-                    const now = new Date()
-                    const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-                    const daysApart =
-                        Math.abs(approved.getTime() - midnightToday.getTime()) / 86_400_000
-                    if (daysApart > 1) {
-                        throw new Error(
-                            `Approval timestamp "${stamp}" is ${Math.round(daysApart)} days from today — stale approval?`
-                        )
-                    }
+                    //
+                    // The alert headline mirrors the decision that was made: approving
+                    // with outputs reads "Outputs and feedback shared", while the
+                    // "Share feedback only" radio yields a feedback-only variant. Asserting
+                    // the outputs wording is therefore what distinguishes a real approval
+                    // from a withhold, and it's the only approval signal on the page (the
+                    // old "Approved on <date>" stamp is gone, so there's no date to
+                    // freshness-check — the study is created fresh in step 3 of this run
+                    // anyway, so a stale approval of the same id isn't reachable here).
+                    await expect(ctx.page.getByText(/outputs and feedback shared/i)).toBeVisible()
                 }),
         },
         // ---- Researcher: confirm the approved results are visible ----
