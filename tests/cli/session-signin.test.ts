@@ -59,8 +59,4 @@ describe('assertSignedInAtMfa', () => {
             assertSignedInAtMfa({ id: '1', ok: false, error: 'bad credentials' }, 'a@b.co')
         ).toThrow(/bad credentials/)
     })
-
-    it('reports a missing result as a timeout rather than a version problem', () => {
-        expect(() => assertSignedInAtMfa(null, 'a@b.co')).toThrow(/timed out/)
-    })
 })

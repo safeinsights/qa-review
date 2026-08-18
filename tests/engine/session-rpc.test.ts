@@ -82,6 +82,28 @@ describe('session RPC round-trip', () => {
         expect(result).toBeNull()
     })
 
+    it('dispatchSessionAction returns the result the session wrote for its request', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        const pending = rpc.dispatchSessionAction(
+            { action: 'login', role: 'admin' },
+            2_000,
+            'log in'
+        )
+        // Play the session side: the request is on disk before the client starts
+        // polling, so pick it up and answer it.
+        const request = rpc.readSessionRequest()
+        expect(request?.action).toEqual({ action: 'login', role: 'admin' })
+        rpc.writeSessionResult({ id: request!.id, ok: true, role: 'admin' })
+        expect(await pending).toEqual({ id: request!.id, ok: true, role: 'admin' })
+    })
+
+    it('dispatchSessionAction reports a timeout as a missing-session problem', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        await expect(
+            rpc.dispatchSessionAction({ action: 'create-study' }, 400, 'create the study')
+        ).rejects.toThrow(/is a `qar session` running\?/)
+    })
+
     it('treats a malformed request file as no request', async () => {
         const rpc = await import('@/engine/session-rpc')
         const { sessionRequestPath } = await import('@/engine/paths')

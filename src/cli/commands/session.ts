@@ -149,5 +149,13 @@ async function runAction(
             await signInStopAtMfa(page, env, action.email, action.password)
             return { email: action.email, atMfa: true }
         }
+        default: {
+            // Exhaustive at the type level, but the action arrives from a JSON file that
+            // a NEWER client may have written — fail loudly instead of falling through to
+            // an ok:true result with an empty payload (see assertSignedInAtMfa for the
+            // client-side symptom of exactly that).
+            const unknown: never = action
+            throw new Error(`unknown session action: ${JSON.stringify(unknown)}`)
+        }
     }
 }

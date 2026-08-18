@@ -122,3 +122,24 @@ function readSessionResult(): SessionResult | null {
 export function newRequestId(): string {
     return `${process.pid}-${Date.now()}`
 }
+
+// The client half of the RPC, shared by every `qar session-*` command: write the
+// request, wait for the matching result, and turn a timeout into the standard
+// "is a `qar session` running?" error. `doing` is the verb phrase for that message
+// (e.g. 'log in'). Interpreting ok/error stays with each command — those messages
+// differ per action.
+export async function dispatchSessionAction(
+    action: SessionAction,
+    timeoutMs: number,
+    doing: string
+): Promise<SessionResult> {
+    const id = newRequestId()
+    writeSessionRequest(id, action)
+    const result = await waitForSessionResult(id, timeoutMs)
+    if (!result) {
+        throw new Error(
+            `timed out waiting for the session to ${doing} — is a \`qar session\` running?`
+        )
+    }
+    return result
+}

@@ -1,11 +1,5 @@
 import { SIGNUP_PASSWORD } from '@/engine/flows/signup'
-import {
-    newRequestId,
-    type SessionResult,
-    type SignInRequest,
-    waitForSessionResult,
-    writeSessionRequest,
-} from '@/engine/session-rpc'
+import { dispatchSessionAction, type SessionResult, type SignInRequest } from '@/engine/session-rpc'
 
 // `qar session-signin --email <e> [--password <p>]` — sign the RUNNING session's
 // browser in as an ARBITRARY account and stop at the second-factor code entry,
@@ -40,12 +34,7 @@ export function signInRequestFor(opts: Record<string, string>): SignInRequest {
 // the browser sat untouched on the page it was already on. The clone routinely runs
 // ahead of the packaged app, so this is the normal state during an upgrade, not an
 // edge case. Split out from the command so it is testable without a live session.
-export function assertSignedInAtMfa(result: SessionResult | null, email: string): void {
-    if (!result) {
-        throw new Error(
-            'timed out waiting for the session to sign in — is a `qar session` running?'
-        )
-    }
+export function assertSignedInAtMfa(result: SessionResult, email: string): void {
     if (!result.ok) {
         throw new Error(`sign-in as ${email} failed: ${result.error ?? 'unknown error'}`)
     }
@@ -63,11 +52,8 @@ export async function sessionSignInCommand(opts: Record<string, string>): Promis
     const request = signInRequestFor(opts)
     const email = request.email
 
-    const id = newRequestId()
-    writeSessionRequest(id, request)
-
     // A full Clerk sign-in up to the MFA picker, so allow the same window as login.
-    const result = await waitForSessionResult(id, 90_000)
+    const result = await dispatchSessionAction(request, 90_000, 'sign in')
     assertSignedInAtMfa(result, email)
     process.stdout.write(`${JSON.stringify({ email, atMfa: true })}\n`)
 }

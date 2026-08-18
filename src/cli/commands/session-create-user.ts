@@ -1,5 +1,5 @@
 import type { InvitedRole } from '@/engine/flows/signup'
-import { newRequestId, waitForSessionResult, writeSessionRequest } from '@/engine/session-rpc'
+import { dispatchSessionAction } from '@/engine/session-rpc'
 
 // `qar session-create-user --role researcher|reviewer` — create a brand-new user
 // from scratch on a running `qar session`'s held (streamed) browser: log in as
@@ -17,18 +17,14 @@ export async function sessionCreateUserCommand(opts: Record<string, string>): Pr
         )
     }
 
-    const id = newRequestId()
-    writeSessionRequest(id, { action: 'create-user', role })
-
     // The invite URL now comes straight from the QA API (no ~2min email wait), but the
     // signup itself is still a full Clerk chain — create account, TOTP, recovery codes,
     // security key — so keep a generous window.
-    const result = await waitForSessionResult(id, 120_000)
-    if (!result) {
-        throw new Error(
-            'timed out waiting for the session to create the user — is a `qar session` running?'
-        )
-    }
+    const result = await dispatchSessionAction(
+        { action: 'create-user', role },
+        120_000,
+        'create the user'
+    )
     if (!result.ok) {
         throw new Error(`create-user (${role}) failed: ${result.error ?? 'unknown error'}`)
     }

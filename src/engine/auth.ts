@@ -3,6 +3,19 @@ import type { EnvConfig, Role } from '@/engine/types'
 
 export class AuthError extends Error {}
 
+// The bare "dashboard" text every authenticated landing page shows — the shared
+// signal for "sign-in went straight through" in submitCredentialsToPin and the
+// fallback success marker in loginAs.
+function dashboardMarker(page: Page) {
+    return page.locator('text=dashboard').first()
+}
+
+// Where submitCredentialsToPin landed: at the 6-digit code entry, or signed
+// straight in with no second factor. The failure paths (credentials rejected,
+// picker clicked but the code entry never appearing) throw instead of returning,
+// so a caller can't mistake them for one of the two legitimate outcomes.
+type CredentialsOutcome = 'at-pin' | 'no-mfa'
+
 // Drive the Clerk sign-in page to a usable, hydrated email/password form: drop any
 // existing session, then dismiss the "already signed in" interstitial if it wins the
 // race. Shared by loginAs and signInStopAtMfa so both begin from an identical clean
@@ -72,15 +85,17 @@ async function reachSignInForm(page: Page, env: EnvConfig): Promise<void> {
 }
 
 // Submit credentials and, when the account has a second factor, advance to the
-// 6-digit pin input WITHOUT entering a code. Returns true when the pin input is
-// showing, false when sign-in went straight through (no second factor). Callers
-// decide what to type — which is what lets loginAs submit a working code while
+// 6-digit pin input WITHOUT entering a code. Returns 'at-pin' when the pin input
+// is showing, 'no-mfa' when sign-in went straight through (no second factor);
+// anything else (rejected credentials, a picker whose code entry never renders)
+// throws rather than being folded into a success-shaped return. Callers decide
+// what to type — which is what lets loginAs submit a working code while
 // signInStopAtMfa deliberately hands the field to the caller untouched.
 async function submitCredentialsToPin(
     page: Page,
     email: string,
     password: string
-): Promise<boolean> {
+): Promise<CredentialsOutcome> {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill(password)
     await page.getByRole('button', { name: 'Login' }).click()
@@ -95,7 +110,7 @@ async function submitCredentialsToPin(
     const authenticatorButton = page.getByRole('button', {
         name: /authenticator|authentication app|totp/i,
     })
-    const dashboard = page.locator('text=dashboard').first()
+    const dashboard = dashboardMarker(page)
     await Promise.race([
         smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
         authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
@@ -111,16 +126,24 @@ async function submitCredentialsToPin(
         : (await smsButton.isVisible().catch(() => false))
           ? smsButton
           : null
-    if (!mfaChoice) return false
+    if (!mfaChoice) {
+        if (await dashboard.isVisible().catch(() => false)) return 'no-mfa'
+        throw new Error(
+            'neither a second-factor picker nor the dashboard appeared after Login — ' +
+                'the credentials were likely rejected'
+        )
+    }
     for (let attempt = 0; attempt < 3; attempt++) {
         await mfaChoice.click().catch(() => {})
         const appeared = await pinInput
             .waitFor({ state: 'visible', timeout: 10_000 })
             .then(() => true)
             .catch(() => false)
-        if (appeared) return true
+        if (appeared) return 'at-pin'
     }
-    return false
+    throw new Error(
+        'the second-factor picker was clicked but the 6-digit code entry never appeared'
+    )
 }
 
 // Sign in as an ARBITRARY account (email + password, not one of the shared roles)
@@ -145,11 +168,11 @@ export async function signInStopAtMfa(
 ): Promise<void> {
     try {
         await reachSignInForm(page, env)
-        const atPinInput = await submitCredentialsToPin(page, email, password)
-        if (!atPinInput) {
+        const outcome = await submitCredentialsToPin(page, email, password)
+        if (outcome !== 'at-pin') {
             throw new Error(
-                'signed in without reaching a second-factor code entry — the account has no ' +
-                    'MFA enrolled, or the credentials were rejected before the MFA step'
+                'signed in without reaching a second-factor code entry — the account has ' +
+                    'no MFA enrolled'
             )
         }
     } catch (cause) {
@@ -175,12 +198,12 @@ export async function loginAs(
 
     try {
         await reachSignInForm(page, env)
-        const atPinInput = await submitCredentialsToPin(page, account.email, account.password)
-        if (atPinInput) {
+        const outcome = await submitCredentialsToPin(page, account.email, account.password)
+        if (outcome === 'at-pin') {
             await fillPin(page, account.mfaCode)
             await page.getByRole('button', { name: /verify code/i }).click()
         }
-        const dashboard = page.locator('text=dashboard').first()
+        const dashboard = dashboardMarker(page)
 
         // Success = we've left the sign-in page and an authenticated marker is
         // present. After verifying the code there is a redirect chain (+ a
