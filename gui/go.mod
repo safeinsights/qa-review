@@ -2,6 +2,15 @@ module qa-runner
 
 go 1.25.0
 
+// The BUILD toolchain, deliberately separate from the `go` line above (which is
+// only the language-compatibility floor). CI resolves its Go from this file via
+// setup-go's `go-version-file`, so without this it built with 1.25.x and shipped
+// five reachable stdlib vulnerabilities that govulncheck flags in crypto/tls,
+// encoding/asn1, net/textproto and crypto/x509 — all fixed by 1.26.6. Bump this
+// when `govulncheck ./...` reports a stdlib finding; it is the one place that
+// changes the Go used by CI, `make dmg`, and local builds alike.
+toolchain go1.26.6
+
 require (
 	filippo.io/age v1.3.1
 	github.com/creack/pty v1.1.24

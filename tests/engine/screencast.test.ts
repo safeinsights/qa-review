@@ -73,6 +73,44 @@ describe('screencast-codec', () => {
         expect(out.text).toBe('a')
     })
 
+    // Issue #46: without a virtual key code Chrome's editing layer ignores the
+    // named keys entirely — Backspace/arrows no-op and Enter arrives as keyCode 0.
+    it('emits the virtual key code for named editing keys', () => {
+        const vk = (key: string, code: string) => {
+            const out = toCdpKey({ kind: 'key', action: 'down', key, code })
+            expect(out.windowsVirtualKeyCode).toBe(out.nativeVirtualKeyCode)
+            return out.windowsVirtualKeyCode
+        }
+        expect(vk('Backspace', 'Backspace')).toBe(8)
+        expect(vk('Enter', 'Enter')).toBe(13)
+        expect(vk('Tab', 'Tab')).toBe(9)
+        expect(vk('Escape', 'Escape')).toBe(27)
+        expect(vk('ArrowLeft', 'ArrowLeft')).toBe(37)
+        expect(vk('ArrowRight', 'ArrowRight')).toBe(39)
+        expect(vk('Delete', 'Delete')).toBe(46)
+    })
+
+    it('maps a printable key to its uppercase char code, for either case', () => {
+        // The VK identifies the physical key, so 'a' and 'A' are both 65.
+        const lower = toCdpKey({ kind: 'key', action: 'down', key: 'a', code: 'KeyA', text: 'a' })
+        const upper = toCdpKey({
+            kind: 'key',
+            action: 'down',
+            key: 'A',
+            code: 'KeyA',
+            text: 'A',
+            modifiers: 8,
+        })
+        expect(lower.windowsVirtualKeyCode).toBe(65)
+        expect(upper.windowsVirtualKeyCode).toBe(65)
+    })
+
+    it('omits the virtual key code for a key with no mapping', () => {
+        const out = toCdpKey({ kind: 'key', action: 'down', key: 'Unidentified', code: '' })
+        expect(out.windowsVirtualKeyCode).toBeUndefined()
+        expect(out.nativeVirtualKeyCode).toBeUndefined()
+    })
+
     it('maps a keyup with no text', () => {
         const out = toCdpKey({ kind: 'key', action: 'up', key: 'Enter', code: 'Enter' })
         expect(out.type).toBe('keyUp')

@@ -43,6 +43,8 @@ const BOOLEANS = [
     'yes',
     // get-secret: valueless switch that permits printing a secret to a terminal.
     'force',
+    // session-create-user: opt in to printing the new account's TOTP secret.
+    'print-mfa-secret',
 ]
 
 async function main() {

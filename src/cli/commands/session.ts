@@ -138,8 +138,8 @@ async function runAction(
             await loginAs(page, env, action.role)
             return { role: action.role }
         case 'create-user': {
-            const { userId, email } = await createUserViaInvite(page, env, action.role)
-            return { role: action.role, userId, email }
+            const { userId, email, mfaSecret } = await createUserViaInvite(page, env, action.role)
+            return { role: action.role, userId, email, mfaSecret }
         }
         case 'create-study': {
             const studyId = await createStudyFromScratch(page, env)
