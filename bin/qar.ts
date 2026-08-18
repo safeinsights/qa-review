@@ -19,6 +19,7 @@ import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
 import { setSecretCommand } from '@/cli/commands/set-secret'
+import { shareWorkCommand } from '@/cli/commands/share-work'
 import { studyStateCommand } from '@/cli/commands/study-state'
 import { syncCommand } from '@/cli/commands/sync'
 import { totpCommand } from '@/cli/commands/totp'
@@ -89,6 +90,8 @@ async function main() {
             return getSecretCommand(opts, await loadSettings())
         case 'sync':
             return syncCommand()
+        case 'share-work':
+            return shareWorkCommand(String(opts.description ?? ''))
         case 'session':
             return sessionCommand(opts, await loadSettings())
         case 'session-login':
