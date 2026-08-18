@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -1227,4 +1228,77 @@ func TestWithGuiPathDeclaresColorTerminal(t *testing.T) {
 			t.Fatal("NO_COLOR survived into the child env; the terminal would be monochrome")
 		}
 	})
+}
+
+// The orphan this guards against: a `qar run` started at 09:14:51 outlived the
+// 09:23:59 app quit, which logged "0 session group(s) reaped", and was still
+// running four days later holding a Chrome, an esbuild service and an ffmpeg.
+// shutdown reaped only the session and the PTY; the run was never in the list.
+func TestLivePidsIncludesInFlightRun(t *testing.T) {
+	a := NewApp()
+	if got := a.livePids(); len(got) != 0 {
+		t.Fatalf("fresh App livePids() = %v, want none", got)
+	}
+
+	// A reserved-but-unstarted run has no Process yet (streamCmd claims the slot
+	// before Start), so it must contribute no pid rather than panicking.
+	a.runMu.Lock()
+	a.runCmd = &exec.Cmd{}
+	a.runMu.Unlock()
+	if got := a.livePids(); len(got) != 0 {
+		t.Fatalf("livePids() with a reserved run = %v, want none", got)
+	}
+
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting stand-in run: %v", err)
+	}
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	}()
+	a.runMu.Lock()
+	a.runCmd = cmd
+	a.runMu.Unlock()
+
+	got := a.livePids()
+	if len(got) != 1 || got[0] != cmd.Process.Pid {
+		t.Fatalf("livePids() = %v, want [%d] (the in-flight run)", got, cmd.Process.Pid)
+	}
+}
+
+// Quitting with a run in flight must actually kill it. Before the fix the process
+// survived shutdown and was reparented to init.
+func TestShutdownReapsInFlightRun(t *testing.T) {
+	a := NewApp()
+	// Long enough that a natural exit can never be mistaken for a successful kill.
+	cmd := exec.Command("sleep", "120")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting stand-in run: %v", err)
+	}
+	pid := cmd.Process.Pid
+	// Reap in the background: Wait blocks while the process is alive, so calling it
+	// inline would stall until `sleep` exits on its own and report a pass no matter
+	// what shutdown did. Waiting off-thread turns "did it die" into a race we can
+	// bound, and reaps the child so it never lingers as a zombie.
+	exited := make(chan struct{})
+	go func() {
+		_, _ = cmd.Process.Wait()
+		close(exited)
+	}()
+	defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
+	a.runMu.Lock()
+	a.runCmd = cmd
+	a.runMu.Unlock()
+
+	// No session and no PTY, so StopSession is a no-op and never emits on a nil ctx.
+	a.shutdown(context.Background())
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("run pid %d still alive after shutdown — it would be orphaned to init", pid)
+	}
 }

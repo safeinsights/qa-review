@@ -226,8 +226,8 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// shutdown runs when the app is quitting — tear down any live authoring session
-// so we never orphan a Chrome (remote-debugging) or claude process.
+// shutdown runs when the app is quitting — tear down everything the app owns, so
+// we never orphan a Chrome (remote-debugging), a claude process, or a suite run.
 //
 // teardownSession() only SIGTERMs; the SIGKILL escalation runs in goroutines that
 // fire seconds later (escalateKill, pty.stop). On quit the process exits first, so
@@ -238,15 +238,28 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	// Capture the PIDs BEFORE teardown: it clears sessionCmd and closes the PTY
 	// immediately, so app state stops being a usable signal the moment it returns.
-	pids := a.sessionPids()
+	pids := a.livePids()
+	// Stop the RUN gracefully BEFORE the group kills below. The engine handles
+	// SIGTERM (run.ts onStop) and closes its own Playwright browser, which is the
+	// only thing that reliably disposes of that browser: Playwright launches Chrome
+	// DETACHED, so the browser leads its own process group and a kill aimed at the
+	// engine's group never reaches it (same for the screencast ffmpeg). A no-op
+	// when no run is in flight.
+	a.terminateRun()
 	a.StopSession()
 	killGroupsNow(pids)
-	logDiag("app", "shutdown complete (%d session group(s) reaped)", len(pids))
+	logDiag("app", "shutdown complete (%d process group(s) reaped)", len(pids))
 }
 
-// sessionPids returns the PIDs of the live session processes (the engine/browser
-// session and the claude PTY), each a process-group leader.
-func (a *App) sessionPids() []int {
+// livePids returns the PIDs of every process this app owns that must not outlive
+// it: the engine/browser session, the claude PTY, and the in-flight suite run.
+// Each is spawned with Setpgid, so each is its own process-group leader.
+//
+// The RUN belongs here even though it is not session state and StopSession does
+// not touch it. Leaving it out is how a `qar run` started at 09:14:51 survived the
+// 09:23:59 quit that logged "0 session group(s) reaped", and was still alive four
+// days later still holding a Chrome, an esbuild service and an ffmpeg recorder.
+func (a *App) livePids() []int {
 	var pids []int
 	a.sessionMu.Lock()
 	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
@@ -256,6 +269,14 @@ func (a *App) sessionPids() []int {
 	if pid := a.pty.pid(); pid != 0 {
 		pids = append(pids, pid)
 	}
+	// streamCmd reserves the run slot with a placeholder &exec.Cmd{} before Start,
+	// so a tracked run can legitimately have no Process yet — hence the nil check
+	// rather than assuming a non-nil runCmd has been started.
+	a.runMu.Lock()
+	if a.runCmd != nil && a.runCmd.Process != nil {
+		pids = append(pids, a.runCmd.Process.Pid)
+	}
+	a.runMu.Unlock()
 	return pids
 }
 
@@ -945,8 +966,14 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
 		a.emitSpawnFailure(label, err)
 		return err
 	}
-	// Own process group so StopRun can signal the engine AND its children (the
-	// Chromium it launches), not just the parent.
+	// Own process group so StopRun can signal the engine and the helpers it keeps
+	// in-group (the esbuild service), not just the parent.
+	//
+	// It does NOT cover the Playwright browser: Playwright spawns Chrome detached,
+	// so the browser is its own group leader (observed: engine pgid 95893, its
+	// Chrome pgid 95895), as is the screencast ffmpeg. Those are disposed of by the
+	// engine's own SIGTERM handler, which is why terminateRun signals TERM first and
+	// only escalates to KILL — going straight to KILL leaves the browser behind.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		// Surface spawn failures (e.g. program not found) as a visible line + a
