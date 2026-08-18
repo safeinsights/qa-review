@@ -96,6 +96,11 @@ export const COMMANDS: CommandHelp[] = [
         summary: "Log the RUNNING session's browser in as a role.",
     },
     {
+        name: 'session-signin',
+        usage: 'qar session-signin --email <e> [--password <p>]',
+        summary: "Sign the session's browser in as any account, stopping at the MFA code step.",
+    },
+    {
         name: 'session-create-user',
         usage: 'qar session-create-user --role <researcher|reviewer>',
         summary: 'Invite + complete signup for a fresh user. Prints {"userId","email"}.',

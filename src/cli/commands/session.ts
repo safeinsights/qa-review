@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import type { Page } from '@playwright/test'
 import { sessionLine } from '@/cli/step-stream'
-import { loginAs } from '@/engine/auth'
+import { loginAs, signInStopAtMfa } from '@/engine/auth'
 import { launchChromeWithCdp } from '@/engine/cdp-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { createUserViaInvite } from '@/engine/flows/signup'
@@ -144,6 +144,18 @@ async function runAction(
         case 'create-study': {
             const studyId = await createStudyFromScratch(page, env)
             return { studyId }
+        }
+        case 'signin': {
+            await signInStopAtMfa(page, env, action.email, action.password)
+            return { email: action.email, atMfa: true }
+        }
+        default: {
+            // Exhaustive at the type level, but the action arrives from a JSON file that
+            // a NEWER client may have written — fail loudly instead of falling through to
+            // an ok:true result with an empty payload (see assertSignedInAtMfa for the
+            // client-side symptom of exactly that).
+            const unknown: never = action
+            throw new Error(`unknown session action: ${JSON.stringify(unknown)}`)
         }
     }
 }
