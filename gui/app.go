@@ -1283,11 +1283,32 @@ func (a *App) Sync(cwd string) (string, error) {
 	if strings.TrimSpace(status) != "" {
 		return "skipped-dirty", nil
 	}
-	if _, err := a.git(dir, "pull", "--ff-only"); err != nil {
+	// `-c pull.rebase=false` is required, not cosmetic: with a user's
+	// `pull.rebase true`, `pull --ff-only` runs the REBASE path and dies on config
+	// states that are not divergence at all ("Cannot rebase onto multiple
+	// branches"). Pinning it keeps --ff-only a genuine fast-forward check.
+	out, err := a.git(dir, "-c", "pull.rebase=false", "pull", "--ff-only")
+	if err != nil {
+		// Only a true non-fast-forward is recoverable by resetting. Reporting a
+		// broken upstream ref or unusable config as "diverged" offers a Reset
+		// button that reruns the same failure and never clears its own banner.
+		if isGitConfigFailure(out) {
+			return "failed: " + firstLines(out, 2), nil
+		}
 		return "skipped-diverged", nil
 	}
 	// Newly-pulled .ts suites are loaded directly by the engine (tsx) — no compile step.
 	return "synced", nil
+}
+
+// gitConfigFailureRE matches pull failures that resetting the working copy cannot
+// fix: a stale/missing upstream ref, no tracking branch, or rebase config git
+// refuses to act on. Mirrors isConfigFailure in src/cli/commands/sync.ts.
+var gitConfigFailureRE = regexp.MustCompile(
+	`(?i)cannot rebase onto multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
+
+func isGitConfigFailure(out string) bool {
+	return gitConfigFailureRE.MatchString(out)
 }
 
 // keyringFiles are the tracked config files that determine keyring access
@@ -1470,10 +1491,30 @@ func (a *App) Rekey(cwd string) (string, error) {
 	return string(out), nil
 }
 
+// ShareWork commits the working copy to a branch, opens a PR, and returns to a
+// synced main. It is the non-destructive half of the dirty-working-copy choice:
+// the user either shares the edits or discards them, and before this the app only
+// offered discard.
+func (a *App) ShareWork(cwd, description string) (string, error) {
+	out, err := engineCmd("share-work", "--description", description).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ResetAndSync discards ONLY uncommitted tracked edits (git restore .) — keeping
 // local commits — then runs a fast-forward Sync. Returns the Sync status string.
 func (a *App) ResetAndSync(cwd string) (string, error) {
-	if _, err := a.git(repoDir(), "restore", "."); err != nil {
+	dir := repoDir()
+	if _, err := a.git(dir, "restore", "."); err != nil {
+		return "", err
+	}
+	// `restore` ignores UNTRACKED files, so a stray file left status dirty and the
+	// banner reappeared unchanged — a Reset button that visibly did nothing. `-d`
+	// without `-x` deliberately keeps gitignored files (age identity,
+	// settings.local.json): removing those would sign the user out of their secrets.
+	if _, err := a.git(dir, "clean", "-fd"); err != nil {
 		return "", err
 	}
 	return a.Sync(cwd)

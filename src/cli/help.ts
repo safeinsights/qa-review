@@ -81,6 +81,16 @@ export const COMMANDS: CommandHelp[] = [
         summary: 'Fast-forward-only git pull (suites + keyring + secrets).',
     },
     {
+        name: 'share-work',
+        usage: 'qar share-work [--description "what changed"]',
+        summary: 'Commit local edits to a branch and open a PR, then return to a synced main.',
+        details:
+            'The alternative to discarding local edits when sync is skipped. Commits the whole\n' +
+            'working copy (gitignored files — your age identity, settings.local.json — are\n' +
+            'never staged), pushes, opens a PR, then checks out main and fast-forwards.\n' +
+            'If the push fails it stops on the branch rather than stranding unpushed commits.',
+    },
+    {
         name: 'session',
         usage: 'qar session (--env <env> | --pr <n>)',
         summary: 'Start the long-lived authoring/validation browser session.',

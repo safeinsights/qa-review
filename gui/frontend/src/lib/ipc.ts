@@ -143,6 +143,7 @@ interface WailsApp {
     ClearSetting(cwd: string, key: string): Promise<void>
     Sync(cwd: string): Promise<string>
     ResetAndSync(cwd: string): Promise<string>
+    ShareWork(cwd: string, description: string): Promise<string>
     RequestAccess(cwd: string, name: string): Promise<string>
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
@@ -533,7 +534,8 @@ export async function clearSetting(key: string): Promise<void> {
     await app().ClearSetting('', key)
 }
 
-// Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged".
+// Fast-forward-only sync: "synced" | "skipped-dirty" | "skipped-diverged", or
+// "failed: <git's message>" when git could not pull for a reason a reset cannot fix.
 export async function sync(): Promise<string> {
     return app().Sync('')
 }
@@ -541,6 +543,12 @@ export async function sync(): Promise<string> {
 // Discard uncommitted tracked edits (keep local commits), then sync.
 export async function resetAndSync(): Promise<string> {
     return app().ResetAndSync('')
+}
+
+// Commit local edits to a branch, open a PR, and return to a synced main —
+// the non-destructive alternative to resetAndSync.
+export async function shareWork(description: string): Promise<string> {
+    return app().ShareWork('', description)
 }
 
 // Generate identity + open a keyring PR via `qar request-access`.
