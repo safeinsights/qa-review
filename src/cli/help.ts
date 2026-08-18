@@ -112,8 +112,19 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: 'session-create-user',
-        usage: 'qar session-create-user --role <researcher|reviewer>',
+        usage: 'qar session-create-user --role <researcher|reviewer> [--print-mfa-secret]',
         summary: 'Invite + complete signup for a fresh user. Prints {"userId","email"}.',
+        details: [
+            '--print-mfa-secret also prints the account\'s base32 TOTP secret as "mfaSecret".',
+            'That is what lets you sign back IN as the created user later: pair it with',
+            '`qar totp --secret <secret>` for a live code (the password is the shared signup',
+            'constant). Without the flag the secret is discarded and the account becomes',
+            'unreachable once the session ends.',
+            '',
+            'The secret appears in the session output and any transcript of it, so pass the',
+            'flag only when a sign-back-in is actually needed. These are disposable QA/PR',
+            'accounts — delete them afterwards with `qar cleanup --users <id>`.',
+        ].join('\n'),
     },
     {
         name: 'session-create-study',

@@ -194,6 +194,40 @@ export interface CdpKeyParams {
     code: string
     text?: string
     modifiers?: number
+    windowsVirtualKeyCode?: number
+    nativeVirtualKeyCode?: number
+}
+
+// Windows virtual key codes for the named (non-printable) keys. Chrome's editing
+// layer routes an editing command (delete-backward, caret motion, submit) off the
+// VIRTUAL KEY CODE — `key`/`code` alone are inert. Without these, Backspace and the
+// arrows silently do nothing and Enter reaches the page as `keyCode: 0`, so any
+// handler testing `e.keyCode === 13` ignores it. That is issue #46: the live view
+// could type printable characters (they carry `text`) but could not edit.
+const VIRTUAL_KEY_CODES: Record<string, number> = {
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Escape: 27,
+    ' ': 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Insert: 45,
+    Delete: 46,
+}
+
+// A single printable character's virtual key code is its UPPERCASE char code
+// ('a' and 'A' are both 65) — the VK identifies the physical key, not the glyph.
+function virtualKeyCode(key: string): number | undefined {
+    const named = VIRTUAL_KEY_CODES[key]
+    if (named !== undefined) return named
+    return key.length === 1 ? key.toUpperCase().charCodeAt(0) : undefined
 }
 
 export function toCdpKey(ev: Extract<InputEvent, { kind: 'key' }>): CdpKeyParams {
@@ -207,5 +241,10 @@ export function toCdpKey(ev: Extract<InputEvent, { kind: 'key' }>): CdpKeyParams
     // when no non-shift modifier is held, so shortcuts don't insert characters.
     const nonShift = (ev.modifiers ?? 0) & ~8 // strip Shift (8)
     if (ev.action === 'down' && ev.text && !nonShift) params.text = ev.text
+    const vk = virtualKeyCode(ev.key)
+    if (vk !== undefined) {
+        params.windowsVirtualKeyCode = vk
+        params.nativeVirtualKeyCode = vk
+    }
     return params
 }

@@ -62,11 +62,15 @@ export async function inviteUser(
     await page.getByText(/invitation sent successfully/i).waitFor({ state: 'visible' })
 }
 
-// Complete the full new-user signup from the emailed invitation URL and return
-// the new user's SafeInsights DB id. Handles: invitation landing -> create account
-// form -> mandatory authenticator-app MFA (TOTP) -> recovery codes -> security key
-// -> dashboard. The new user must be UNAUTHENTICATED, so clear any existing session.
-export async function completeSignup(page: Page, invitationUrl: string): Promise<string> {
+// Complete the full new-user signup from the emailed invitation URL and return the
+// new user's SafeInsights DB id plus the TOTP secret its MFA was enrolled with.
+// Handles: invitation landing -> create account form -> mandatory authenticator-app
+// MFA (TOTP) -> recovery codes -> security key -> dashboard. The new user must be
+// UNAUTHENTICATED, so clear any existing session.
+export async function completeSignup(
+    page: Page,
+    invitationUrl: string
+): Promise<{ userId: string; mfaSecret: string }> {
     const password = SIGNUP_PASSWORD
 
     // Fresh, unauthenticated slate (the admin session must not carry over).
@@ -99,13 +103,15 @@ export async function completeSignup(page: Page, invitationUrl: string): Promise
 
     // Enter the authenticator code. enterTotp re-reads the secret from the page on
     // each attempt — the page can re-render/regenerate the secret after first paint.
-    await enterTotp(page)
+    let mfaSecret = await enterTotp(page)
 
     // 4. Clerk may step-up re-prompt with a single verification input. Read the
-    //    (still-current) secret again for this code.
+    //    (still-current) secret again for this code — if the page regenerated it,
+    //    this later one is the enrolled secret, so it wins.
     const stepUp = page.getByRole('textbox', { name: /verification code/i })
     if (await stepUp.isVisible({ timeout: 10_000 }).catch(() => false)) {
         const secret = await readTotpSecret(page)
+        mfaSecret = secret
         await stepUp.fill(totp(secret))
         await page
             .getByRole('button', { name: /continue/i })
@@ -161,12 +167,15 @@ export async function completeSignup(page: Page, invitationUrl: string): Promise
     if (!userId) {
         throw new Error('Could not read the new user SafeInsights id (publicMetadata) after signup')
     }
-    return userId
+    return { userId, mfaSecret }
 }
 
 export interface CreatedUser {
     userId: string
     email: string
+    // Base32 TOTP secret the account's MFA was enrolled with. Pair it with
+    // `qar totp --secret <v>` to sign back in as this user later.
+    mfaSecret: string
 }
 
 // A collision-free-enough address for an API-minted invite. MUST start with "qa" —
@@ -204,8 +213,8 @@ export async function createUserViaInvite(
     const email = uniqueQaEmail()
     const api = new QaApiClient(env.baseURL, token)
     const invite = await api.createInvite({ email, orgSlug: ORG_FOR_ROLE[role] })
-    const userId = await completeSignup(page, invite.inviteUrl)
-    return { userId, email }
+    const { userId, mfaSecret } = await completeSignup(page, invite.inviteUrl)
+    return { userId, email, mfaSecret }
 }
 
 // Read the base32 TOTP secret shown on the authenticator-app setup page. The secret
@@ -254,7 +263,9 @@ export async function readTotpSecret(page: Page): Promise<string> {
 // Fill the 6-box PinInput with a freshly-computed TOTP code and submit. If the
 // verify fails, wait for a fresh 30s window and retry with a newly-computed code.
 // Throws if every attempt is rejected so the failure is loud, not a silent hang.
-export async function enterTotp(page: Page): Promise<void> {
+// Returns the secret that actually verified — the page can regenerate it between
+// attempts, so only the accepted one can derive codes for a later sign-in.
+export async function enterTotp(page: Page): Promise<string> {
     // Resolve the 6-box Mantine PinInput robustly: prefer the proven SMS-pin
     // selector (placeholder="0" in a role=group), then fall back to any role=group
     // inputs, then the accessible-name form.
@@ -294,7 +305,7 @@ export async function enterTotp(page: Page): Promise<void> {
                 .waitFor({ state: 'visible', timeout: 8_000 })
                 .then(() => true),
         ]).catch(() => false)
-        if (moved) return
+        if (moved) return secret
 
         // Rejected (or still on the pin step). Wait for the NEXT time window so we
         // never resubmit the same code, then clear the boxes and retry.

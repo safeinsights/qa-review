@@ -50,6 +50,9 @@ export interface SessionResult {
     role?: Role | InvitedRole
     userId?: string
     email?: string
+    // The created account's base32 TOTP secret. It always crosses this boundary;
+    // whether it reaches stdout is gated by `session-create-user --print-mfa-secret`.
+    mfaSecret?: string
     studyId?: string
     atMfa?: boolean
 }
