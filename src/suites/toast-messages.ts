@@ -35,6 +35,12 @@ import type { RunContext, Suite } from './types'
 // needs an induced server failure, and faking one is the kind of masking that makes a
 // suite lie.
 //
+// THE LAST STEP IS EXPECTED TO FAIL while OTTER-736 is open — it is the standing
+// regression check for that bug (the invitation params are never cleared from the URL, so
+// the toast re-fires on reload). It sits last because the engine stops at the first
+// failing step; every other check runs and reports before it. A red run whose only
+// failure is that step means the suite is working and the bug is still there.
+//
 // Writes: the data source pair and the draft proposal are created and then deleted by the
 // suite itself — the deletes ARE the assertions. The researcher's first name is edited and
 // restored in the same step. A run that dies mid-step can therefore leave one data source
@@ -138,10 +144,9 @@ async function expectInvitationNotices(ctx: RunContext): Promise<void> {
     // The app pins ids on these two so it can address them later.
     await expect(ctx.page.locator('#skip-invitation')).toBeVisible()
     await expect(ctx.page.locator('#decline-invitation')).toBeVisible()
-    // The hook is also meant to router.replace() the params away once the toasts are up. On
-    // qa that does NOT happen: ?skip=/?decline= survive, so a reload re-fires the toast —
-    // OTTER-736. Left unasserted on purpose: it is a defect in the URL cleanup, not in the
-    // toast, and failing this suite for it would hide the thing this suite is for.
+    // Nothing here asserts the URL cleanup the hook is also meant to do — that is the last
+    // step in this suite (OTTER-736), kept separate so this step's toast checks stay green
+    // and keep reporting while that bug is open.
     await dismissToasts(ctx.page)
 }
 
@@ -317,6 +322,41 @@ export const toastMessagesSuite: Suite = {
                         ctx.trackStudy(studyId)
                         throw error
                     }
+                }),
+        },
+        {
+            name: 'Invitation params are cleared once the toasts show (OTTER-736)',
+            // KNOWN FAILING until OTTER-736 is fixed, and deliberately kept in the suite as
+            // the standing regression check for it. useInvitationNotices() is documented to
+            // router.replace() the params away after raising the notices ("Cleans up the URL
+            // params after showing notifications"); on qa it does not, so ?skip=/?decline=
+            // survive and a reload re-fires the toast.
+            //
+            // Its own step, and the LAST one, for two reasons. The engine stops at the first
+            // failing step, so anywhere earlier this would block every check below it. And a
+            // failure here names the ticket in the run output, so the red is self-explaining
+            // rather than something a reader has to triage as new. It turns green on its own
+            // when the fix lands — at which point delete this comment, not the assertion.
+            run: ctx =>
+                ctx.step(async () => {
+                    const skipped = `Cleanup Org ${ctx.tag}`
+                    const params = new URLSearchParams({ skip: skipped })
+                    await ctx.page.goto(`${ctx.baseURL}/dashboard?${params}`, {
+                        waitUntil: 'domcontentloaded',
+                    })
+                    // Wait for the toast BEFORE reading the URL. It proves the effect that
+                    // owns the cleanup has actually run, so a param still present afterwards
+                    // is a real failure to clean up and not a check that arrived early. This
+                    // is the one case the repo's "wait on elements, not URLs" rule allows a
+                    // URL read: the value IS the thing under test, and an element gates it.
+                    await toastWith(
+                        ctx.page,
+                        `You have opted to skip the invitation to ${skipped}`
+                    ).waitFor({ state: 'visible' })
+                    await expect
+                        .poll(() => new URL(ctx.page.url()).searchParams.get('skip'))
+                        .toBeNull()
+                    await dismissToasts(ctx.page)
                 }),
         },
     ],
