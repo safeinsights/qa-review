@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserHandle } from '@/engine/run'
-import { runEngine } from '@/engine/run'
+import { resolveStepTimeoutMs, runEngine, withStepDeadline } from '@/engine/run'
 import type { Suite } from '@/suites/types'
 
 const made: string[] = []
@@ -865,5 +865,88 @@ describe('runEngine jump-to-step', () => {
             ['boom', 'failed'],
             ['after', 'passed'],
         ])
+    })
+})
+
+describe('resolveStepTimeoutMs', () => {
+    it('defaults to 5 minutes when unset or blank', () => {
+        expect(resolveStepTimeoutMs({})).toBe(300_000)
+        expect(resolveStepTimeoutMs({ QAR_STEP_TIMEOUT_MS: '   ' })).toBe(300_000)
+    })
+
+    it('honors an explicit override, including 0 to disable', () => {
+        expect(resolveStepTimeoutMs({ QAR_STEP_TIMEOUT_MS: '90000' })).toBe(90_000)
+        expect(resolveStepTimeoutMs({ QAR_STEP_TIMEOUT_MS: '0' })).toBe(0)
+    })
+
+    it('falls back to the default on junk rather than disabling the guard', () => {
+        // A typo must not silently turn the deadline off — that reinstates the hang.
+        expect(resolveStepTimeoutMs({ QAR_STEP_TIMEOUT_MS: 'soon' })).toBe(300_000)
+        expect(resolveStepTimeoutMs({ QAR_STEP_TIMEOUT_MS: '-1' })).toBe(300_000)
+    })
+})
+
+describe('withStepDeadline', () => {
+    it('passes the action through when it settles in time', async () => {
+        await expect(withStepDeadline('s', 5_000, async () => 'done')).resolves.toBe('done')
+    })
+
+    it('propagates the action own failure unchanged', async () => {
+        await expect(
+            withStepDeadline('s', 5_000, async () => {
+                throw new Error('kaboom')
+            })
+        ).rejects.toThrow('kaboom')
+    })
+
+    it('rejects with a message naming the limit when the action never settles', async () => {
+        await expect(
+            withStepDeadline('stuck step', 20, () => new Promise(() => {}))
+        ).rejects.toThrow(/Step "stuck step" hit the 0s step timeout .*QAR_STEP_TIMEOUT_MS/s)
+    })
+
+    it('runs unbounded when the deadline is disabled', async () => {
+        await expect(withStepDeadline('s', 0, async () => 'done')).resolves.toBe('done')
+    })
+
+    it('swallows the abandoned action late rejection', async () => {
+        // Playwright cannot be cancelled, so the body outlives the deadline and
+        // rejects later. Unhandled, that would crash the engine after the step had
+        // already been recorded failed.
+        const seen: unknown[] = []
+        const onUnhandled = (e: unknown) => seen.push(e)
+        process.on('unhandledRejection', onUnhandled)
+        try {
+            const late = withStepDeadline(
+                's',
+                10,
+                () => new Promise((_r, reject) => setTimeout(() => reject(new Error('late')), 40))
+            )
+            await expect(late).rejects.toThrow(/step timeout/)
+            await new Promise(r => setTimeout(r, 80))
+        } finally {
+            process.off('unhandledRejection', onUnhandled)
+        }
+        expect(seen).toEqual([])
+    })
+})
+
+describe('runEngine step deadline', () => {
+    it('fails a hung step instead of hanging the run', async () => {
+        // The regression this guards: the step row stayed 'running' forever and the
+        // run never produced a result at all.
+        const d = deps({ vars: { ...ENV_VARS, QAR_STEP_TIMEOUT_MS: '25' } })
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [{ name: 'hangs', run: ctx => ctx.step(() => new Promise(() => {})) }],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        expect(result.steps.map(s => [s.name, s.status])).toEqual([['hangs', 'failed']])
+        expect(result.steps[0].error).toMatch(/step timeout/)
+        // 'timeout' in the message routes it the same way a Playwright timeout is.
+        expect(result.failureCategory).toBe('environment')
     })
 })

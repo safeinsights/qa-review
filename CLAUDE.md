@@ -64,7 +64,8 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 ## Architecture (one-liners)
 
 - `src/engine/` — the run engine. `runEngine()` is the entry; `env.ts` resolves
-  envs; `suite-registry.ts` lists/loads suites.
+  envs; `suite-registry.ts` lists/loads suites. Every `ctx.step()` runs under a
+  deadline — see "Debugging the run hangs on one step" below.
 - `src/suites/` — the actual suites (`signin`, `create-study`, plus discovered ones).
   A `Suite` is a plain object with an ordered **`steps: Step[]`** array (each
   `{ name, run(ctx) }`), so step names are statically enumerable — the GUI shows a
@@ -327,6 +328,48 @@ where each lives). Settings-specific failure modes:
   Run `pnpm qar request-access --name "..."` (or the GUI's Request access button),
   or supply the value via env / `settings.local.json`. (This skip-when-keyless
   behavior is what lets CI run without a key.)
+
+## Debugging "the run hangs on one step" (`QAR_STEP_TIMEOUT_MS`)
+
+The opposite symptom to the one above, and it used to be worse: a step that could
+never succeed **hung the run forever** rather than failing. No failure row, no
+screenshot, `run-state.json` frozen with that step still `running` and
+`"running": true`, and — the part that costs the most time — the browser never
+held open for a retry, because nothing ever threw. One run sat like that for 8
+minutes against an env whose build simply did not have the page the step
+navigated to (staging was on a tag predating the feature; the same suite was
+green on qa).
+
+The cause is Playwright's LIBRARY mode. Per-action defaults bound each click and
+assertion, but a bare `expect(...).toPass()` resolves its timeout to
+`options.timeout ?? expectConfig().toPass?.timeout ?? 0` — and with no test
+runner there is no config to read, so it polls with NO deadline. Note that
+`expect.configure({ timeout })` does NOT fix this: that sets `info.timeout`,
+which `toPass` never consults.
+
+So `src/engine/run.ts` gives every **`ctx.step()`** a wall-clock deadline
+(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Two details are
+deliberate:
+
+- It wraps the action INSIDE `ctx.step()`, not `step.run(ctx)`. `ctx.step`'s own
+  catch is what records the `failed` row with screenshot/url/console and feeds the
+  retryable hold, so a timeout fails through the ordinary path. Wrapping the outer
+  call would leave the row stuck at `running` — the very bug being fixed.
+- The abandoned body gets a `.catch()`. Playwright has no cancellation, so it
+  keeps polling until teardown and would otherwise land as an **unhandled
+  rejection** after the step was already recorded failed.
+
+The message contains the word `timeout`, so `categorize()` files it as
+`environment`, matching how a plain Playwright timeout already reads.
+
+**`QAR_STEP_TIMEOUT_MS`** overrides the 5-minute default; `0` disables the
+deadline (an escape hatch for hand-debugging a parked step). A non-numeric or
+negative value falls back to the default rather than silently disabling the
+guard — a typo must not reinstate the hang. It is read from the merged settings
+like any other var, so `config/settings.local.json` works as well as the env.
+
+Suites must still not set inline Playwright timeouts (see "Code rules"): this is
+the global backstop, not permission to sprinkle `{ timeout: … }` around.
 
 ## Packaging a standalone Mac app (`.dmg` for staff)
 

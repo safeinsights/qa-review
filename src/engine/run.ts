@@ -112,6 +112,59 @@ function categorize(error: Error): FailureCategory {
     return 'tool-crash'
 }
 
+// A step body has no deadline of its own. Playwright's per-action defaults bound each
+// click and assertion, but a bare `expect(...).toPass()` resolves its timeout to 0 in
+// LIBRARY mode (no test runner, so no expect config to read) and therefore polls
+// forever. A step that can never succeed then hangs the whole run instead of failing:
+// no failure row, no screenshot, run-state.json frozen mid-step, and the browser never
+// held open for a retry. Observed for 8 minutes on an env whose build simply did not
+// have the page the step navigated to.
+//
+// So every ctx.step() gets a wall-clock deadline. Exceeding it fails the step through
+// the ordinary path — screenshot, url, console, retryable hold — with a message naming
+// the limit. The word 'timeout' in that message categorizes it as 'environment', which
+// is how a plain Playwright timeout already reads.
+const DEFAULT_STEP_TIMEOUT_MS = 5 * 60 * 1000
+
+// `QAR_STEP_TIMEOUT_MS` overrides it; 0 disables the deadline (an escape hatch for
+// hand-debugging a parked step). A non-numeric or negative value falls back to the
+// default instead of silently disabling the guard.
+export function resolveStepTimeoutMs(vars: Record<string, string | undefined>): number {
+    const raw = vars.QAR_STEP_TIMEOUT_MS
+    if (raw === undefined || raw.trim() === '') return DEFAULT_STEP_TIMEOUT_MS
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STEP_TIMEOUT_MS
+    return Math.floor(parsed)
+}
+
+export async function withStepDeadline<T>(
+    name: string,
+    timeoutMs: number,
+    action: () => Promise<T>
+): Promise<T> {
+    if (timeoutMs <= 0) return action()
+    const pending = action()
+    // Playwright has no cancellation, so an abandoned body keeps polling until
+    // teardown. Swallow its eventual rejection here: without this it surfaces as an
+    // unhandled rejection long after the step was already recorded failed.
+    pending.catch(() => {})
+    const seconds = Math.round(timeoutMs / 1000)
+    const message =
+        `Step "${name}" hit the ${seconds}s step timeout with no result — it is stuck, ` +
+        'not slow (raise or disable it with QAR_STEP_TIMEOUT_MS)'
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+        return await Promise.race([
+            pending,
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+            }),
+        ])
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 // Validate a latched jump target and do the recorder bookkeeping so the run can
 // continue from it. Returns the target index, or undefined when there's nothing to
 // do (no request, already there, or out of range).
@@ -202,6 +255,7 @@ export async function runEngine(
     const mode = req.mode ?? 'suite'
     const env = req.envConfig ?? resolveEnv(req.env, deps.vars)
     const suite = suiteOverride ?? (await getSuite(req.suite))
+    const stepTimeoutMs = resolveStepTimeoutMs(deps.vars)
 
     // Collected step events for a future live-streaming consumer (e.g. the CLI/GUI
     // progress view). Not read here; recorder.finish() is the source of truth for steps.
@@ -347,7 +401,7 @@ export async function runEngine(
                     typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
                 try {
-                    const out = await action()
+                    const out = await withStepDeadline(name, stepTimeoutMs, action)
                     const screenshot = await captureScreenshot(name)
                     recorder.step(name, 'passed', {
                         screenshot,
