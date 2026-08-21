@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { loginAs } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
@@ -43,8 +43,17 @@ export async function inviteUser(
 ): Promise<void> {
     const org = ORG_FOR_ROLE[role]
     await page.goto(`${baseURL}/${org}/admin/team`, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('button', { name: /invite people/i }).click()
-    await page.getByRole('textbox', { name: /invite by email/i }).fill(email)
+    // "Invite People" is server-rendered, so it is present and clickable BEFORE React
+    // wires its onClick. A one-shot click at domcontentloaded therefore lands on a
+    // dead button — it takes focus, no dialog opens, and we then wait out the full
+    // timeout on an email field that was never going to appear. Re-click until the
+    // dialog actually renders.
+    const emailField = page.getByRole('textbox', { name: /invite by email/i })
+    await expect(async () => {
+        await page.getByRole('button', { name: /invite people/i }).click()
+        await expect(emailField).toBeVisible()
+    }).toPass()
+    await emailField.fill(email)
     await page
         .getByRole('radio', { name: /contributor/i })
         .check()

@@ -94,6 +94,17 @@ func withGuiPath() []string {
 	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
 	out = append(out, qarBinEnv()...)
+	// Give `claude` a bigger MCP startup budget than its 30s default. A COLD
+	// `uvx mcp-atlassian` builds an ephemeral venv and installs ~100 packages before
+	// the server answers anything — measured at 29s cold vs 0s warm — so against the
+	// default it loses the race about as often as it wins. When it loses, the
+	// validation session comes up with no mcp__jira-atlassian__* tools and NOTHING in
+	// the diagnostic log looks wrong, because the server was still installing rather
+	// than failing. An explicit MCP_TIMEOUT from the environment survives the loop
+	// above and wins, so this only supplies a default.
+	if os.Getenv("MCP_TIMEOUT") == "" {
+		out = append(out, fmt.Sprintf("MCP_TIMEOUT=%d", mcpStartupTimeout.Milliseconds()))
+	}
 	return out
 }
 
@@ -431,7 +442,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 	logMcp("authoring session: config=%s", mcpPath)
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, JiraCfg{})
 
 	claudeArgs := []string{
 		"--permission-mode", "default",
@@ -616,7 +627,7 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 	// Whether the Jira server is even present is a separate invisible failure: no token
 	// means no jira-atlassian server, which surfaces only as missing mcp__jira__* tools.
 	logMcp("validation session: config=%s jiraConfigured=%t", mcpPath, strings.TrimSpace(jiraCfg.Token) != "")
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, jiraCfg)
 
 	claudeArgs := []string{
 		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
@@ -733,7 +744,7 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 	logMcp("companion session: config=%s suite=%s", mcpPath, suite)
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, JiraCfg{})
 
 	repo := repoDir()
 	if err := a.pty.start(a, repo, withGuiPath(), companionClaudeArgs(mcpPath, repo)); err != nil {

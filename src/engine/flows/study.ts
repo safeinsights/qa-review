@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker'
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { loginAs } from '../auth'
 import type { EnvConfig } from '../types'
 
@@ -19,6 +19,7 @@ export interface StudyContent {
     changeRequestFeedback: string
     resubmissionNote: string
     codeApprovalFeedback: string
+    resultsApprovalFeedback: string
 }
 
 // Realistic-but-synthetic study + review text via faker, using English-word
@@ -53,6 +54,7 @@ export function generateStudyContent(tag: string): StudyContent {
         changeRequestFeedback: `Requesting revisions before approval. ${body(1)}`,
         resubmissionNote: `Addressed reviewer feedback. ${body(1)}`,
         codeApprovalFeedback: `Code approved and ready to run. ${body(1)}`,
+        resultsApprovalFeedback: `Outputs reviewed, no sensitive or restricted data. ${body(1)}`,
     }
 }
 
@@ -72,13 +74,31 @@ export async function openProposalDashboard(page: Page, baseURL: string): Promis
         .waitFor({ state: 'visible' })
 }
 
-// Click "Propose New Study" and land on the request page (its org picker rendered).
+// Click "Propose New Study" and land on the request page with its org picker READY
+// TO CLICK — which is a later state than "rendered", and the distinction is the whole
+// point of this helper.
+//
+// The picker is CLIENT-rendered (the server HTML for /<org>/study/request contains no
+// org-select at all) and Mantine renders it DISABLED while the org list loads —
+// measured at ~0.5-1s on qa. Waiting only for `visible` therefore hands the caller a
+// control it cannot click, and the caller burns its ENTIRE action timeout on it: the
+// click logs "element is not enabled", then "element was detached from the DOM" when
+// the loaded list replaces the node, and never recovers.
+//
+// The click is re-driven rather than fired once because a click that lands before the
+// dashboard hydrates navigates outside the router's knowledge and can be undone — the
+// same pre-hydration hazard the invite flow documents, one state further along.
 export async function beginProposal(page: Page): Promise<void> {
-    await page
-        .getByRole('link', { name: /Propose New Study/i })
-        .first()
-        .click()
-    await page.getByTestId('org-select').waitFor({ state: 'visible' })
+    const link = page.getByRole('link', { name: /Propose New Study/i }).first()
+    const orgSelect = page.getByTestId('org-select')
+    await expect(async () => {
+        // Only (re-)drive the link while the picker is absent. After a successful
+        // navigation the link is gone, so an unconditional re-click would spend the
+        // whole retry timing out on a detached control instead of waiting out a slow
+        // org list.
+        if ((await orgSelect.count()) === 0) await link.click()
+        await expect(orgSelect).toBeEnabled()
+    }).toPass()
 }
 
 // Open the dashboard and begin a proposal in one call (for ad-hoc callers).

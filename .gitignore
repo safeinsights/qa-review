@@ -20,3 +20,8 @@ config/age-identity.txt
 # directory glob, not a blanket *.png: docs/images/ and gui/build/appicon.png are
 # tracked, and an extension rule would silently hide edits to them.
 .qa-valid*/
+# A local pnpm content-addressable store (147 MB, thousands of files) appears here
+# when pnpm is pointed at the repo instead of its default global dir. It is a cache,
+# never a source artifact, and `qar share-work` commits the whole working copy — so
+# without this line one stray store turns into a 147 MB commit on a shared branch.
+.pnpm-store/

@@ -155,6 +155,11 @@ func writeSessionMcpConfig(cdpPort int) (string, error) {
 // and confirm the probe logs "stayed up past" (see probeMcpServers).
 const chromeDevtoolsMcpPkg = "chrome-devtools-mcp@1.6.0"
 
+// jiraMcpPkg is the Jira MCP server package, named once so writeValidationMcpConfig
+// and probeJiraServer cannot drift apart — the probe must test what the sessions
+// actually run, for the same reason chromeDevtoolsMcpPkg is a single constant.
+const jiraMcpPkg = "mcp-atlassian"
+
 // diagLogPath is the app's append-only diagnostic log. It exists because this app's
 // characteristic failure is SILENT: subprocesses (the engine, git/gh, claude, MCP
 // servers) fail in ways that surface to the user only as an absence — no steps
@@ -194,21 +199,23 @@ func logDiag(cat, format string, args ...any) {
 // explanation, and nothing is recoverable from inside that session.
 func logMcp(format string, args ...any) { logDiag("mcp", format, args...) }
 
-// probeMcpServers records the environment facts that decide whether the chrome-devtools
-// MCP server can start, and then actually STARTS it once to capture the failure.
+// probeMcpServers records the environment facts that decide whether this session's MCP
+// servers can start, and then actually STARTS each one to capture the failure.
 //
-// The two known failure modes are invisible at session start and look identical from
-// inside the session (no mcp__chrome-devtools__* tools):
+// The known failure modes are invisible at session start and look identical from inside
+// the session (an absent tool namespace, nothing else):
 //   - `npx` is not on the GUI-augmented PATH (node installed via nvm/asdf/Volta, which
 //     a Finder-launched app never searches — guiPathDirs only covers brew + /usr/local).
 //   - The pinned chromeDevtoolsMcpPkg cannot be fetched (cold npx cache + no network)
 //     or the pinned release is broken on this machine.
+//   - `uvx mcp-atlassian` is too SLOW on a cold cache to answer within claude's startup
+//     budget, so the validation session gets no Jira tools (see probeJiraServer).
 //
-// The probe runs the real command and gives it a moment to fail. A healthy MCP server
-// is a long-lived stdio process, so "still running when we look" IS the success signal;
-// we kill it and let claude spawn its own. Exiting fast means it died — and its stderr
-// is the diagnostic that is otherwise lost forever.
-func probeMcpServers(cdpPort int) {
+// Both servers get probed, because a probe that covers only one reports a healthy
+// session while the other is missing — which is what the Jira server's first observed
+// failure looked like: every `mcp` line in the log said "ok", and none of them were
+// about Jira.
+func probeMcpServers(cdpPort int, jira JiraCfg) {
 	logMcp("--- session start: cdpPort=%d", cdpPort)
 
 	npx, err := exec.LookPath("npx")
@@ -243,10 +250,26 @@ func probeMcpServers(cdpPort int) {
 	cmd := exec.Command(npx, chromeDevtoolsMcpPkg,
 		fmt.Sprintf("--browserUrl=http://127.0.0.1:%d", cdpPort))
 	cmd.Env = withGuiPath()
-	// Own process group. `npx` spawns a THREE-level tree (npm exec -> the server ->
-	// a telemetry watchdog); killing only cmd.Process reaps the npm wrapper and
-	// leaves the real server orphaned, still holding a CDP connection to the session
-	// browser. Signalling -pgid takes the whole tree, as pty.stop() does for claude.
+	probeStdioServer("chrome-devtools-mcp", cmd)
+
+	// The Jira server is probed separately and only when configured. Without a token
+	// writeValidationMcpConfig omits it entirely, so its absence is expected, not a
+	// failure — see the "jiraConfigured" line logged at session start.
+	if strings.TrimSpace(jira.Token) != "" {
+		probeJiraServer(jira)
+	}
+}
+
+// probeStdioServer starts a stdio MCP server once and reports whether it SURVIVES
+// startup. A healthy stdio server is long-lived, so "still running when we look" is
+// the success signal; we kill it and let claude spawn its own. Exiting fast means it
+// died, and its stderr is the diagnostic that is otherwise lost forever (MCP servers
+// are spawned by `claude`, so we never see their output).
+func probeStdioServer(label string, cmd *exec.Cmd) {
+	// Own process group. A launcher like `npx` or `uvx` spawns a MULTI-level tree
+	// (npm exec -> the server -> a telemetry watchdog); killing only cmd.Process reaps
+	// the wrapper and leaves the real server orphaned, still holding a CDP connection
+	// to the session browser. Signalling -pgid takes the whole tree, as pty.stop() does.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -255,12 +278,12 @@ func probeMcpServers(cdpPort int) {
 	// claude keeps the pipe open, so this makes the probe match real conditions.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		logMcp("FAIL could not open stdin pipe: %v", err)
+		logMcp("FAIL %s could not open stdin pipe: %v", label, err)
 		return
 	}
 	defer stdin.Close()
 	if err := cmd.Start(); err != nil {
-		logMcp("FAIL could not spawn chrome-devtools-mcp: %v", err)
+		logMcp("FAIL could not spawn %s: %v", label, err)
 		return
 	}
 	done := make(chan error, 1)
@@ -270,11 +293,11 @@ func probeMcpServers(cdpPort int) {
 		if err == nil {
 			// Exited 0 without being asked to. Not the expected shape for a long-lived
 			// stdio server, but NOT an error either — don't cry wolf.
-			logMcp("warn chrome-devtools-mcp exited cleanly (code 0) before %s", mcpProbeWait)
+			logMcp("warn %s exited cleanly (code 0) before %s", label, mcpProbeWait)
 		} else {
-			logMcp("FAIL chrome-devtools-mcp exited immediately: %v", err)
+			logMcp("FAIL %s exited immediately: %v", label, err)
 		}
-		// This server writes a startup banner to stderr even when healthy, so label
+		// These servers write a startup banner to stderr even when healthy, so label
 		// it neutrally: on a real failure the cause is in these first lines, and npm's
 		// output otherwise runs long enough to dominate the issue body it's embedded in.
 		if s := strings.TrimSpace(stderr.String()); s != "" {
@@ -283,11 +306,129 @@ func probeMcpServers(cdpPort int) {
 			logMcp("  (no output — likely a failed package fetch; check network/registry)")
 		}
 	case <-time.After(mcpProbeWait):
-		logMcp("ok chrome-devtools-mcp stayed up past %s (healthy)", mcpProbeWait)
+		logMcp("ok %s stayed up past %s (healthy)", label, mcpProbeWait)
 		killProcessGroup(cmd)
 		<-done
 	}
 }
+
+// probeJiraServer measures how long `uvx mcp-atlassian` takes to become USABLE, which
+// is a different question from whether it survives.
+//
+// Surviving is not the bar here: this server's real failure mode is being too SLOW.
+// `uvx` builds an ephemeral venv and installs ~100 packages on a cold cache before the
+// server answers anything (measured at 29s cold, 0s warm), so a survival-only probe of
+// the kind probeStdioServer runs would happily report "healthy" while claude had
+// already given up on it — which is exactly how a session ends up with no
+// mcp__jira-atlassian__* tools and a diagnostic log that shows nothing wrong.
+//
+// So we speak the protocol: send `initialize` and time the reply. That also
+// distinguishes the two causes that look identical from inside a session — a slow cold
+// start (reply arrives, just late) from bad credentials or a broken package (the
+// server dies, and its stderr says why).
+func probeJiraServer(jira JiraCfg) {
+	uvx, err := exec.LookPath("uvx")
+	if err != nil {
+		// Same PATH trap as npx: LookPath uses the PARENT process PATH, which for a
+		// Finder-launched app is just /usr/bin:/bin (see guiResolve).
+		uvx = guiResolve("uvx")
+		if uvx == "uvx" {
+			logMcp("FAIL uvx not found on PATH=%s", guiPath(withGuiPath()))
+			logMcp("  jira-atlassian MCP cannot start; the session will have no Jira tools.")
+			return
+		}
+	}
+
+	cmd := exec.Command(uvx, jiraMcpPkg)
+	env := withGuiPath()
+	for k, v := range jiraMcpEnv(jira) {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		logMcp("FAIL jira-atlassian could not open stdin pipe: %v", err)
+		return
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		logMcp("FAIL jira-atlassian could not open stdout pipe: %v", err)
+		return
+	}
+	start := time.Now()
+	if err := cmd.Start(); err != nil {
+		logMcp("FAIL could not spawn jira-atlassian (%s): %v", jiraMcpPkg, err)
+		return
+	}
+	defer func() {
+		killProcessGroup(cmd)
+		_ = cmd.Wait()
+	}()
+
+	ready := make(chan string, 1)
+	go func() {
+		// One JSON-RPC response per line; the first line IS the readiness signal.
+		if line, err := bufio.NewReader(stdout).ReadString('\n'); err == nil {
+			ready <- line
+		}
+		close(ready)
+	}()
+	died := make(chan error, 1)
+	go func() { died <- cmd.Wait() }()
+
+	// A real client's first message. Without it the server sits idle and we would be
+	// timing nothing.
+	if _, err := io.WriteString(stdin, jiraInitializeRequest); err != nil {
+		logMcp("FAIL jira-atlassian could not write initialize: %v", err)
+		return
+	}
+
+	select {
+	case line, ok := <-ready:
+		took := time.Since(start).Round(time.Second)
+		if !ok {
+			logMcp("FAIL jira-atlassian closed stdout after %s without replying", took)
+			break
+		}
+		if !strings.Contains(line, `"result"`) {
+			logMcp("FAIL jira-atlassian rejected initialize after %s: %s", took, firstLines(line, 2))
+			break
+		}
+		// Ready, but HOW ready matters: claude gives every server mcpStartupTimeout and
+		// no more. Warn while it still works, so the log names the cause BEFORE the run
+		// where it loses the race — a cold cache is exactly when it will.
+		if took > mcpStartupTimeout/2 {
+			logMcp("warn jira-atlassian took %s to answer initialize (budget %s)", took, mcpStartupTimeout)
+			logMcp("  a cold `uvx %s` installs its deps first; warm it with `uvx %s --help`", jiraMcpPkg, jiraMcpPkg)
+		} else {
+			logMcp("ok jira-atlassian ready in %s (budget %s)", took, mcpStartupTimeout)
+		}
+	case err := <-died:
+		// Credentials and package problems land here, and the stderr is the whole
+		// diagnosis — it is otherwise unrecoverable.
+		logMcp("FAIL jira-atlassian exited after %s: %v", time.Since(start).Round(time.Second), err)
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			logMcp("  output: %s", firstLines(s, 8))
+		}
+	case <-time.After(mcpStartupTimeout):
+		logMcp("FAIL jira-atlassian did not answer initialize within %s", mcpStartupTimeout)
+		logMcp("  claude will drop it; the session gets NO mcp__jira-atlassian__* tools.")
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			logMcp("  output: %s", firstLines(s, 8))
+		}
+	}
+}
+
+// jiraInitializeRequest is the MCP handshake the probe sends to time readiness. The
+// server does not speak until spoken to, so this is what turns "process is alive" into
+// "server can actually serve tools".
+const jiraInitializeRequest = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":` +
+	`{"protocolVersion":"2024-11-05","capabilities":{},` +
+	`"clientInfo":{"name":"qar-probe","version":"1"}}}` + "\n"
 
 // killProcessGroup kills a Setpgid'd command's whole process tree. Falls back to the
 // direct process if the pgid can't be resolved (the process already exited).
@@ -306,6 +447,17 @@ func killProcessGroup(cmd *exec.Cmd) {
 // startup. Long enough to cover a cold `npx` package fetch, short enough that it does
 // not noticeably delay the session (it runs concurrently with claude spawning anyway).
 const mcpProbeWait = 8 * time.Second
+
+// mcpStartupTimeout is the per-server startup budget handed to `claude` via MCP_TIMEOUT
+// (see withGuiPath), and the deadline probeJiraServer measures against so the two agree.
+//
+// claude's own default is 30s, which `uvx mcp-atlassian` loses on a cold cache: it
+// builds an ephemeral venv and installs ~100 packages before the server answers, timed
+// at 29s cold against 0s warm. A budget that close to the measured cost is a coin flip,
+// and losing it is silent — the session simply has no Jira tools. 60s clears the
+// measured cold start with room for a slower machine, without waiting so long that a
+// genuinely broken server delays the session unreasonably.
+const mcpStartupTimeout = 60 * time.Second
 
 // probeCdp checks the session browser's CDP endpoint is answering, so the log can tell
 // a dead MCP server apart from a dead browser — the report that motivated this logging
@@ -377,14 +529,8 @@ func writeValidationMcpConfig(cdpPort int, jira JiraCfg) (string, error) {
 	if strings.TrimSpace(jira.Token) != "" {
 		servers["jira-atlassian"] = map[string]any{
 			"command": "uvx",
-			"args":    []string{"mcp-atlassian"},
-			"env": map[string]string{
-				"JIRA_URL":       jira.URL,
-				"JIRA_USERNAME":  jira.Username,
-				"JIRA_API_TOKEN": jira.Token,
-				"ENABLED_TOOLS": "jira_get_issue,jira_search,jira_get_project_issues," +
-					"jira_add_comment,jira_update_issue,jira_transition_issue,jira_get_transitions",
-			},
+			"args":    []string{jiraMcpPkg},
+			"env":     jiraMcpEnv(jira),
 		}
 	}
 	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
@@ -400,6 +546,21 @@ func writeValidationMcpConfig(cdpPort int, jira JiraCfg) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// jiraMcpEnv is the environment the jira-atlassian MCP server runs with: the site,
+// credentials, and the ENABLED_TOOLS scoping to the read + comment + transition tools
+// the qa-validate skill uses. Shared by the session config and the probe so the probe
+// exercises the real credentials — an auth failure and a slow cold start both surface
+// as "no mcp__jira-atlassian__* tools", and only the probe can tell them apart.
+func jiraMcpEnv(jira JiraCfg) map[string]string {
+	return map[string]string{
+		"JIRA_URL":       jira.URL,
+		"JIRA_USERNAME":  jira.Username,
+		"JIRA_API_TOKEN": jira.Token,
+		"ENABLED_TOOLS": "jira_get_issue,jira_search,jira_get_project_issues," +
+			"jira_add_comment,jira_update_issue,jira_transition_issue,jira_get_transitions",
+	}
 }
 
 // devSourceRepo finds the live engine source tree (the dir containing bin/qar.ts)
