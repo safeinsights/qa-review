@@ -19,6 +19,9 @@ import type { RunContext, Suite } from './types'
 //                is a SINGLETON per user. Two suites writing the same profile — that one
 //                restoring what it finds, this one converging on its own values — is a
 //                cross-suite flake waiting to happen, so that surface stays its owner's.
+//   session    — the inactivity WARNING toast, reached by faking the page clock rather
+//                than idling for eight hours. Its partner 'Session Expired' toast is
+//                deliberately not asserted; see the step for why.
 //   reviewer   — the shared tray only. There is NO reviewer-specific toast this suite can
 //                trigger deterministically: on that side they are all either error paths
 //                (Failed to update study status, Failed to submit review, decryption
@@ -41,6 +44,15 @@ import type { RunContext, Suite } from './types'
 // named `QA toast probe <tag>`, one draft titled `Toast probe draft <tag>` (registered with
 // ctx.trackStudy on that failure path only, so teardown cleanup catches it).
 
+// Mirrors INACTIVITY_TIMEOUT_MS / WARNING_THRESHOLD_MS in the app's src/lib/types.ts:
+// eight hours idle signs you out, with a warning over the last ten minutes.
+const INACTIVITY_TIMEOUT_MS = 8 * 60 * 60 * 1000
+// How far off the timeout the faked clock parks, in both directions. Five minutes sits
+// well inside the app's ten-minute warning window and well past the timeout on the other
+// side, so neither edge is close enough for a stale lastActiveAt to land the app in the
+// branch this step is not asserting.
+const EXPIRY_OFFSET_MS = 5 * 60 * 1000
+
 const ADMIN_ORG = 'openstax' // the org the shared admin account administers
 // ?audience=researcher pins the personal dashboard's tab, so the draft row is on screen
 // regardless of which tab the signed-in account defaults to.
@@ -58,17 +70,22 @@ const DELETE_SOURCE_CONFIRM =
     'Are you sure you want to delete this data source? This cannot be undone.'
 
 type ExpectedToast = {
-    message: string
+    // A RegExp for the session-expiry warning only: its description holds a live minute
+    // count plus the label of the button embedded in it, so there is no exact string.
+    message: string | RegExp
     // Omitted for the message-only toasts — the invitation notices raise no title, and
     // asserting that absence is the point (a title-based selector would miss them).
     title?: string
     // Mantine palette key, read back from the `--notification-color` custom property
     // Mantine writes inline from the `color` prop. This is what makes a toast read as
-    // success or failure, so it is part of the message being verified.
-    color: 'green' | 'teal' | 'red'
+    // success or failure, so it is part of the message being verified. Optional because
+    // the session-expiry notices in activity-context.tsx pass NO `color`, so there is no
+    // custom property on them to match — asserting one would fail on a toast that is
+    // behaving exactly as written.
+    color?: 'green' | 'teal' | 'red'
 }
 
-function toastWith(page: Page, message: string): Locator {
+function toastWith(page: Page, message: string | RegExp): Locator {
     return page.locator(TOAST).filter({ hasText: message })
 }
 
@@ -85,10 +102,12 @@ async function expectToast(page: Page, expected: ExpectedToast): Promise<void> {
     } else {
         await expect(toast.locator(TOAST_TITLE)).toHaveCount(0)
     }
-    await expect(toast).toHaveAttribute(
-        'style',
-        new RegExp(`--notification-color:\\s*var\\(--mantine-color-${expected.color}-filled\\)`)
-    )
+    if (expected.color) {
+        await expect(toast).toHaveAttribute(
+            'style',
+            new RegExp(`--notification-color:\\s*var\\(--mantine-color-${expected.color}-filled\\)`)
+        )
+    }
 }
 
 // Clear the tray between checks so a still-open toast can neither satisfy the next
@@ -329,6 +348,99 @@ export const toastMessagesSuite: Suite = {
                         // cleanup warning people learn to ignore.
                         ctx.trackStudy(studyId)
                         throw error
+                    }
+                }),
+        },
+        {
+            // LAST on purpose, for two reasons: it signs the account out, and Playwright
+            // has no way to uninstall a faked clock (it is installed for the whole browser
+            // CONTEXT). Nothing after it would start from a clean session or a real clock.
+            // Teardown cleanup is unaffected — a green run tracks no ids, so the client
+            // issues no authenticated requests.
+            name: 'Session expiry: inactivity warning toast, then auto-logout',
+            run: ctx =>
+                ctx.step(async () => {
+                    // Signs in itself, like the researcher step, so a retry of this one
+                    // step stands alone.
+                    await ctx.loginAs('admin')
+                    await ctx.page.goto(`${ctx.baseURL}/dashboard`, {
+                        waitUntil: 'domcontentloaded',
+                    })
+                    // The signed-in AppShell mounts BOTH the notification tray and the
+                    // ActivityContext that raises these toasts, so its footer is this
+                    // step's readiness signal — not just "some page rendered".
+                    await ctx.page.locator('.mantine-AppShell-footer').waitFor({ state: 'visible' })
+                    let restoreFailure: Error | undefined
+                    try {
+                        // Park the page's Date five minutes short of the eight-hour
+                        // timeout. setFixedTime, NOT install()/fastForward(): it fakes
+                        // Date alone and leaves every timer running at real speed, so
+                        // ActivityContext's own 10s interval fires by itself and Clerk's
+                        // token refresh keeps working against the real server clock. It
+                        // also survives a mid-step session.touch(), which writes a
+                        // REAL-time lastActiveAt — still ~8h behind the faked now.
+                        await ctx.page.clock.setFixedTime(
+                            Date.now() + INACTIVITY_TIMEOUT_MS - EXPIRY_OFFSET_MS
+                        )
+                        await expectToast(ctx.page, {
+                            title: 'Session Expiration Warning',
+                            // The minute count is matched loosely on purpose: it is
+                            // derived from Clerk's lastActiveAt, which is already seconds
+                            // to minutes old by the time this runs, so pinning the number
+                            // would flake on timing alone.
+                            message: /logged out in \d+ minutes? due to inactivity/,
+                        })
+                        const warning = toastWith(ctx.page, 'Session Expiration Warning')
+                        // The in-toast button is the user's only way out, which is why this
+                        // notice ships with withCloseButton false and autoClose false.
+                        // Both halves of that are part of the message.
+                        await expect(
+                            warning.getByRole('button', { name: 'Stay Signed In' })
+                        ).toBeVisible()
+                        await expect(warning.locator(TOAST_CLOSE)).toHaveCount(0)
+                        // Past the timeout now. Clicking "Stay Signed In" first is NOT
+                        // asserted: session.touch() writes a real-time lastActiveAt, which
+                        // against the faked clock reads as another eight hours idle, so the
+                        // app re-expires on the next tick. That is an artifact of faking
+                        // time, not a defect — testing the recovery path needs a real idle
+                        // session, which no suite can afford.
+                        await ctx.page.clock.setFixedTime(
+                            Date.now() + INACTIVITY_TIMEOUT_MS + EXPIRY_OFFSET_MS
+                        )
+                        // What IS asserted is the consequence: signed out, back on the
+                        // sign-in form. The 'Session Expired' toast is not, and please read
+                        // this before adding it. It is raised at the moment use-sign-out
+                        // router.replace()s to /account/signin, which swaps the signed-in
+                        // AppShell for FocusedLayout. Both mount their OWN <Notifications />
+                        // against the same module-global Mantine store, so the notice
+                        // probably does survive that swap — and "probably" is the whole
+                        // problem: nobody has watched it happen in a real browser. Asserting
+                        // unobserved behaviour across a layout swap plus a soft navigation is
+                        // how a suite acquires a flake. Watch it by hand, then assert what
+                        // you saw.
+                        await ctx.page.getByLabel('Email').waitFor({ state: 'visible' })
+                    } finally {
+                        // Hand back a real, flowing clock. There is no uninstall, so this
+                        // is the closest thing to one; without it a retry — or a jump to
+                        // another step — would run eight hours in the future.
+                        //
+                        // Recorded rather than swallowed: a failed restore is not a local
+                        // problem, it poisons every later step, which then fails for
+                        // reasons that look nothing like the cause. Stashed on ctx.state
+                        // and rethrown below only if the body itself succeeded — throwing
+                        // from `finally` would replace a real assertion failure with this
+                        // one and hide what actually broke.
+                        restoreFailure = await ctx.page.clock
+                            .setSystemTime(new Date())
+                            .then(() => undefined)
+                            .catch((cause: unknown) => cause as Error)
+                    }
+                    if (restoreFailure) {
+                        throw new Error(
+                            `could not restore the page clock (${restoreFailure.message}) — ` +
+                                'every later step would run eight hours in the future',
+                            { cause: restoreFailure }
+                        )
                     }
                 }),
         },

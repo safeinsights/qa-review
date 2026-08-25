@@ -2,6 +2,10 @@ import type { Page } from '@playwright/test'
 import type { Role, StepStatus } from '../engine/types'
 
 export interface RunContext {
+    // The live browser page — guarded, not raw. Read it inside your step body and use
+    // it normally; if the step's deadline fires, every action through this page (and
+    // through any locator reached from it) throws StepAbandonedError instead of
+    // driving a browser the retry has since taken over. Nothing to opt into.
     page: Page
     baseURL: string
     // Unique-per-run suffix for any titles the suite creates (human-readable +
@@ -36,6 +40,11 @@ export interface RunContext {
     // value one step captures (e.g. a created study's id) is stashed here for a
     // later step to read: `ctx.state.studyId = id` … `ctx.state.studyId as string`.
     state: Record<string, unknown>
+    // False while this attempt is the live one; true once its step deadline fired and
+    // the engine moved on. Checking this is OPTIONAL — `page` above already refuses to
+    // act for an abandoned attempt. Use it when a long loop should exit quietly rather
+    // than by throwing StepAbandonedError on its next page action.
+    readonly signal: { readonly aborted: boolean }
 }
 
 // One named step in a suite. The engine loops over `Suite.steps` and calls each

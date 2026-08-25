@@ -112,6 +112,118 @@ function categorize(error: Error): FailureCategory {
     return 'tool-crash'
 }
 
+// A step body has no deadline of its own. Playwright's per-action defaults bound each
+// click and assertion, but a bare `expect(...).toPass()` resolves its timeout to 0 in
+// LIBRARY mode (no test runner, so no expect config to read) and therefore polls
+// forever. A step that can never succeed then hangs the whole run instead of failing:
+// no failure row, no screenshot, run-state.json frozen mid-step, and the browser never
+// held open for a retry. Observed for 8 minutes on an env whose build simply did not
+// have the page the step navigated to.
+//
+// So every ctx.step() gets a wall-clock deadline. Exceeding it fails the step through
+// the ordinary path — screenshot, url, console, retryable hold — with a message naming
+// the limit. The word 'timeout' in that message categorizes it as 'environment', which
+// is how a plain Playwright timeout already reads.
+const DEFAULT_STEP_TIMEOUT_MS = 5 * 60 * 1000
+
+// `QAR_STEP_TIMEOUT_MS` overrides it; 0 disables the deadline (an escape hatch for
+// hand-debugging a parked step). A non-numeric or negative value falls back to the
+// default instead of silently disabling the guard.
+export function resolveStepTimeoutMs(vars: Record<string, string | undefined>): number {
+    const raw = vars.QAR_STEP_TIMEOUT_MS
+    if (raw === undefined || raw.trim() === '') return DEFAULT_STEP_TIMEOUT_MS
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STEP_TIMEOUT_MS
+    return Math.floor(parsed)
+}
+
+// Thrown when an abandoned attempt tries to keep driving the browser. It is not a
+// suite failure: the step it belongs to was already recorded failed when its deadline
+// fired, and this rejection only unwinds a body that no longer has a reader.
+export class StepAbandonedError extends Error {
+    constructor() {
+        super(
+            'step deadline already fired — this attempt was abandoned and must stop driving the page'
+        )
+        this.name = 'StepAbandonedError'
+    }
+}
+
+// Wrap `page` so every action it (or anything reached through it) performs first
+// checks that the caller is still the live attempt.
+//
+// Playwright has no cancellation, so a timed-out body keeps running. Asking each
+// suite to poll `ctx.signal` by hand is the kind of contract that holds until the
+// first helper forgets — and from inside a body a zombie is indistinguishable from
+// normal execution. Guarding at the object boundary makes it automatic instead:
+// nothing downstream can touch the browser without passing this check.
+//
+// Locators, frames, and the like are wrapped on the way out too, since that is where
+// most interaction actually happens (`page.getByRole(...).click()` never calls a
+// method on `page` itself).
+function guardPage<T extends object>(
+    target: T,
+    generationAtEntry: () => number,
+    currentGeneration: () => number
+): T {
+    // Read-only accessors stay unguarded: a zombie reading page.url() is harmless,
+    // and throwing there would break the engine's own currentUrl()/screenshot paths,
+    // which legitimately run after a deadline fires to record the failure.
+    const readOnly = new Set(['url', 'isClosed', 'context', 'video', 'coverage'])
+    return new Proxy(target, {
+        get(obj, prop, receiver) {
+            const value = Reflect.get(obj, prop, receiver)
+            if (typeof value !== 'function' || typeof prop !== 'string' || readOnly.has(prop)) {
+                return value
+            }
+            return (...args: unknown[]) => {
+                if (currentGeneration() !== generationAtEntry()) throw new StepAbandonedError()
+                const out = (value as (...a: unknown[]) => unknown).apply(obj, args)
+                // Locator/Frame/ElementHandle come back here; wrap them so the check
+                // rides along instead of stopping at the first hop.
+                if (out && typeof out === 'object' && !(out instanceof Promise)) {
+                    return guardPage(out as object, generationAtEntry, currentGeneration)
+                }
+                return out
+            }
+        },
+    })
+}
+
+export async function withStepDeadline<T>(
+    name: string,
+    timeoutMs: number,
+    action: () => Promise<T>,
+    onTimeout?: () => void
+): Promise<T> {
+    if (timeoutMs <= 0) return action()
+    const pending = action()
+    // Playwright has no cancellation, so an abandoned body keeps polling until
+    // teardown. Swallow its eventual rejection here: without this it surfaces as an
+    // unhandled rejection long after the step was already recorded failed.
+    pending.catch(() => {})
+    const seconds = Math.round(timeoutMs / 1000)
+    const message =
+        `Step "${name}" hit the ${seconds}s step timeout with no result — it is stuck, ` +
+        'not slow (raise or disable it with QAR_STEP_TIMEOUT_MS)'
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+        return await Promise.race([
+            pending,
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    // Signal the abandonment BEFORE rejecting, so by the time the retry
+                    // loop regains control the zombie body is already marked stale.
+                    onTimeout?.()
+                    reject(new Error(message))
+                }, timeoutMs)
+            }),
+        ])
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 // Validate a latched jump target and do the recorder bookkeeping so the run can
 // continue from it. Returns the target index, or undefined when there's nothing to
 // do (no request, already there, or out of range).
@@ -202,6 +314,7 @@ export async function runEngine(
     const mode = req.mode ?? 'suite'
     const env = req.envConfig ?? resolveEnv(req.env, deps.vars)
     const suite = suiteOverride ?? (await getSuite(req.suite))
+    const stepTimeoutMs = resolveStepTimeoutMs(deps.vars)
 
     // Collected step events for a future live-streaming consumer (e.g. the CLI/GUI
     // progress view). Not read here; recorder.finish() is the source of truth for steps.
@@ -329,8 +442,44 @@ export async function runEngine(
         // call ctx.step(action) WITHOUT repeating the step's name. Set by the step
         // loop before each step.run(ctx); the ctx.step closure reads the live value.
         let currentStepName = ''
+        // A timed-out step body cannot be cancelled (Playwright has no cancellation),
+        // so it keeps driving `handle.page` after the deadline fires. The retry re-runs
+        // step.run() against that SAME page, meaning a zombie attempt's clicks and
+        // navigations can land underneath the live one. Each attempt therefore carries a
+        // generation; `abandonAttempt` bumps it, and `ctx.signal` reports whether the
+        // caller is still the live attempt.
+        let attemptGeneration = 0
+        const abandonAttempt = () => {
+            attemptGeneration++
+        }
+        const generationAtCall = () => attemptGeneration
+        // The page each body sees. `guardedPageFor(gen)` binds the generation the body
+        // was entered at, so the guard compares that fixed value against the live
+        // counter — a body started before a deadline fired is rejected once the
+        // counter moves past it, while the retry (entered at the new generation) runs
+        // freely.
+        const guardedPageFor = (enteredAt: number) =>
+            guardPage(
+                page,
+                () => enteredAt,
+                () => attemptGeneration
+            )
         const ctx: RunContext = {
-            page: handle.page,
+            // Guarded rather than raw. Relying on every body to check ctx.signal by hand
+            // would be a contract that rots on the first helper that forgets — and the
+            // bodies are exactly the code least likely to remember, since a zombie is
+            // invisible from inside. Guarding the page means one seam covers every
+            // suite and every flow helper, including ones not written yet.
+            //
+            // A getter, so the generation is bound WHEN THE BODY READS ctx.page — which
+            // is inside the body, before its deadline can have fired. A body that read
+            // the page, then timed out, keeps its stale binding and starts throwing;
+            // the retry reads ctx.page afresh and gets a current one. Helpers that
+            // captured the page as an argument are covered too, since the object they
+            // hold carries the binding with it.
+            get page() {
+                return guardedPageFor(attemptGeneration)
+            },
             baseURL: env.baseURL,
             tag,
             // Getter so it reflects the LATEST loginAs() switch, not the role at
@@ -338,6 +487,17 @@ export async function runEngine(
             get account() {
                 const a = env.accounts[currentRole]
                 return { email: a.email, password: a.password, mfaCode: a.mfaCode }
+            },
+            // Live-attempt check for suite bodies. Captured at property-read time, so a
+            // body that grabbed `ctx.signal` before its deadline fired still sees
+            // `aborted` flip to true once the retry has moved on.
+            get signal(): { readonly aborted: boolean } {
+                const mine = generationAtCall()
+                return {
+                    get aborted() {
+                        return attemptGeneration !== mine
+                    },
+                }
             },
             async step<T>(a: string | (() => Promise<T>), b?: () => Promise<T>): Promise<T> {
                 // Overloaded: step(action) records under the enclosing step's name;
@@ -347,7 +507,7 @@ export async function runEngine(
                     typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
                 try {
-                    const out = await action()
+                    const out = await withStepDeadline(name, stepTimeoutMs, action, abandonAttempt)
                     const screenshot = await captureScreenshot(name)
                     recorder.step(name, 'passed', {
                         screenshot,
