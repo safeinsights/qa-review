@@ -74,11 +74,18 @@ export async function inviteUser(
 // Handles: invitation landing -> create account form -> mandatory authenticator-app
 // MFA (TOTP) -> recovery codes -> security key -> dashboard. The new user must be
 // UNAUTHENTICATED, so clear any existing session.
+// `baseURL` is the APP origin, threaded in the way every other flow helper takes it
+// rather than read back off `page.url()`. The invitation URL is scraped from an
+// email, so the origin the browser happens to be sitting on is not guaranteed to be
+// ours — a Clerk-hosted landing would turn these navigations into confusing 404s
+// instead of key errors.
 export async function completeSignup(
     page: Page,
-    invitationUrl: string
+    invitationUrl: string,
+    baseURL: string
 ): Promise<{ userId: string; mfaSecret: string }> {
     const password = SIGNUP_PASSWORD
+    const origin = new URL(baseURL).origin
 
     // Fresh, unauthenticated slate (the admin session must not carry over).
     await page.context().clearCookies()
@@ -153,7 +160,7 @@ export async function completeSignup(
     //    altogether, so signup completed KEYLESS while reporting success. Navigating
     //    is safe here because this helper only ever runs against a brand-new account
     //    (an account that already holds a key would be rotating it instead).
-    await page.goto(`${new URL(page.url()).origin}${ACCOUNT_KEYS_PATH}`, {
+    await page.goto(`${origin}${ACCOUNT_KEYS_PATH}`, {
         waitUntil: 'domcontentloaded',
     })
 
@@ -205,15 +212,18 @@ export async function completeSignup(
     //    then hand out an account that cannot decrypt anything.
     //    /user-key is the cheap discriminator: it renders the existing-key view for
     //    a keyed account and redirects to ACCOUNT_KEYS_PATH for a keyless one.
-    const origin = new URL(page.url()).origin
     await page.goto(`${origin}${USER_KEY_PATH}`, { waitUntil: 'domcontentloaded' })
     await expect(
         page.getByRole('heading', { name: /existing security key/i }),
         'signup finished without storing a security key (the key-page confirm did not take)'
     ).toBeVisible()
 
-    // Callers document this helper as ending on the new user's dashboard.
+    // Callers document this helper as ending on the new user's dashboard. Wait for a
+    // rendered control rather than trusting domcontentloaded: the caller's next action
+    // runs against this page, and an unhydrated dashboard would swallow its first
+    // click (CLAUDE.md — wait on page elements, not URLs).
     await page.goto(`${origin}/dashboard`, { waitUntil: 'domcontentloaded' })
+    await page.locator('text=dashboard').first().waitFor({ state: 'visible' })
 
     return { userId, mfaSecret }
 }
@@ -261,7 +271,7 @@ export async function createUserViaInvite(
     const email = uniqueQaEmail()
     const api = new QaApiClient(env.baseURL, token)
     const invite = await api.createInvite({ email, orgSlug: ORG_FOR_ROLE[role] })
-    const { userId, mfaSecret } = await completeSignup(page, invite.inviteUrl)
+    const { userId, mfaSecret } = await completeSignup(page, invite.inviteUrl, env.baseURL)
     return { userId, email, mfaSecret }
 }
 

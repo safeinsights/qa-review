@@ -65,7 +65,7 @@ export const signupSuite: Suite = {
                             INVITE_EMAIL_TIMEOUT_MS
                         )
                         const url = extractSignupUrl(message)
-                        const { userId } = await completeSignup(ctx.page, url)
+                        const { userId } = await completeSignup(ctx.page, url, ctx.baseURL)
                         ctx.trackUser(userId)
                     })
                 }
