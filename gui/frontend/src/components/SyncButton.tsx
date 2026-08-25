@@ -32,7 +32,14 @@ export function SyncButton({
         try {
             setBehind(await commitsBehind())
         } catch {
+            // Say so rather than swallowing it. 0 renders identically to a healthy
+            // clone, so a silent catch hides the very staleness the banner exists to
+            // surface. The Go side never returns an error — it answers 0 for offline,
+            // no upstream, or unparseable output — so anything landing here is a
+            // binding failure, and the user is better off being told the check did not
+            // run than being shown a reassuring zero.
             setBehind(0)
+            setStatus(s => `${s} (could not check how far behind the clone is)`)
         }
     }
 

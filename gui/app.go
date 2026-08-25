@@ -1514,7 +1514,15 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 func (a *App) CommitsBehind(cwd string) int {
 	dir := repoDir()
 	// Compare against freshly-fetched refs; a stale origin/* would under-report.
-	if _, err := a.git(dir, "fetch", "--quiet"); err != nil {
+	//
+	// Bounded, and with the terminal prompt disabled. The err != nil guard below
+	// handles a fetch that FAILS, but the case this function exists to survive —
+	// offline — is a fetch that HANGS: a dropped VPN, a captive portal, or a DNS
+	// blackhole leaves plain `git fetch` blocking indefinitely, and this runs on the
+	// UI path. Without both, "must never block the sync path it annotates" is a
+	// promise the code does not keep. GIT_TERMINAL_PROMPT=0 stops a credential
+	// prompt turning into the same silent wedge.
+	if _, err := a.gitWithTimeout(dir, 20*time.Second, "fetch", "--quiet"); err != nil {
 		return 0
 	}
 	upstream, err := a.git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
@@ -1530,6 +1538,25 @@ func (a *App) CommitsBehind(cwd string) int {
 		return 0
 	}
 	return n
+}
+
+// gitWithTimeout is git() with a hard ceiling, for the network-touching commands.
+// A local git command cannot hang, but `fetch` against an unreachable remote can
+// block until the TCP stack gives up — far longer than a UI path can wait.
+func (a *App) gitWithTimeout(dir string, limit time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, guiResolve("git"), args...)
+	cmd.Dir = dir
+	// Never let git stop for credentials: an interactive prompt with no terminal
+	// attached is indistinguishable from a hang.
+	cmd.Env = append(withGuiPath(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		logDiag("git", "FAIL git %s (dir=%s): %v — %s",
+			strings.Join(args, " "), dir, err, firstLines(string(out), 3))
+	}
+	return string(out), err
 }
 
 func (a *App) git(dir string, args ...string) (string, error) {
