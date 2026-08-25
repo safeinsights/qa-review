@@ -3,6 +3,7 @@ import { useViewportSize } from '@mantine/hooks'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
     checkPrCI,
+    ENVS,
     onSessionEnded,
     onSessionLog,
     onSessionReady,
@@ -23,8 +24,6 @@ import { ciBlocks, isPrNumber, parseJiraCard, parsePrNumber } from './validation
 // This tab owns "validation" sessions; a session-ready of any other kind means the
 // other tab (or the run companion) holds the single shared PTY + browser.
 const MY_KIND: SessionKind = 'validation'
-
-const ENVS = ['qa', 'staging', 'production']
 
 // Debounce for the CI probe: each one shells out to `gh`, so we wait for the PR
 // input to settle rather than firing per keystroke.

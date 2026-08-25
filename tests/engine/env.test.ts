@@ -183,6 +183,55 @@ describe('resolveEnv MFA seed vs fixed code', () => {
     })
 })
 
+describe('demo environment', () => {
+    const DEMO_VARS = {
+        DEMO_BASE_URL: 'https://app.demo.safeinsights.org',
+        ADMIN_EMAIL_DEMO: 'a@demo.example.com',
+        ADMIN_PASSWORD_DEMO: 'pw-a-demo',
+        ADMIN_MFA_CODE_DEMO: '444444',
+        RESEARCHER_EMAIL_DEMO: 'r@demo.example.com',
+        RESEARCHER_PASSWORD_DEMO: 'pw-r-demo',
+        RESEARCHER_MFA_CODE_DEMO: '555555',
+        REVIEWER_EMAIL_DEMO: 'v@demo.example.com',
+        REVIEWER_PASSWORD_DEMO: 'pw-v-demo',
+        REVIEWER_MFA_CODE_DEMO: '666666',
+    }
+
+    it('resolves from its own per-env credentials', () => {
+        // QA values are present throughout to prove demo reads DEMO_* and never
+        // silently falls back to them.
+        const cfg = resolveEnv('demo', { ...ENV_VARS, ...DEMO_VARS })
+        expect(cfg.name).toBe('demo')
+        expect(cfg.baseURL).toBe('https://app.demo.safeinsights.org')
+        expect(cfg.accounts.admin).toEqual({
+            email: 'a@demo.example.com',
+            password: 'pw-a-demo',
+            mfaCode: '444444',
+        })
+        expect(cfg.accounts.reviewer.email).toBe('v@demo.example.com')
+    })
+
+    it('uses its OWN results private key, not QA fallback', () => {
+        // The regression this guards: privateKeyEnvFor used to hardcode
+        // `staging || production`, so any newly added env silently decrypted with
+        // QA's key — surfacing much later as an opaque wrong-key failure.
+        const demoPem = '-----BEGIN PRIVATE KEY-----\ndemo\n'
+        const cfg = resolveEnv('demo', {
+            ...ENV_VARS,
+            ...DEMO_VARS,
+            REVIEWER_RESULTS_PRIVATE_KEY_DEMO: demoPem,
+            REVIEWER_RESULTS_PRIVATE_KEY_QA: '-----BEGIN PRIVATE KEY-----\nqa\n',
+        })
+        expect(cfg.accounts.reviewer.privateKey).toBe(demoPem)
+    })
+
+    it('does not fall back to QA credentials when its own are missing', () => {
+        // Demo is a peer of staging/production, so an unpopulated secret must fail
+        // loudly rather than run against the wrong tenant's account.
+        expect(() => resolveEnv('demo', ENV_VARS)).toThrow()
+    })
+})
+
 describe('resolvePrEnv', () => {
     it('derives the PR preview base URL from the PR number and reuses QA creds', () => {
         const cfg = resolvePrEnv(839, ENV_VARS)

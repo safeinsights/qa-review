@@ -76,7 +76,8 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   there is NO compile step and no `suites-compiled/` dir. **Suites must use RELATIVE
   imports** (`./types`, `../engine/paths`), not the `@/` alias — the alias is not
   resolved at suite-load time.
-- `config/environments.ts` — declares STABLE envs (`qa`, `staging`) and derives PR
+- `config/environments.ts` — declares STABLE envs (`qa`, `staging`, `production`,
+  `demo`) and derives PR
   preview URLs. **A PR run is identical to a QA run except for the base URL** —
   same accounts, same MFA. There is NO code that gates a suite to PR-only or
   QA-only. If a suite "runs on a PR but not on QA," the cause is environmental
@@ -113,6 +114,24 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/keyring.ts` / `src/engine/identity.ts` — the multi-user encryption
   core: the committed recipient list (`config/keyring.json`) and the local age
   identity (`config/age-identity.txt`, gitignored). See "Settings" below.
+
+### Adding a stable environment
+
+The env list lives in four places that must agree, none of which the compiler
+cross-checks:
+
+1. `config/environments.ts` — add to `PRIVATE_KEY_ENVS` **and** `ENVIRONMENTS`.
+   `privateKeyEnvFor` derives from the former, so an env missing there silently
+   decrypts with QA's key and fails much later as an opaque wrong-key error.
+2. `config/settings.json` — the `<ENV>_BASE_URL` value.
+3. `gui/settings.go` — `envList`, so the Settings panel renders that env's fields.
+4. `gui/frontend/src/lib/ipc.ts` — `ENVS`, the single list the three pickers
+   (RunControls, ValidationTab, ExploratoryTab) import.
+
+Then populate the per-env secrets (`<ROLE>_EMAIL_<ENV>`, `_PASSWORD_`, `_MFA_CODE_`
+or `_MFA_SEED_`, and `REVIEWER_RESULTS_PRIVATE_KEY_<ENV>` for results decryption).
+A stable env does NOT fall back to QA's credentials — that is deliberate, so an
+unpopulated secret fails loudly instead of running against the wrong tenant.
 
 ## Settings / configuration
 

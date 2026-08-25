@@ -36,7 +36,7 @@ func isEncryptedValue(v string) bool {
 
 // envList is the set of stable envs that carry per-env account secrets. Kept in
 // sync with PRIVATE_KEY_ENVS in config/environments.ts.
-var envList = []string{"qa", "staging", "production"}
+var envList = []string{"qa", "staging", "production", "demo"}
 
 // accountGroups maps each account's display group to its var prefix.
 var accountGroups = []struct{ group, prefix string }{
