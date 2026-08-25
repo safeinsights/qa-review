@@ -204,11 +204,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   AFTER the "is a PR already open?" lookup, so a healthy already-open PR still wins.
 - `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
-- `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
-  recipients (the GUI Settings "save secret" path).
+- `pnpm qar set-secret --name <VAR> --value <v>` — encrypts one secret to all
+  recipients (the GUI Settings "save secret" path). **`--name`, not `--key`**, for
+  the same reason as `get-secret` below. `--key` used to be the documented flag and
+  was silently broken: it encrypted the value under a var literally named "true" and
+  printed `Encrypted true to N recipient(s)`. It is now rejected with that
+  explanation rather than aliased — the shared `BOOLEANS` list makes it impossible
+  for `--key` to carry a name through the parser at all.
 - `pnpm qar get-secret --name <VAR> [--force]` — the READ half: prints one decrypted
   value to stdout. The var is named with **`--name`, not `--key`** — `BOOLEANS` in
-  `bin/qar.ts` is ONE list shared by every subcommand and `key` is already in it
+  `src/cli/args.ts` is ONE list shared by every subcommand and `key` is already in it
   (`fix-account`'s valueless switch), so `--key FOO` would parse to `true`, drop
   `FOO`, and look up a var literally named "true" — a silent wrong answer, not an
   error. Writes NO trailing newline, so a PEM stays byte-exact, and refuses to print

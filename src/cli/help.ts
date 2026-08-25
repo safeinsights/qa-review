@@ -59,7 +59,7 @@ export const COMMANDS: CommandHelp[] = [
     },
     {
         name: 'set-secret',
-        usage: 'qar set-secret --key <VAR> --value <value>',
+        usage: 'qar set-secret --name <VAR> --value <value>',
         summary: 'Encrypt one secret to every keyring recipient.',
     },
     {

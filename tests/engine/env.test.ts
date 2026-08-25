@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveEnv, resolvePrEnv } from '@/engine/env'
+import { resolveEnv, resolveEnvForRole, resolvePrEnv, resolvePrEnvForRole } from '@/engine/env'
 import { totp } from '@/engine/totp'
 
 // All account fields are per-env (email, password, MFA code/seed). qa is the
@@ -260,5 +260,55 @@ describe('resolvePrEnv', () => {
         const qaPem = '-----BEGIN PRIVATE KEY-----\nqa\n'
         const withKey = { ...ENV_VARS, REVIEWER_RESULTS_PRIVATE_KEY_QA: qaPem }
         expect(resolvePrEnv(839, withKey).accounts.reviewer.privateKey).toBe(qaPem)
+    })
+})
+
+// A half-configured env is the normal state while a new one is being set up, one
+// role at a time. resolveEnv must still reject it (a run needs every role), but the
+// single-role commands must not.
+describe('resolveEnvForRole', () => {
+    // Only the reviewer is configured on demo — exactly the state that made
+    // `qar totp --role reviewer --env demo` fail on ADMIN_MFA_CODE_DEMO.
+    const REVIEWER_ONLY = {
+        DEMO_BASE_URL: 'https://demo.example.com',
+        REVIEWER_EMAIL_DEMO: 'v@example.com',
+        REVIEWER_PASSWORD_DEMO: 'pw-v',
+        REVIEWER_MFA_CODE_DEMO: '333333',
+    }
+
+    it('resolves the requested role without requiring the others', () => {
+        const r = resolveEnvForRole('demo', 'reviewer', REVIEWER_ONLY)
+        expect(r.name).toBe('demo')
+        expect(r.baseURL).toBe('https://demo.example.com')
+        expect(r.account.email).toBe('v@example.com')
+        expect(r.account.mfaCode).toBe('333333')
+    })
+
+    it('is what resolveEnv would reject on the same vars', () => {
+        expect(() => resolveEnv('demo', REVIEWER_ONLY)).toThrow(/ADMIN_MFA_CODE_DEMO/)
+    })
+
+    it('still throws for the role actually asked about', () => {
+        expect(() => resolveEnvForRole('demo', 'admin', REVIEWER_ONLY)).toThrow(
+            /ADMIN_MFA_CODE_DEMO/
+        )
+    })
+
+    it('computes a TOTP code when the role has a seed', () => {
+        const SEED = 'JBSWY3DPEHPK3PXP'
+        const withSeed = { ...REVIEWER_ONLY, REVIEWER_MFA_SEED_DEMO: SEED }
+        // The seed wins over the fixed code, same precedence as resolveEnv.
+        expect(resolveEnvForRole('demo', 'reviewer', withSeed).account.mfaCode).toBe(totp(SEED))
+    })
+
+    it('rejects an unknown environment', () => {
+        expect(() => resolveEnvForRole('nope', 'reviewer', REVIEWER_ONLY)).toThrow(
+            /Unknown environment/
+        )
+    })
+
+    it('resolves one role for a PR preview off the QA vars', () => {
+        expect(resolvePrEnvForRole(839, 'reviewer', ENV_VARS).account.email).toBe('v@example.com')
+        expect(() => resolvePrEnvForRole(0, 'reviewer', ENV_VARS)).toThrow(/invalid pr number/i)
     })
 })

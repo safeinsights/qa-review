@@ -38,6 +38,9 @@ export async function fixAccountCommand(opts: Record<string, string>, vars: Vars
     if (!ROLES.includes(role)) {
         throw new Error(`--role must be one of ${ROLES.join(', ')} (got "${opts.role ?? ''}")`)
     }
+    // Resolves ALL roles, deliberately: besides the role being fixed, this command
+    // signs in as `admin` further down to get the Clerk session JWT the QA API
+    // authorizes with, so an unconfigured admin really is a blocker here.
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
     const account = env.accounts[role]
 

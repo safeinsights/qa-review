@@ -1,4 +1,4 @@
-import { parseArgs } from '@/cli/args'
+import { BOOLEANS, parseArgs } from '@/cli/args'
 import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
@@ -27,25 +27,6 @@ import { totpCommand } from '@/cli/commands/totp'
 import { verdictPostedCommand } from '@/cli/commands/verdict'
 import { commandHelp, topLevelHelp, unknownCommandMessage } from '@/cli/help'
 import { loadSettings } from '@/engine/settings'
-
-// `help` MUST be a boolean: otherwise `qar session --help` parses `--help` as a
-// key expecting a value, silently launches a session, and reports nothing.
-const BOOLEANS = [
-    'json',
-    'headed',
-    'screencast',
-    'help',
-    // invite / fix-account flags: valueless switches, so the parser must not swallow
-    // the following argument as their value.
-    'admin',
-    'password',
-    'key',
-    'yes',
-    // get-secret: valueless switch that permits printing a secret to a terminal.
-    'force',
-    // session-create-user: opt in to printing the new account's TOTP secret.
-    'print-mfa-secret',
-]
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)
