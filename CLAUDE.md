@@ -408,7 +408,7 @@ runner there is no config to read, so it polls with NO deadline. Note that
 which `toPass` never consults.
 
 So `src/engine/run.ts` gives every **`ctx.step()`** a wall-clock deadline
-(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Two details are
+(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Three details are
 deliberate:
 
 - It wraps the action INSIDE `ctx.step()`, not `step.run(ctx)`. `ctx.step`'s own
@@ -418,9 +418,21 @@ deliberate:
 - The abandoned body gets a `.catch()`. Playwright has no cancellation, so it
   keeps polling until teardown and would otherwise land as an **unhandled
   rejection** after the step was already recorded failed.
+- Because that body is not cancelled, it keeps driving the SAME `page` the retry
+  re-runs against, so a zombie attempt's clicks can land underneath the live one.
+  Each attempt carries a generation, and `ctx.signal.aborted` flips to `true` once
+  the engine has moved on. **A suite body that loops, polls, or retries should
+  check it and bail** — otherwise two attempts fight over the browser and the
+  retry fails for reasons that have nothing to do with the app.
 
 The message contains the word `timeout`, so `categorize()` files it as
 `environment`, matching how a plain Playwright timeout already reads.
+
+**This bounds `ctx.step()` bodies and nothing else.** `openBrowser` and
+`deps.login` run OUTSIDE the step loop and remain unbounded, so a Clerk sign-in
+that hangs still reproduces the original symptom — no failure row, no screenshot,
+the run frozen. Those paths need their own deadline; this section does not cover
+them.
 
 **`QAR_STEP_TIMEOUT_MS`** overrides the 5-minute default; `0` disables the
 deadline (an escape hatch for hand-debugging a parked step). A non-numeric or

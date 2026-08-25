@@ -422,7 +422,17 @@ export const toastMessagesSuite: Suite = {
                         // Hand back a real, flowing clock. There is no uninstall, so this
                         // is the closest thing to one; without it a retry — or a jump to
                         // another step — would run eight hours in the future.
-                        await ctx.page.clock.setSystemTime(new Date()).catch(() => {})
+                        //
+                        // Warn rather than swallow: if the restore fails, every later
+                        // step silently runs against a skewed clock and fails for reasons
+                        // that look nothing like the cause. The console buffer is drained
+                        // into the step record, so this lands in the run artifacts.
+                        await ctx.page.clock.setSystemTime(new Date()).catch(cause => {
+                            console.warn(
+                                `[toast-messages] could not restore the page clock: ${(cause as Error).message} — ` +
+                                    'later steps in this run are executing eight hours in the future'
+                            )
+                        })
                     }
                 }),
         },

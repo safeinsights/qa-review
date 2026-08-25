@@ -140,7 +140,8 @@ export function resolveStepTimeoutMs(vars: Record<string, string | undefined>): 
 export async function withStepDeadline<T>(
     name: string,
     timeoutMs: number,
-    action: () => Promise<T>
+    action: () => Promise<T>,
+    onTimeout?: () => void
 ): Promise<T> {
     if (timeoutMs <= 0) return action()
     const pending = action()
@@ -157,7 +158,12 @@ export async function withStepDeadline<T>(
         return await Promise.race([
             pending,
             new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+                timer = setTimeout(() => {
+                    // Signal the abandonment BEFORE rejecting, so by the time the retry
+                    // loop regains control the zombie body is already marked stale.
+                    onTimeout?.()
+                    reject(new Error(message))
+                }, timeoutMs)
             }),
         ])
     } finally {
@@ -383,6 +389,18 @@ export async function runEngine(
         // call ctx.step(action) WITHOUT repeating the step's name. Set by the step
         // loop before each step.run(ctx); the ctx.step closure reads the live value.
         let currentStepName = ''
+        // A timed-out step body cannot be cancelled (Playwright has no cancellation),
+        // so it keeps driving `handle.page` after the deadline fires. The retry re-runs
+        // step.run() against that SAME page, meaning a zombie attempt's clicks and
+        // navigations can land underneath the live one. Each attempt therefore carries a
+        // generation; `abandonAttempt` bumps it, and `ctx.signal` reports whether the
+        // caller is still the live attempt. Suite bodies that loop or poll should check
+        // `ctx.signal.aborted` and bail, so an abandoned body stops touching the page.
+        let attemptGeneration = 0
+        const abandonAttempt = () => {
+            attemptGeneration++
+        }
+        const generationAtCall = () => attemptGeneration
         const ctx: RunContext = {
             page: handle.page,
             baseURL: env.baseURL,
@@ -393,6 +411,17 @@ export async function runEngine(
                 const a = env.accounts[currentRole]
                 return { email: a.email, password: a.password, mfaCode: a.mfaCode }
             },
+            // Live-attempt check for suite bodies. Captured at property-read time, so a
+            // body that grabbed `ctx.signal` before its deadline fired still sees
+            // `aborted` flip to true once the retry has moved on.
+            get signal(): { readonly aborted: boolean } {
+                const mine = generationAtCall()
+                return {
+                    get aborted() {
+                        return attemptGeneration !== mine
+                    },
+                }
+            },
             async step<T>(a: string | (() => Promise<T>), b?: () => Promise<T>): Promise<T> {
                 // Overloaded: step(action) records under the enclosing step's name;
                 // step(name, action) uses the explicit name.
@@ -401,7 +430,7 @@ export async function runEngine(
                     typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
                 try {
-                    const out = await withStepDeadline(name, stepTimeoutMs, action)
+                    const out = await withStepDeadline(name, stepTimeoutMs, action, abandonAttempt)
                     const screenshot = await captureScreenshot(name)
                     recorder.step(name, 'passed', {
                         screenshot,

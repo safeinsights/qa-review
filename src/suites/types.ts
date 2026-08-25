@@ -36,6 +36,12 @@ export interface RunContext {
     // value one step captures (e.g. a created study's id) is stashed here for a
     // later step to read: `ctx.state.studyId = id` … `ctx.state.studyId as string`.
     state: Record<string, unknown>
+    // False while this attempt is the live one; true once its step deadline fired and
+    // the engine moved on. A timed-out body is NOT cancelled — Playwright has no
+    // cancellation — so it keeps driving the same `page` the retry is now using. Any
+    // body that loops, polls, or retries should check this and bail, so an abandoned
+    // attempt stops racing the live one for the browser.
+    readonly signal: { readonly aborted: boolean }
 }
 
 // One named step in a suite. The engine loops over `Suite.steps` and calls each
