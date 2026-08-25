@@ -137,6 +137,59 @@ export function resolveStepTimeoutMs(vars: Record<string, string | undefined>): 
     return Math.floor(parsed)
 }
 
+// Thrown when an abandoned attempt tries to keep driving the browser. It is not a
+// suite failure: the step it belongs to was already recorded failed when its deadline
+// fired, and this rejection only unwinds a body that no longer has a reader.
+export class StepAbandonedError extends Error {
+    constructor() {
+        super(
+            'step deadline already fired — this attempt was abandoned and must stop driving the page'
+        )
+        this.name = 'StepAbandonedError'
+    }
+}
+
+// Wrap `page` so every action it (or anything reached through it) performs first
+// checks that the caller is still the live attempt.
+//
+// Playwright has no cancellation, so a timed-out body keeps running. Asking each
+// suite to poll `ctx.signal` by hand is the kind of contract that holds until the
+// first helper forgets — and from inside a body a zombie is indistinguishable from
+// normal execution. Guarding at the object boundary makes it automatic instead:
+// nothing downstream can touch the browser without passing this check.
+//
+// Locators, frames, and the like are wrapped on the way out too, since that is where
+// most interaction actually happens (`page.getByRole(...).click()` never calls a
+// method on `page` itself).
+function guardPage<T extends object>(
+    target: T,
+    generationAtEntry: () => number,
+    currentGeneration: () => number
+): T {
+    // Read-only accessors stay unguarded: a zombie reading page.url() is harmless,
+    // and throwing there would break the engine's own currentUrl()/screenshot paths,
+    // which legitimately run after a deadline fires to record the failure.
+    const readOnly = new Set(['url', 'isClosed', 'context', 'video', 'coverage'])
+    return new Proxy(target, {
+        get(obj, prop, receiver) {
+            const value = Reflect.get(obj, prop, receiver)
+            if (typeof value !== 'function' || typeof prop !== 'string' || readOnly.has(prop)) {
+                return value
+            }
+            return (...args: unknown[]) => {
+                if (currentGeneration() !== generationAtEntry()) throw new StepAbandonedError()
+                const out = (value as (...a: unknown[]) => unknown).apply(obj, args)
+                // Locator/Frame/ElementHandle come back here; wrap them so the check
+                // rides along instead of stopping at the first hop.
+                if (out && typeof out === 'object' && !(out instanceof Promise)) {
+                    return guardPage(out as object, generationAtEntry, currentGeneration)
+                }
+                return out
+            }
+        },
+    })
+}
+
 export async function withStepDeadline<T>(
     name: string,
     timeoutMs: number,
@@ -394,15 +447,39 @@ export async function runEngine(
         // step.run() against that SAME page, meaning a zombie attempt's clicks and
         // navigations can land underneath the live one. Each attempt therefore carries a
         // generation; `abandonAttempt` bumps it, and `ctx.signal` reports whether the
-        // caller is still the live attempt. Suite bodies that loop or poll should check
-        // `ctx.signal.aborted` and bail, so an abandoned body stops touching the page.
+        // caller is still the live attempt.
         let attemptGeneration = 0
         const abandonAttempt = () => {
             attemptGeneration++
         }
         const generationAtCall = () => attemptGeneration
+        // The page each body sees. `guardedPageFor(gen)` binds the generation the body
+        // was entered at, so the guard compares that fixed value against the live
+        // counter — a body started before a deadline fired is rejected once the
+        // counter moves past it, while the retry (entered at the new generation) runs
+        // freely.
+        const guardedPageFor = (enteredAt: number) =>
+            guardPage(
+                page,
+                () => enteredAt,
+                () => attemptGeneration
+            )
         const ctx: RunContext = {
-            page: handle.page,
+            // Guarded rather than raw. Relying on every body to check ctx.signal by hand
+            // would be a contract that rots on the first helper that forgets — and the
+            // bodies are exactly the code least likely to remember, since a zombie is
+            // invisible from inside. Guarding the page means one seam covers every
+            // suite and every flow helper, including ones not written yet.
+            //
+            // A getter, so the generation is bound WHEN THE BODY READS ctx.page — which
+            // is inside the body, before its deadline can have fired. A body that read
+            // the page, then timed out, keeps its stale binding and starts throwing;
+            // the retry reads ctx.page afresh and gets a current one. Helpers that
+            // captured the page as an argument are covered too, since the object they
+            // hold carries the binding with it.
+            get page() {
+                return guardedPageFor(attemptGeneration)
+            },
             baseURL: env.baseURL,
             tag,
             // Getter so it reflects the LATEST loginAs() switch, not the role at

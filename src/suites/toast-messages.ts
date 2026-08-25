@@ -370,6 +370,7 @@ export const toastMessagesSuite: Suite = {
                     // ActivityContext that raises these toasts, so its footer is this
                     // step's readiness signal — not just "some page rendered".
                     await ctx.page.locator('.mantine-AppShell-footer').waitFor({ state: 'visible' })
+                    let restoreFailure: Error | undefined
                     try {
                         // Park the page's Date five minutes short of the eight-hour
                         // timeout. setFixedTime, NOT install()/fastForward(): it fakes
@@ -423,16 +424,23 @@ export const toastMessagesSuite: Suite = {
                         // is the closest thing to one; without it a retry — or a jump to
                         // another step — would run eight hours in the future.
                         //
-                        // Warn rather than swallow: if the restore fails, every later
-                        // step silently runs against a skewed clock and fails for reasons
-                        // that look nothing like the cause. The console buffer is drained
-                        // into the step record, so this lands in the run artifacts.
-                        await ctx.page.clock.setSystemTime(new Date()).catch(cause => {
-                            console.warn(
-                                `[toast-messages] could not restore the page clock: ${(cause as Error).message} — ` +
-                                    'later steps in this run are executing eight hours in the future'
-                            )
-                        })
+                        // Recorded rather than swallowed: a failed restore is not a local
+                        // problem, it poisons every later step, which then fails for
+                        // reasons that look nothing like the cause. Stashed on ctx.state
+                        // and rethrown below only if the body itself succeeded — throwing
+                        // from `finally` would replace a real assertion failure with this
+                        // one and hide what actually broke.
+                        restoreFailure = await ctx.page.clock
+                            .setSystemTime(new Date())
+                            .then(() => undefined)
+                            .catch((cause: unknown) => cause as Error)
+                    }
+                    if (restoreFailure) {
+                        throw new Error(
+                            `could not restore the page clock (${restoreFailure.message}) — ` +
+                                'every later step would run eight hours in the future',
+                            { cause: restoreFailure }
+                        )
                     }
                 }),
         },

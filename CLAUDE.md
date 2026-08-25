@@ -419,11 +419,20 @@ deliberate:
   keeps polling until teardown and would otherwise land as an **unhandled
   rejection** after the step was already recorded failed.
 - Because that body is not cancelled, it keeps driving the SAME `page` the retry
-  re-runs against, so a zombie attempt's clicks can land underneath the live one.
-  Each attempt carries a generation, and `ctx.signal.aborted` flips to `true` once
-  the engine has moved on. **A suite body that loops, polls, or retries should
-  check it and bail** — otherwise two attempts fight over the browser and the
-  retry fails for reasons that have nothing to do with the app.
+  re-runs against, so a zombie attempt's clicks could land underneath the live one.
+  **`ctx.page` is guarded, so suites do not have to think about this.** It is a
+  Proxy bound to the generation the body read it at; once the deadline fires, every
+  action through it — and through any locator or frame reached from it — throws
+  `StepAbandonedError` rather than touching the browser. A plain body written with
+  no awareness of any of this is already safe, which is the point: a rule that says
+  "remember to check a flag" is one the next helper forgets.
+
+  `ctx.signal.aborted` is still there for a body that would rather leave a long
+  loop quietly than by throwing.
+
+  The engine's own bookkeeping — screenshot, `currentUrl`, console drain — reads the
+  RAW page rather than `ctx.page`, so a timed-out step still records the
+  diagnostics that make it debuggable.
 
 The message contains the word `timeout`, so `categorize()` files it as
 `environment`, matching how a plain Playwright timeout already reads.
