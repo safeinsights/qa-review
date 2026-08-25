@@ -1286,6 +1286,17 @@ func TestShutdownReapsInFlightRun(t *testing.T) {
 	exited := make(chan struct{})
 	go func() {
 		_, _ = cmd.Process.Wait()
+		// Mimic streamCmd's reader goroutine, which clears a.runCmd once the process
+		// is reaped. Without this the test still passes, but only because
+		// terminateRun's poll loop never sees the clear and burns its whole 3s window
+		// down to the last-resort SIGKILL — so the SIGTERM path this PR argues is
+		// load-bearing (it is what disposes of the detached Chromium) would go
+		// unexercised, and a regression to a straight SIGKILL would stay green.
+		a.runMu.Lock()
+		if a.runCmd == cmd {
+			a.runCmd = nil
+		}
+		a.runMu.Unlock()
 		close(exited)
 	}()
 	defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
@@ -1294,11 +1305,20 @@ func TestShutdownReapsInFlightRun(t *testing.T) {
 	a.runMu.Unlock()
 
 	// No session and no PTY, so StopSession is a no-op and never emits on a nil ctx.
+	start := time.Now()
 	a.shutdown(context.Background())
+	elapsed := time.Since(start)
 
 	select {
 	case <-exited:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("run pid %d still alive after shutdown — it would be orphaned to init", pid)
+	}
+
+	// SIGTERM alone should end `sleep` well inside the 1.5s escalation window. A
+	// shutdown that takes longer means the poll loop ran to its deadline and the
+	// process died to a SIGKILL instead — the regression this test exists to catch.
+	if elapsed >= 1500*time.Millisecond {
+		t.Fatalf("shutdown took %v — the run died to SIGKILL escalation, not the SIGTERM that disposes of the browser", elapsed)
 	}
 }
