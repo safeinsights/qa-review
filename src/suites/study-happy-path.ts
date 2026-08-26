@@ -1,4 +1,5 @@
-import { stat } from 'node:fs/promises'
+import { copyFile, mkdtemp, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
@@ -21,7 +22,9 @@ import type { RunContext, Suite } from './types'
 //   reviewer:   approve proposal
 //   researcher: route to /code, launch IDE, upload code, submit
 //   reviewer:   request code changes (round 1)
-//   researcher: resubmit code (round 2 == the re-run: a fresh job)
+//   researcher: resubmit code (round 2 == the re-run: a fresh job, and a
+//               DIFFERENT script — the multi-query one, which uploads several
+//               result files instead of round 1's single results.csv)
 //   reviewer:   approve code (round 2)
 //   (qa runs the job) -> poll until results appear
 //   reviewer:   decrypt + approve results
@@ -69,9 +72,23 @@ const RESULTS_RENDER_WAIT_MS = 8_000
 // that is never visible — the same failure with a new cause.
 const RESULTS_KEY_COPY = /(results|security) key/i
 
-// The two files the enclave returns, named exactly as the outputs table lists them.
+// The files the enclave returns, named exactly as the outputs table lists them.
+// The round-2 script (multi-query-main.r) uploads five result files plus the
+// archive; the security scan log is added by the enclave itself.
 const SECURITY_LOG_FILE = 'security-scan-log.txt'
-const RESULTS_FILE = 'results.csv'
+// The CSV whose preview is asserted as a grid, and the one `ensureOutputsDecrypted`
+// uses as its "outputs are on screen" marker.
+const RESULTS_FILE = 'tutor_results.csv'
+// Every other file the round-2 script uploads. Presence in the outputs table is
+// asserted; only RESULTS_FILE and the scan log get their previews opened, since
+// the binary ones (plot.png, archive.zip) have no text/grid preview shape.
+const ADDITIONAL_OUTPUT_FILES = [
+    'exercises_results.csv',
+    'tasks_over_time_agg.csv',
+    'plot.png',
+    'table.html',
+    'archive.zip',
+]
 
 function resultsKeyBox(ctx: RunContext) {
     return ctx.page
@@ -422,7 +439,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('heading', { name: /Edit study code/i })
                         .waitFor({ state: 'visible' })
-                    await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
+                    await ctx.page
+                        .locator('input[type="file"]')
+                        .setInputFiles(await resubmitFiles())
+                    await ctx.page
+                        .getByRole('cell', { name: 'main.r', exact: true })
+                        .waitFor({ state: 'visible' })
                     await ctx.page
                         .getByLabel(/Resubmission Note/i)
                         .fill(content(ctx).resubmissionNote)
@@ -469,13 +491,20 @@ export const studyHappyPathSuite: Suite = {
                     // state the previous step left behind, then decrypt.
                     await gotoReview(ctx, id(ctx))
                     await ensureOutputsDecrypted(ctx)
-                    // Both decrypted outputs must be viewable AND downloadable, so
+                    // The two previewable outputs must be viewable AND downloadable, so
                     // exercise each end-to-end. The security scan log is checked first
                     // because it is what a reviewer reads before trusting the results.
                     await viewOutputFile(ctx, SECURITY_LOG_FILE, 'text')
                     await downloadOutputFile(ctx, SECURITY_LOG_FILE)
                     await viewOutputFile(ctx, RESULTS_FILE, 'grid')
                     await downloadOutputFile(ctx, RESULTS_FILE)
+                    // The multi-query script's remaining uploads: assert each is listed
+                    // and downloadable. plot.png and archive.zip are binary, so they
+                    // have no text/grid preview to open — downloading is what proves
+                    // the decrypt produced real bytes for them.
+                    for (const fileName of ADDITIONAL_OUTPUT_FILES) {
+                        await downloadOutputFile(ctx, fileName)
+                    }
                 }),
         },
         {
@@ -619,9 +648,27 @@ async function deleteStudyAndVerify(ctx: RunContext, studyId: string): Promise<v
 // The two code files the app accepts, resolved against the cloned repo (NOT the
 // engine bundle location) via repoDir(), which honors QAR_REPO_DIR at runtime.
 // (import.meta.url-relative paths would point at the bundle, not the clone.)
+function fixtureDir(): string {
+    return path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
+}
+
 function fixtureFiles(): string[] {
-    const dir = path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
+    const dir = fixtureDir()
     return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]
+}
+
+// The round-2 resubmission uploads a DIFFERENT script — the multi-query one, which
+// runs several queries and uploads five result files plus an archive, so the re-run
+// exercises a materially different job than round 1's single-query main.r.
+//
+// The enclave sources the entry point by name, so the uploaded file has to be
+// `main.r`; the fixture is checked in under its own name to keep it distinct from
+// round 1's. Copy it to a temp dir under the required name rather than renaming the
+// fixture, so the two scripts can coexist in the repo.
+async function resubmitFiles(): Promise<string[]> {
+    const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), 'main.r')
+    await copyFile(path.join(fixtureDir(), 'multi-query-main.r'), staged)
+    return [staged]
 }
 
 // Put the review page into the decrypted state, entering the reviewer's results
