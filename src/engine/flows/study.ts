@@ -1,7 +1,8 @@
 import { faker } from '@faker-js/faker'
-import { expect, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import { loginAs } from '../auth'
 import type { EnvConfig } from '../types'
+import { clickUntil } from './interactions'
 
 // Shared create-study-proposal helpers, extracted from src/suites/study-happy-path.ts
 // so both the happy-path suite AND ad-hoc validation suites drive the SAME create
@@ -74,11 +75,6 @@ export async function openProposalDashboard(page: Page, baseURL: string): Promis
         .waitFor({ state: 'visible' })
 }
 
-// Ceiling for the whole click-until-ready loop below. Generous against the ~0.5-1s the
-// org list actually takes on qa, so it never trims a slow-but-working load; it exists
-// only so a picker that NEVER enables fails the step instead of polling forever.
-const ORG_SELECT_READY_TIMEOUT_MS = 60_000
-
 // Click "Propose New Study" and land on the request page with its org picker READY
 // TO CLICK — which is a later state than "rendered", and the distinction is the whole
 // point of this helper.
@@ -86,31 +82,15 @@ const ORG_SELECT_READY_TIMEOUT_MS = 60_000
 // The picker is CLIENT-rendered (the server HTML for /<org>/study/request contains no
 // org-select at all) and Mantine renders it DISABLED while the org list loads —
 // measured at ~0.5-1s on qa. Waiting only for `visible` therefore hands the caller a
-// control it cannot click, and the caller burns its ENTIRE action timeout on it: the
-// click logs "element is not enabled", then "element was detached from the DOM" when
-// the loaded list replaces the node, and never recovers.
-//
-// The click is re-driven rather than fired once because a click that lands before the
-// dashboard hydrates navigates outside the router's knowledge and can be undone — the
-// same pre-hydration hazard the invite flow documents, one state further along.
+// control it cannot click, and the caller burns its ENTIRE action timeout on it. That
+// wait, the re-driven click (a click landing before the dashboard hydrates navigates
+// outside the router's knowledge and can be undone), and the bound on the loop are
+// all clickUntil's job — this flow just names the control and the target.
 export async function beginProposal(page: Page): Promise<void> {
-    const link = page.getByRole('link', { name: /Propose New Study/i }).first()
-    const orgSelect = page.getByTestId('org-select')
-    await expect(async () => {
-        // Only (re-)drive the link while the picker is absent. After a successful
-        // navigation the link is gone, so an unconditional re-click would spend the
-        // whole retry timing out on a detached control instead of waiting out a slow
-        // org list.
-        if ((await orgSelect.count()) === 0) await link.click()
-        await expect(orgSelect).toBeEnabled()
-        // Bounded deliberately. Under Playwright's LIBRARY mode a bare toPass()
-        // resolves its timeout to `options.timeout ?? expectConfig().toPass?.timeout ?? 0`,
-        // and with no test runner there is no config to read — so it polls with NO
-        // deadline and a picker that never enables hangs the whole run instead of
-        // failing it. (expect.configure({timeout}) does not fix this; toPass never
-        // consults it.) This is the ONE place a timeout belongs inline, because the
-        // alternative is not a shorter wait, it is an infinite one.
-    }).toPass({ timeout: ORG_SELECT_READY_TIMEOUT_MS })
+    await clickUntil(
+        page.getByRole('link', { name: /Propose New Study/i }).first(),
+        page.getByTestId('org-select')
+    )
 }
 
 // Open the dashboard and begin a proposal in one call (for ad-hoc callers).

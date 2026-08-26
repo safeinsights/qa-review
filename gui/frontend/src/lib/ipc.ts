@@ -147,6 +147,7 @@ interface WailsApp {
     RequestAccess(cwd: string, name: string): Promise<string>
     Rekey(cwd: string): Promise<string>
     IsInDrift(cwd: string): Promise<boolean>
+    CommitsBehind(cwd: string): Promise<number>
     CheckKeyringAccess(cwd: string): Promise<KeyringAccess>
     OpenAccessPr(cwd: string): Promise<string>
     HelpDocs(): Promise<HelpDoc[]>
@@ -570,6 +571,14 @@ export async function rekey(): Promise<string> {
 // True if secrets are out of sync with the keyring (rekey needed).
 export async function isInDrift(): Promise<boolean> {
     return app().IsInDrift('')
+}
+
+// How many commits the cloned test repo is behind upstream; 0 when current or
+// when it can't be determined (offline). Gives the "sync skipped" banner a
+// magnitude — a clone tens of commits stale fails in ways that name neither the
+// app nor the staleness.
+export async function commitsBehind(): Promise<number> {
+    return app().CommitsBehind('')
 }
 
 // Pull the latest keyring + secrets and report whether the local identity can

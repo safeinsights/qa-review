@@ -244,6 +244,22 @@ export const studyHappyPathSuite: Suite = {
                     const btn = ctx.page
                         .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
                         .first()
+                    // A RETRY re-runs this step against the SAME live browser, parked
+                    // wherever the failed attempt left it — for this step that is the
+                    // Coder IDE tab, where this button does not exist. Without
+                    // re-anchoring, every retry times out on a page that was never the
+                    // subject, hiding the real cause (the IDE not loading). Gate the
+                    // re-navigation on the BUTTON, not on a page-state marker: /code
+                    // renders an "Upload your files" empty state before any file exists
+                    // and a "Review files" table once the workspace has seeded them, so
+                    // the button is the only signal stable across both. No-op on the
+                    // normal path — the previous step already landed here.
+                    if (!(await btn.isVisible().catch(() => false))) {
+                        await ctx.page.goto(
+                            `${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/code`,
+                            { waitUntil: 'domcontentloaded' }
+                        )
+                    }
                     await btn.waitFor({ state: 'visible' })
                     // On a cold workspace the app provisions the whole code-server
                     // environment FIRST ("Launching IDE" + a progress bar) and only then

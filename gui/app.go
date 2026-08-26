@@ -113,6 +113,17 @@ func withGuiPath() []string {
 	// describe the real frontend rather than overstating it.
 	out = append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 	out = append(out, qarBinEnv()...)
+	// Give `claude` a bigger MCP startup budget than its 30s default. A COLD
+	// `uvx mcp-atlassian` builds an ephemeral venv and installs ~100 packages before
+	// the server answers anything — measured at 29s cold vs 0s warm — so against the
+	// default it loses the race about as often as it wins. When it loses, the
+	// validation session comes up with no mcp__jira-atlassian__* tools and NOTHING in
+	// the diagnostic log looks wrong, because the server was still installing rather
+	// than failing. An explicit MCP_TIMEOUT from the environment survives the loop
+	// above and wins, so this only supplies a default.
+	if os.Getenv("MCP_TIMEOUT") == "" {
+		out = append(out, fmt.Sprintf("MCP_TIMEOUT=%d", mcpStartupTimeout.Milliseconds()))
+	}
 	return out
 }
 
@@ -471,7 +482,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 	logMcp("authoring session: config=%s", mcpPath)
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, JiraCfg{})
 
 	claudeArgs := []string{
 		"--permission-mode", "default",
@@ -656,7 +667,7 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 	// Whether the Jira server is even present is a separate invisible failure: no token
 	// means no jira-atlassian server, which surfaces only as missing mcp__jira__* tools.
 	logMcp("validation session: config=%s jiraConfigured=%t", mcpPath, strings.TrimSpace(jiraCfg.Token) != "")
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, jiraCfg)
 
 	claudeArgs := []string{
 		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
@@ -773,7 +784,7 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 	logMcp("companion session: config=%s suite=%s", mcpPath, suite)
-	go probeMcpServers(cdpPort)
+	go probeMcpServers(cdpPort, JiraCfg{})
 
 	repo := repoDir()
 	if err := a.pty.start(a, repo, withGuiPath(), companionClaudeArgs(mcpPath, repo)); err != nil {
@@ -1571,6 +1582,72 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(string(lock)) != want, nil
+}
+
+// CommitsBehind reports how many commits the cloned test repo is behind its
+// upstream — i.e. how much a successful Sync would pull. 0 means current.
+//
+// This exists to give the "sync skipped" banner a magnitude. Sync auto-runs at
+// startup but bails on a dirty or diverged working copy, and "sync skipped" alone
+// reads as a minor note you can dismiss. A clone tens of commits stale is not
+// minor: it breaks in ways that name neither the app nor the staleness — a stale
+// bin/qar hunting an env var the app no longer exports, stale skills, stale suites.
+// One observed case sat 48 commits behind for exactly this reason.
+//
+// Never returns an error, and returns 0 (not a guess) whenever the count can't be
+// established — offline, no upstream, unparseable output. A staleness warning that
+// cries wolf when it simply couldn't fetch is worse than one that stays quiet, and
+// this must never block the sync path it annotates.
+//
+// cwd is unused — the repo is always repoDir(). It is there for parity with the
+// Sync/Rekey/IsInDrift bindings beside it, which take and ignore it the same way, so
+// the frontend passes '' rather than a path it would have to invent.
+func (a *App) CommitsBehind(cwd string) int {
+	dir := repoDir()
+	// Compare against freshly-fetched refs; a stale origin/* would under-report.
+	//
+	// Bounded, and with the terminal prompt disabled. The err != nil guard below
+	// handles a fetch that FAILS, but the case this function exists to survive —
+	// offline — is a fetch that HANGS: a dropped VPN, a captive portal, or a DNS
+	// blackhole leaves plain `git fetch` blocking indefinitely, and this runs on the
+	// UI path. Without both, "must never block the sync path it annotates" is a
+	// promise the code does not keep. GIT_TERMINAL_PROMPT=0 stops a credential
+	// prompt turning into the same silent wedge.
+	if _, err := a.gitWithTimeout(dir, 20*time.Second, "fetch", "--quiet"); err != nil {
+		return 0
+	}
+	upstream, err := a.git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if err != nil {
+		return 0
+	}
+	out, err := a.git(dir, "rev-list", "--count", "HEAD.."+strings.TrimSpace(upstream))
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// gitWithTimeout is git() with a hard ceiling, for the network-touching commands.
+// A local git command cannot hang, but `fetch` against an unreachable remote can
+// block until the TCP stack gives up — far longer than a UI path can wait.
+func (a *App) gitWithTimeout(dir string, limit time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, guiResolve("git"), args...)
+	cmd.Dir = dir
+	// Never let git stop for credentials: an interactive prompt with no terminal
+	// attached is indistinguishable from a hang.
+	cmd.Env = append(withGuiPath(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		logDiag("git", "FAIL git %s (dir=%s): %v — %s",
+			strings.Join(args, " "), dir, err, firstLines(string(out), 3))
+	}
+	return string(out), err
 }
 
 func (a *App) git(dir string, args ...string) (string, error) {

@@ -283,7 +283,9 @@ func TestProbeMcpServersLogsUnreachableBrowser(t *testing.T) {
 	}
 	isolateAppSupport(t)
 
-	probeMcpServers(59999) // nothing is listening here
+	// Zero-value JiraCfg: this test exercises the unreachable-browser log path only,
+	// and an unconfigured Jira is itself a case the probe has to tolerate.
+	probeMcpServers(59999, JiraCfg{}) // nothing is listening here
 
 	data, err := os.ReadFile(diagLogPath())
 	if err != nil {
@@ -350,7 +352,9 @@ func TestProbeMcpServersLeavesNoOrphans(t *testing.T) {
 	isolateAppSupport(t)
 
 	before := countMcpProcs()
-	probeMcpServers(59998) // nothing listening; the server itself still starts
+	// Zero-value JiraCfg: this test counts spawned MCP processes, and an
+	// unconfigured Jira is a case the probe has to tolerate regardless.
+	probeMcpServers(59998, JiraCfg{}) // nothing listening; the server itself still starts
 	time.Sleep(2 * time.Second)
 
 	if after := countMcpProcs(); after > before {

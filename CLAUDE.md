@@ -201,6 +201,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
+  `SyncButton` auto-syncs on mount, so a clone normally can't drift — **unless the
+  sync keeps getting skipped**, which is silent by design (a dirty working copy is
+  normal while authoring a suite). One clone sat **48 commits behind** that way, and
+  the resulting failures named neither the app nor the staleness: the stale `bin/qar`
+  hunted `QAR_BIN`, a var the app had stopped exporting in favour of
+  `QAR_NODE`/`QAR_BUNDLE`. So the skip banner now carries a magnitude from
+  `CommitsBehind()` (`gui/app.go`): a `git fetch` plus `rev-list --count HEAD..@{u}`,
+  asked for **only** when a sync was skipped. It returns **0 rather than a guess**
+  whenever the count is unknowable (offline, no upstream) — a staleness warning that
+  fires on every offline launch teaches people to ignore the one that matters.
 - **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
   `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
   key**, not by row, so a user with duplicate entries (`addMember` dedupes on name
@@ -450,7 +460,28 @@ guard — a typo must not reinstate the hang. It is read from the merged setting
 like any other var, so `config/settings.local.json` works as well as the env.
 
 Suites must still not set inline Playwright timeouts (see "Code rules"): this is
-the global backstop, not permission to sprinkle `{ timeout: … }` around.
+the global backstop, not permission to sprinkle `{ timeout: … }` around. There is
+exactly ONE sanctioned exception, and it is a shared helper rather than a suite:
+`clickUntil` (`src/engine/flows/interactions.ts`) bounds its own `toPass` at
+`CLICK_UNTIL_READY_TIMEOUT_MS`. A `toPass` is the one construct the deadline
+above cannot express better — it polls forever in library mode, so the choice
+there is not between a shorter wait and a longer one but between a number and an
+infinite one, and failing in 60s with a message naming the CONTROL beats failing
+in 5 minutes with one naming the step.
+
+`clickUntil(control, target)` is also the answer to a failure this app produces
+often enough that three flows had each grown their own copy: a control is
+**server-rendered, so it is clickable BEFORE React wires its onClick**. The click
+takes focus, nothing opens, and the caller then burns its whole action timeout on
+a dialog that was never going to appear. (A click landing pre-hydration can also
+navigate outside the router's knowledge and be undone.) So it re-clicks until the
+target is visible AND enabled — enabled because Mantine renders a control
+disabled while its data loads, and a visible-but-disabled control just moves the
+failure one line down. It skips the click once the target is attached, or once the
+control has detached, so a control that navigates away is not re-clicked into a
+timeout. `inviteUser` (signup), `beginProposal` (study) and `toast-messages`'
+modal/popover opens all call it; a new pre-hydration click belongs here too, not
+in a fourth copy.
 
 ## Packaging a standalone Mac app (`.dmg` for staff)
 
