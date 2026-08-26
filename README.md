@@ -139,7 +139,7 @@ the GUI shows a "rekey needed" banner.
 
 ```bash
 qar rekey                               # re-encrypt all secrets to the current keyring
-qar set-secret --key <VAR> --value <v>  # encrypt one secret to all recipients
+qar set-secret --name <VAR> --value <v> # encrypt one secret to all recipients
 qar get-secret --name <VAR>             # print one decrypted secret to stdout
 ```
 

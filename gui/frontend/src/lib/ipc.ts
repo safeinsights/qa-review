@@ -5,6 +5,13 @@
 
 export type UnlistenFn = () => void
 
+// The stable envs a run can target, in the order the pickers show them. One
+// definition rather than a copy per component: this list previously lived
+// separately in RunControls, ValidationTab and ExploratoryTab, so adding an env
+// meant finding all three. Keep in sync with PRIVATE_KEY_ENVS in
+// config/environments.ts and envList in gui/settings.go.
+export const ENVS = ['qa', 'staging', 'production', 'demo'] as const
+
 // One settings field as returned by the Go backend. Secret values are masked
 // (Value is empty); `set` says whether a value already exists.
 export interface SettingField {
@@ -12,7 +19,7 @@ export interface SettingField {
     label: string
     secret: boolean
     group: string // "Admin" | "Researcher" | "Reviewer" | "Jira" | "" (the base URL)
-    env: string // every account field + the base URL: "qa" | "staging" | "production"; "" only for Jira
+    env: string // every account field + the base URL: one of ENVS above; "" only for Jira
     section: string // sub-section label ("Account" | "Results private key" | "Environment")
     multiline: boolean // render a textarea (PEM keys) vs a one-line input (MFA code/seed)
     tier: string // "project" | "secrets" | "local" | "" (unset)

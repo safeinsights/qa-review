@@ -17,10 +17,22 @@ export async function setSecret(dir: string, key: string, plain: string): Promis
     writeLock(dir, fingerprint(keys))
 }
 
+// The var is named with **`--name`, not `--key`** — the same trap that already made
+// get-secret use `--name`. `key` lives in the ONE shared BOOLEANS list in
+// src/cli/args.ts (fix-account's valueless switch), so `--key FOO` parses to 'true'
+// and drops FOO entirely. That wrote a secret literally named "true" and reported
+// success, so `--key` is rejected outright rather than aliased: there is no way for
+// it to carry a var name through this parser.
 export async function setSecretCommand(opts: Record<string, string>): Promise<void> {
-    const key = opts.key
+    const key = opts.name
     const value = opts.value
-    if (!key || !value) throw new Error('set-secret: --key and --value are required')
+    if (!key && opts.key) {
+        throw new Error(
+            'set-secret: `--key <VAR>` is parsed as a valueless switch and loses the name. ' +
+                'Use `--name <VAR>` instead.'
+        )
+    }
+    if (!key || !value) throw new Error('set-secret: --name and --value are required')
     await setSecret(configDir(), key, value)
     console.log(`Encrypted ${key} to ${readKeyring().length} recipient(s).`)
 }

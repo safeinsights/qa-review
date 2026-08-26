@@ -1,4 +1,5 @@
 {
+  "DEMO_BASE_URL": "https://app.demo.safeinsights.org",
   "PRODUCTION_BASE_URL": "https://app.safeinsights.org",
   "QA_BASE_URL": "https://app.qa.safeinsights.org",
   "STAGING_BASE_URL": "https://app.staging.safeinsights.org"

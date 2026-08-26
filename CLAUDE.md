@@ -77,7 +77,8 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   there is NO compile step and no `suites-compiled/` dir. **Suites must use RELATIVE
   imports** (`./types`, `../engine/paths`), not the `@/` alias — the alias is not
   resolved at suite-load time.
-- `config/environments.ts` — declares STABLE envs (`qa`, `staging`) and derives PR
+- `config/environments.ts` — declares STABLE envs (`qa`, `staging`, `production`,
+  `demo`) and derives PR
   preview URLs. **A PR run is identical to a QA run except for the base URL** —
   same accounts, same MFA. There is NO code that gates a suite to PR-only or
   QA-only. If a suite "runs on a PR but not on QA," the cause is environmental
@@ -114,6 +115,24 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/keyring.ts` / `src/engine/identity.ts` — the multi-user encryption
   core: the committed recipient list (`config/keyring.json`) and the local age
   identity (`config/age-identity.txt`, gitignored). See "Settings" below.
+
+### Adding a stable environment
+
+The env list lives in four places that must agree, none of which the compiler
+cross-checks:
+
+1. `config/environments.ts` — add to `PRIVATE_KEY_ENVS` **and** `ENVIRONMENTS`.
+   `privateKeyEnvFor` derives from the former, so an env missing there silently
+   decrypts with QA's key and fails much later as an opaque wrong-key error.
+2. `config/settings.json` — the `<ENV>_BASE_URL` value.
+3. `gui/settings.go` — `envList`, so the Settings panel renders that env's fields.
+4. `gui/frontend/src/lib/ipc.ts` — `ENVS`, the single list the three pickers
+   (RunControls, ValidationTab, ExploratoryTab) import.
+
+Then populate the per-env secrets (`<ROLE>_EMAIL_<ENV>`, `_PASSWORD_`, `_MFA_CODE_`
+or `_MFA_SEED_`, and `REVIEWER_RESULTS_PRIVATE_KEY_<ENV>` for results decryption).
+A stable env does NOT fall back to QA's credentials — that is deliberate, so an
+unpopulated secret fails loudly instead of running against the wrong tenant.
 
 ## Settings / configuration
 
@@ -186,11 +205,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   AFTER the "is a PR already open?" lookup, so a healthy already-open PR still wins.
 - `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
-- `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
-  recipients (the GUI Settings "save secret" path).
+- `pnpm qar set-secret --name <VAR> --value <v>` — encrypts one secret to all
+  recipients (the GUI Settings "save secret" path). **`--name`, not `--key`**, for
+  the same reason as `get-secret` below. `--key` used to be the documented flag and
+  was silently broken: it encrypted the value under a var literally named "true" and
+  printed `Encrypted true to N recipient(s)`. It is now rejected with that
+  explanation rather than aliased — the shared `BOOLEANS` list makes it impossible
+  for `--key` to carry a name through the parser at all.
 - `pnpm qar get-secret --name <VAR> [--force]` — the READ half: prints one decrypted
   value to stdout. The var is named with **`--name`, not `--key`** — `BOOLEANS` in
-  `bin/qar.ts` is ONE list shared by every subcommand and `key` is already in it
+  `src/cli/args.ts` is ONE list shared by every subcommand and `key` is already in it
   (`fix-account`'s valueless switch), so `--key FOO` would parse to `true`, drop
   `FOO`, and look up a var literally named "true" — a silent wrong answer, not an
   error. Writes NO trailing newline, so a PEM stays byte-exact, and refuses to print

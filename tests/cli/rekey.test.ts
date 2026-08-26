@@ -2,8 +2,9 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { BOOLEANS, parseArgs } from '@/cli/args'
 import { rekeyAll } from '@/cli/commands/rekey'
-import { setSecret } from '@/cli/commands/set-secret'
+import { setSecret, setSecretCommand } from '@/cli/commands/set-secret'
 import { createIdentity, readIdentity } from '@/engine/identity'
 import { addMember, fingerprint, readLock, writeKeyring } from '@/engine/keyring'
 import {
@@ -59,5 +60,30 @@ describe('rekey', () => {
         const secrets = JSON.parse(fs.readFileSync(path.join(dir, 'settings.secrets.json'), 'utf8'))
         expect(await decryptWithIdentity(secrets.RESEARCHER_PASSWORD, a)).toBe('hunter2')
         expect(readLock(dir)).toBe(fingerprint([aPub]))
+    })
+
+    // `--key` was the documented flag, but `key` is in bin/qar.ts's shared BOOLEANS
+    // list, so the parser turns `--key REVIEWER_EMAIL_DEMO` into 'true' and drops the
+    // name. That silently encrypted a secret called "true" and printed success.
+    describe('set-secret arg parsing', () => {
+        const parse = (argv: string[]) => parseArgs(argv, { booleans: BOOLEANS })
+
+        it('rejects --key instead of writing a secret named "true"', async () => {
+            const opts = parse(['--key', 'REVIEWER_EMAIL_DEMO', '--value', 'a@b.c'])
+            expect(opts.key).toBe('true')
+            await expect(setSecretCommand(opts)).rejects.toThrow(/Use `--name <VAR>` instead/)
+        })
+
+        it('accepts --name', () => {
+            const opts = parse(['--name', 'REVIEWER_EMAIL_DEMO', '--value', 'a@b.c'])
+            expect(opts.name).toBe('REVIEWER_EMAIL_DEMO')
+            expect(opts.value).toBe('a@b.c')
+        })
+
+        it('still requires a value', async () => {
+            await expect(setSecretCommand(parse(['--name', 'FOO']))).rejects.toThrow(
+                /--name and --value are required'?/
+            )
+        })
     })
 })

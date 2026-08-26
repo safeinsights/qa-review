@@ -33,7 +33,7 @@ export interface AccountVars {
 
 // The stable env names that have their own per-account, per-env secrets (results
 // private key, MFA code, MFA seed). PR previews are NOT listed — they reuse QA.
-export const PRIVATE_KEY_ENVS = ['qa', 'staging', 'production'] as const
+export const PRIVATE_KEY_ENVS = ['qa', 'staging', 'production', 'demo'] as const
 export type PrivateKeyEnv = (typeof PRIVATE_KEY_ENVS)[number]
 
 // The per-account, per-env email/password var names, e.g.
@@ -51,11 +51,16 @@ export function privateKeyVar(account: AccountVars, env: PrivateKeyEnv): string 
     return `${account.privateKeyPrefix}_${env.toUpperCase()}`
 }
 
-// Which private-key env an environment name maps to. Stable envs with their own
-// key (staging, production) map to themselves; anything else (qa, and PR previews
-// like "pr839") reuses the QA key.
+// Which private-key env an environment name maps to. A stable env with its own key
+// maps to itself; anything else — PR previews like "pr839", and any unrecognized
+// name — reuses the QA key.
+//
+// Derived from PRIVATE_KEY_ENVS rather than listing the names again: the previous
+// hardcoded `staging || production` check meant adding an env silently routed it to
+// QA's key, which fails as a wrong-key decryption error far from its cause.
 export function privateKeyEnvFor(envName: string): PrivateKeyEnv {
-    return envName === 'staging' || envName === 'production' ? envName : 'qa'
+    const known = (PRIVATE_KEY_ENVS as readonly string[]).includes(envName)
+    return known ? (envName as PrivateKeyEnv) : 'qa'
 }
 
 // The per-account, per-env fixed-code var name, e.g.
@@ -106,6 +111,7 @@ export const ENVIRONMENTS: EnvDeclaration[] = [
     { name: 'qa', baseUrlVar: 'QA_BASE_URL' },
     { name: 'staging', baseUrlVar: 'STAGING_BASE_URL' },
     { name: 'production', baseUrlVar: 'PRODUCTION_BASE_URL' },
+    { name: 'demo', baseUrlVar: 'DEMO_BASE_URL' },
 ]
 
 // Derive a PR preview base URL from its PR number, e.g. 839 -> the pr839 host.
