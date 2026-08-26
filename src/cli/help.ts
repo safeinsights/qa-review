@@ -63,9 +63,32 @@ export const COMMANDS: CommandHelp[] = [
         summary: 'Encrypt one secret to every keyring recipient.',
     },
     {
+        name: 'get-secret',
+        usage: 'qar get-secret --name <VAR> [--force]',
+        summary: 'Print one decrypted secret to stdout (the read half of set-secret).',
+        details:
+            "The var is named with --name, not --key: --key is fix-account's valueless\n" +
+            'boolean switch and the parser shares one booleans list across subcommands.\n\n' +
+            'Prints the raw value with NO trailing newline, so a PEM survives byte-for-byte:\n' +
+            '  qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem\n\n' +
+            'Refuses to write to a terminal unless --force is given, so a private key does\n' +
+            'not land in scrollback. *.pem is gitignored, but delete the extracted file when\n' +
+            "done anyway — it's a live results-decryption key on disk.",
+    },
+    {
         name: 'sync',
         usage: 'qar sync',
         summary: 'Fast-forward-only git pull (suites + keyring + secrets).',
+    },
+    {
+        name: 'share-work',
+        usage: 'qar share-work [--description "what changed"]',
+        summary: 'Commit local edits to a branch and open a PR, then return to a synced main.',
+        details:
+            'The alternative to discarding local edits when sync is skipped. Commits the whole\n' +
+            'working copy (gitignored files — your age identity, settings.local.json — are\n' +
+            'never staged), pushes, opens a PR, then checks out main and fast-forwards.\n' +
+            'If the push fails it stops on the branch rather than stranding unpushed commits.',
     },
     {
         name: 'session',
@@ -83,9 +106,25 @@ export const COMMANDS: CommandHelp[] = [
         summary: "Log the RUNNING session's browser in as a role.",
     },
     {
+        name: 'session-signin',
+        usage: 'qar session-signin --email <e> [--password <p>]',
+        summary: "Sign the session's browser in as any account, stopping at the MFA code step.",
+    },
+    {
         name: 'session-create-user',
-        usage: 'qar session-create-user --role <researcher|reviewer>',
+        usage: 'qar session-create-user --role <researcher|reviewer> [--print-mfa-secret]',
         summary: 'Invite + complete signup for a fresh user. Prints {"userId","email"}.',
+        details: [
+            '--print-mfa-secret also prints the account\'s base32 TOTP secret as "mfaSecret".',
+            'That is what lets you sign back IN as the created user later: pair it with',
+            '`qar totp --secret <secret>` for a live code (the password is the shared signup',
+            'constant). Without the flag the secret is discarded and the account becomes',
+            'unreachable once the session ends.',
+            '',
+            'The secret appears in the session output and any transcript of it, so pass the',
+            'flag only when a sign-back-in is actually needed. These are disposable QA/PR',
+            'accounts — delete them afterwards with `qar cleanup --users <id>`.',
+        ].join('\n'),
     },
     {
         name: 'session-create-study',

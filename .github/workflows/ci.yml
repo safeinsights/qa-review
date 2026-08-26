@@ -78,7 +78,11 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: gui/frontend/pnpm-lock.yaml
-      - uses: actions/setup-go@v5
+      # v6+ is required: v5 reads ONLY the `go` line from go.mod and ignores the
+      # `toolchain` directive, so it would install 1.25.x. The build would still
+      # reach 1.26.6 through GOTOOLCHAIN=auto, but re-downloading it uncached on
+      # every run — and `go version` would report the wrong Go.
+      - uses: actions/setup-go@v6
         with:
           go-version-file: gui/go.mod
           cache-dependency-path: gui/go.sum
@@ -91,3 +95,12 @@ jobs:
           pnpm build
       - run: go test ./...
         working-directory: gui
+
+      # Catches what `go test` cannot: stdlib and dependency CVEs. Unlike a
+      # version-range scanner it reports only vulnerabilities our code actually
+      # calls, so a finding here is real work rather than noise to triage. The
+      # five stdlib CVEs that prompted the toolchain pin were invisible until
+      # this ran, so gate on it to stop them coming back.
+      - name: govulncheck
+        working-directory: gui
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

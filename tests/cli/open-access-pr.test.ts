@@ -66,6 +66,64 @@ describe('openAccessPr', () => {
         ).rejects.toThrow(/not authenticated/)
     })
 
+    // The state a real user reached: the branch was pushed with no commit on it, so
+    // GitHub rejects the PR. Retrying `gh pr create` can never fix that, and the GUI
+    // offers this command as "Open pull request" — so the error has to name the
+    // actual fix instead of relaying the raw GraphQL message.
+    it('explains an empty access branch instead of relaying the GraphQL error', async () => {
+        await expect(
+            openAccessPr({
+                branch: 'access/malar-natarajan',
+                name: 'Malar Natarajan',
+                gh: async args => {
+                    if (args.includes('create')) {
+                        throw new Error(
+                            'pull request create failed: GraphQL: No commits between main and access/malar-natarajan (createPullRequest)'
+                        )
+                    }
+                    return '[]'
+                },
+            })
+        ).rejects.toThrow(/no keyring commit on it[\s\S]*qar request-access/)
+    })
+
+    // gh puts the GraphQL rejection on stderr, where execFile hangs it off the error
+    // object rather than folding it into .message — searching only .message would miss
+    // the real-world shape of this failure entirely.
+    it('detects the empty branch when the reason is only on stderr', async () => {
+        await expect(
+            openAccessPr({
+                branch: 'access/ada',
+                name: 'Ada',
+                gh: async args => {
+                    if (args.includes('create')) {
+                        const e = new Error('Command failed: gh pr create')
+                        ;(e as { stderr?: string }).stderr =
+                            'GraphQL: No commits between main and access/ada (createPullRequest)'
+                        throw e
+                    }
+                    return '[]'
+                },
+            })
+        ).rejects.toThrow(/no keyring commit on it/)
+    })
+
+    // An already-open PR still wins: the empty-branch check runs only after the lookup
+    // finds nothing, so a healthy "already open" case is never rewritten as an error.
+    it('prefers an existing PR over the empty-branch message', async () => {
+        const result = await openAccessPr({
+            branch: 'access/ada',
+            name: 'Ada',
+            gh: async args => {
+                if (args.includes('create')) {
+                    throw new Error('GraphQL: No commits between main and access/ada')
+                }
+                return JSON.stringify([{ number: 3, url: 'https://github.com/o/r/pull/3' }])
+            },
+        })
+        expect(result).toEqual({ url: 'https://github.com/o/r/pull/3', created: false })
+    })
+
     // Covers the case where the fallback list call ALSO fails (e.g. same auth
     // problem) — the original create error must still win, not a parse/list error.
     it('propagates the original error when the fallback list call itself fails', async () => {

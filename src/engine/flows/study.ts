@@ -54,7 +54,7 @@ export function generateStudyContent(tag: string): StudyContent {
         changeRequestFeedback: `Requesting revisions before approval. ${body(1)}`,
         resubmissionNote: `Addressed reviewer feedback. ${body(1)}`,
         codeApprovalFeedback: `Code approved and ready to run. ${body(1)}`,
-        resultsApprovalFeedback: `Outputs reviewed, no sensitive or restricted data. ${body(1)}`,
+        resultsApprovalFeedback: `Outputs reviewed, no sensitive or restricted data found. ${body(1)}`,
     }
 }
 
@@ -73,6 +73,11 @@ export async function openProposalDashboard(page: Page, baseURL: string): Promis
         .first()
         .waitFor({ state: 'visible' })
 }
+
+// Ceiling for the whole click-until-ready loop below. Generous against the ~0.5-1s the
+// org list actually takes on qa, so it never trims a slow-but-working load; it exists
+// only so a picker that NEVER enables fails the step instead of polling forever.
+const ORG_SELECT_READY_TIMEOUT_MS = 60_000
 
 // Click "Propose New Study" and land on the request page with its org picker READY
 // TO CLICK — which is a later state than "rendered", and the distinction is the whole
@@ -98,7 +103,14 @@ export async function beginProposal(page: Page): Promise<void> {
         // org list.
         if ((await orgSelect.count()) === 0) await link.click()
         await expect(orgSelect).toBeEnabled()
-    }).toPass()
+        // Bounded deliberately. Under Playwright's LIBRARY mode a bare toPass()
+        // resolves its timeout to `options.timeout ?? expectConfig().toPass?.timeout ?? 0`,
+        // and with no test runner there is no config to read — so it polls with NO
+        // deadline and a picker that never enables hangs the whole run instead of
+        // failing it. (expect.configure({timeout}) does not fix this; toPass never
+        // consults it.) This is the ONE place a timeout belongs inline, because the
+        // alternative is not a shorter wait, it is an infinite one.
+    }).toPass({ timeout: ORG_SELECT_READY_TIMEOUT_MS })
 }
 
 // Open the dashboard and begin a proposal in one call (for ad-hoc callers).

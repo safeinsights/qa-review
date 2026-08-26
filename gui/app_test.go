@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -1055,6 +1056,270 @@ func TestWithGuiPathRanksHomebrewOverUsrLocal(t *testing.T) {
 	}
 	if pos("/opt/homebrew/bin") > pos("/usr/local/bin") {
 		t.Fatalf("PATH puts /usr/local/bin ahead of Homebrew, so npx picks the wrong node: %q", pathVal)
+	}
+}
+
+// The doctor row is advisory: git with no user.name/user.email usually still
+// commits (auto-detected `<username>@<hostname>`), which makes for poor keyring
+// attribution — and when auto-detection also fails, the commit is refused
+// outright. Either way the doctor should name the unset config up front.
+func TestGitIdentityCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, gitName, gitEmail, wantDetail string
+		wantOK                              bool
+	}{
+		{"both set", "Ada Lovelace", "ada@x.com", "Ada Lovelace <ada@x.com>", true},
+		{"neither set", "", "", "no user.name or user.email", false},
+		{"no name", "", "ada@x.com", "no user.name", false},
+		{"no email", "Ada Lovelace", "", "no user.email", false},
+		// `git config user.name ""` yields a blank line, not an error — treating that
+		// as configured would report a green row for an identity git won't use.
+		{"whitespace only", "  ", "\t", "no user.name or user.email", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gitIdentityCheck(tc.gitName, tc.gitEmail)
+			if got.OK != tc.wantOK {
+				t.Fatalf("gitIdentityCheck(%q, %q).OK = %v, want %v", tc.gitName, tc.gitEmail, got.OK, tc.wantOK)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if !tc.wantOK && got.Hint == "" {
+				t.Fatal("a failing git identity check must carry a hint with the fix")
+			}
+		})
+	}
+}
+
+// The figma row is parsed from `claude mcp list`, whose health check is the same
+// view a session gets (the per-session --mcp-config is additive, not exclusive).
+// "Connected" doubles as the access check: an unauthenticated remote figma server
+// reports "Needs authentication", never "Connected".
+func TestFigmaMcpCheck(t *testing.T) {
+	// Real `claude mcp list` output shape, figma via the Claude Code plugin.
+	healthy := "Checking MCP server health…\n\n" +
+		"chrome-devtools: npx chrome-devtools-mcp@1.6.0 - ✔ Connected\n" +
+		"plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected\n" +
+		"jira-atlassian: uvx mcp-atlassian - ✔ Connected"
+
+	for _, tc := range []struct {
+		name, out, wantDetail, wantHint string
+		err                             error
+		wantOK                          bool
+	}{
+		{name: "plugin connected", out: healthy, wantOK: true, wantDetail: "plugin:figma:figma"},
+		{
+			name:       "needs authentication",
+			out:        "plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ⚠ Needs authentication",
+			wantOK:     false,
+			wantDetail: "Needs authentication",
+			wantHint:   "/mcp",
+		},
+		{
+			name:       "failed to connect",
+			out:        "figma: https://mcp.figma.com/mcp (HTTP) - ✘ Failed to connect",
+			wantOK:     false,
+			wantDetail: "Failed to connect",
+			wantHint:   "/mcp",
+		},
+		{
+			name:       "no figma server",
+			out:        "chrome-devtools: npx chrome-devtools-mcp@1.6.0 - ✔ Connected",
+			wantOK:     false,
+			wantDetail: "no figma server",
+			wantHint:   "claude mcp add",
+		},
+		{
+			// Only the server NAME may match: a command line that mentions figma (a
+			// wrapper script, a proxy) is not a figma server.
+			name:       "figma only in the command",
+			out:        "designproxy: npx figma-proxy - ✔ Connected",
+			wantOK:     false,
+			wantDetail: "no figma server",
+		},
+		{
+			name:       "claude mcp list fails",
+			out:        "some error output",
+			err:        errors.New("exit status 1"),
+			wantOK:     false,
+			wantDetail: "`claude mcp list` failed",
+		},
+		{
+			// Two figma entries where one is healthy: the connected one wins — the
+			// stale/broken duplicate shouldn't fail a working setup.
+			name: "one of two connected",
+			out: "figma-old: npx old-figma-mcp - ✘ Failed to connect\n" +
+				"plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected",
+			wantOK:     true,
+			wantDetail: "plugin:figma:figma",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := figmaMcpCheck(tc.out, tc.err)
+			if got.OK != tc.wantOK {
+				t.Fatalf("figmaMcpCheck().OK = %v, want %v (detail: %s)", got.OK, tc.wantOK, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Fatalf("Detail = %q, want it to mention %q", got.Detail, tc.wantDetail)
+			}
+			if tc.wantHint != "" && !strings.Contains(got.Hint, tc.wantHint) {
+				t.Fatalf("Hint = %q, want it to mention %q", got.Hint, tc.wantHint)
+			}
+			if !tc.wantOK && got.Hint == "" {
+				t.Fatal("a failing figma check must carry a Hint with the fix")
+			}
+		})
+	}
+}
+
+// A Finder-launched .app inherits NO TERM (launchd sets none — only a shell does),
+// so `claude` saw a capability-less terminal and emitted plain text: the embedded
+// xterm rendered black-and-white. Under `wails dev` the launching shell's TERM leaked
+// in, which is why it only reproduced in the packaged app. withGuiPath() must declare
+// the terminal itself so both paths behave identically.
+func TestWithGuiPathDeclaresColorTerminal(t *testing.T) {
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+
+	get := func(env []string, key string) (string, bool) {
+		var val string
+		var found bool
+		// Last assignment wins, matching how exec applies a duplicated env key.
+		for _, e := range env {
+			if strings.HasPrefix(e, key+"=") {
+				val, found = strings.TrimPrefix(e, key+"="), true
+			}
+		}
+		return val, found
+	}
+
+	t.Run("sets TERM and COLORTERM when the parent has none", func(t *testing.T) {
+		os.Unsetenv("TERM")
+		os.Unsetenv("COLORTERM")
+		env := withGuiPath()
+		if term, ok := get(env, "TERM"); !ok || term != "xterm-256color" {
+			t.Fatalf("TERM = %q (found=%v), want xterm-256color", term, ok)
+		}
+		if ct, ok := get(env, "COLORTERM"); !ok || ct != "truecolor" {
+			t.Fatalf("COLORTERM = %q (found=%v), want truecolor", ct, ok)
+		}
+	})
+
+	// Under `wails dev` the shell's TERM is inherited. A dumb/unset-capability value
+	// must not survive, or dev and packaged would render differently.
+	t.Run("overrides an inherited TERM rather than passing it through", func(t *testing.T) {
+		t.Setenv("TERM", "dumb")
+		env := withGuiPath()
+		if term, _ := get(env, "TERM"); term != "xterm-256color" {
+			t.Fatalf("inherited TERM=dumb survived as %q", term)
+		}
+		for _, e := range env {
+			if e == "TERM=dumb" {
+				t.Fatal("stale TERM=dumb still present in env")
+			}
+		}
+	})
+
+	// NO_COLOR overrides TERM entirely, so a user who exports it for their shell would
+	// get a monochrome embedded terminal with no indication why.
+	t.Run("drops an inherited NO_COLOR", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		env := withGuiPath()
+		if _, ok := get(env, "NO_COLOR"); ok {
+			t.Fatal("NO_COLOR survived into the child env; the terminal would be monochrome")
+		}
+	})
+}
+
+// The orphan this guards against: a `qar run` started at 09:14:51 outlived the
+// 09:23:59 app quit, which logged "0 session group(s) reaped", and was still
+// running four days later holding a Chrome, an esbuild service and an ffmpeg.
+// shutdown reaped only the session and the PTY; the run was never in the list.
+func TestLivePidsIncludesInFlightRun(t *testing.T) {
+	a := NewApp()
+	if got := a.livePids(); len(got) != 0 {
+		t.Fatalf("fresh App livePids() = %v, want none", got)
+	}
+
+	// A reserved-but-unstarted run has no Process yet (streamCmd claims the slot
+	// before Start), so it must contribute no pid rather than panicking.
+	a.runMu.Lock()
+	a.runCmd = &exec.Cmd{}
+	a.runMu.Unlock()
+	if got := a.livePids(); len(got) != 0 {
+		t.Fatalf("livePids() with a reserved run = %v, want none", got)
+	}
+
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting stand-in run: %v", err)
+	}
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	}()
+	a.runMu.Lock()
+	a.runCmd = cmd
+	a.runMu.Unlock()
+
+	got := a.livePids()
+	if len(got) != 1 || got[0] != cmd.Process.Pid {
+		t.Fatalf("livePids() = %v, want [%d] (the in-flight run)", got, cmd.Process.Pid)
+	}
+}
+
+// Quitting with a run in flight must actually kill it. Before the fix the process
+// survived shutdown and was reparented to init.
+func TestShutdownReapsInFlightRun(t *testing.T) {
+	a := NewApp()
+	// Long enough that a natural exit can never be mistaken for a successful kill.
+	cmd := exec.Command("sleep", "120")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting stand-in run: %v", err)
+	}
+	pid := cmd.Process.Pid
+	// Reap in the background: Wait blocks while the process is alive, so calling it
+	// inline would stall until `sleep` exits on its own and report a pass no matter
+	// what shutdown did. Waiting off-thread turns "did it die" into a race we can
+	// bound, and reaps the child so it never lingers as a zombie.
+	exited := make(chan struct{})
+	go func() {
+		_, _ = cmd.Process.Wait()
+		// Mimic streamCmd's reader goroutine, which clears a.runCmd once the process
+		// is reaped. Without this the test still passes, but only because
+		// terminateRun's poll loop never sees the clear and burns its whole 3s window
+		// down to the last-resort SIGKILL — so the SIGTERM path this PR argues is
+		// load-bearing (it is what disposes of the detached Chromium) would go
+		// unexercised, and a regression to a straight SIGKILL would stay green.
+		a.runMu.Lock()
+		if a.runCmd == cmd {
+			a.runCmd = nil
+		}
+		a.runMu.Unlock()
+		close(exited)
+	}()
+	defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
+	a.runMu.Lock()
+	a.runCmd = cmd
+	a.runMu.Unlock()
+
+	// No session and no PTY, so StopSession is a no-op and never emits on a nil ctx.
+	start := time.Now()
+	a.shutdown(context.Background())
+	elapsed := time.Since(start)
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("run pid %d still alive after shutdown — it would be orphaned to init", pid)
+	}
+
+	// SIGTERM alone should end `sleep` well inside the 1.5s escalation window. A
+	// shutdown that takes longer means the poll loop ran to its deadline and the
+	// process died to a SIGKILL instead — the regression this test exists to catch.
+	if elapsed >= 1500*time.Millisecond {
+		t.Fatalf("shutdown took %v — the run died to SIGKILL escalation, not the SIGTERM that disposes of the browser", elapsed)
 	}
 }
 

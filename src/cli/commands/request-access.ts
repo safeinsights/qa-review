@@ -23,6 +23,51 @@ export interface RequestAccessOptions {
     git?: GitRunner
 }
 
+// `git diff --cached --quiet` exits 0 when the index matches HEAD (nothing staged)
+// and 1 when there are staged changes. Any other failure is unknowable here, so
+// report "something is staged" and let the commit surface the real error.
+async function nothingStaged(git: GitRunner): Promise<boolean> {
+    try {
+        await git(['diff', '--cached', '--quiet'])
+        return true
+    } catch {
+        return false
+    }
+}
+
+// git writes the useful part of a failure ("Please tell me who you are", a hook's
+// output) to stderr, which execFile hangs off the error rather than putting in
+// .message. Without this the user sees a bare "Command failed: git commit".
+function gitErrorText(e: unknown): string {
+    if (e instanceof Error) {
+        const stderr = (e as { stderr?: string }).stderr
+        return (stderr || e.message).trim()
+    }
+    return String(e)
+}
+
+// There is deliberately NO up-front `git config user.name/user.email` check here:
+// unset config alone doesn't stop git — with the default user.useConfigOnly=false it
+// auto-detects `<username>@<hostname>` and commits fine, so a pre-check would lock
+// out users whose commits work. git only refuses when auto-detection ALSO fails (or
+// useConfigOnly is set), and that refusal is recognizable from its stderr — so the
+// fix instructions ride on the failure that actually happens.
+const identityFailure =
+    /author identity unknown|please tell me who you are|empty ident|unable to auto-detect email/i
+
+export function commitFailureMessage(gitError: string): string {
+    const base = `Could not commit your keyring entry: ${gitError}`
+    if (!identityFailure.test(gitError)) return base
+    return [
+        base,
+        '',
+        'git has no author identity it can use. Set one with:',
+        '  git config --global user.name "Your Name"',
+        '  git config --global user.email "you@example.com"',
+        'Then run this again.',
+    ].join('\n')
+}
+
 // Create-or-reuse the identity, add it to the keyring, and push the access branch.
 // Every step is idempotent: re-running for the same person reuses the same key, the
 // same keyring entry, and the same branch rather than producing a second request.
@@ -61,11 +106,21 @@ export async function requestAccess(
         await git(['checkout', '-b', branch])
     }
     await git(['add', 'config/keyring.json'])
-    // Nothing to commit on a re-run (the entry is already there); that is fine.
-    try {
-        await git(['commit', '-m', `Add ${opts.name} to keyring`])
-    } catch {
-        // no-op: the keyring entry was already committed on a previous attempt
+    // A failing `git commit` is NOT automatically "already committed". It also fails
+    // when user.email/user.name are unset, when a hook rejects it, or when the index
+    // is locked — and swallowing those pushed a branch identical to main, so the PR
+    // then died with GitHub's opaque "No commits between main and <branch>" and
+    // `open-access-pr` could never fix it (it only retries `gh pr create`).
+    //
+    // `diff --cached --quiet` exits 0 when nothing is staged, so it is the authority
+    // on which case this is: nothing staged means the entry really was committed
+    // earlier, and only then is skipping the commit correct.
+    if (!(await nothingStaged(git))) {
+        try {
+            await git(['commit', '-m', `Add ${opts.name} to keyring`])
+        } catch (e) {
+            throw new Error(commitFailureMessage(gitErrorText(e)))
+        }
     }
     await git(['push', '-u', 'origin', branch])
     // Return to the user's prior branch so a later `qar sync` doesn't get stuck
@@ -102,7 +157,7 @@ export async function resolveRequestAccessName(
 // `gh` (falling back to printed instructions if gh is unavailable).
 export async function requestAccessCommand(opts: Record<string, string>): Promise<void> {
     const name = await resolveRequestAccessName(opts)
-    const email = opts.email ?? (await safeGitConfigEmail())
+    const email = opts.email || (await safeGitConfigEmail())
     const date = new Date().toISOString().slice(0, 10)
     const { branch, created } = await requestAccess({ dir: configDir(), name, email, date })
     console.log(

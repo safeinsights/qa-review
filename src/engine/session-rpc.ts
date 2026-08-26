@@ -27,7 +27,15 @@ export interface CreateStudyRequest {
     action: 'create-study'
 }
 
-export type SessionAction = LoginRequest | CreateUserRequest | CreateStudyRequest
+// Sign in as an arbitrary (throwaway) account and stop at the second-factor code
+// entry, so the caller can drive the auth screens' failure states by hand.
+export interface SignInRequest {
+    action: 'signin'
+    email: string
+    password: string
+}
+
+export type SessionAction = LoginRequest | CreateUserRequest | CreateStudyRequest | SignInRequest
 
 export interface SessionRequest {
     id: string
@@ -42,7 +50,11 @@ export interface SessionResult {
     role?: Role | InvitedRole
     userId?: string
     email?: string
+    // The created account's base32 TOTP secret. It always crosses this boundary;
+    // whether it reaches stdout is gated by `session-create-user --print-mfa-secret`.
+    mfaSecret?: string
     studyId?: string
+    atMfa?: boolean
 }
 
 // Write a request atomically and return its id so the caller can match the result.
@@ -112,4 +124,25 @@ function readSessionResult(): SessionResult | null {
 // collisions across sequential requests just need to differ, which this guarantees.
 export function newRequestId(): string {
     return `${process.pid}-${Date.now()}`
+}
+
+// The client half of the RPC, shared by every `qar session-*` command: write the
+// request, wait for the matching result, and turn a timeout into the standard
+// "is a `qar session` running?" error. `doing` is the verb phrase for that message
+// (e.g. 'log in'). Interpreting ok/error stays with each command — those messages
+// differ per action.
+export async function dispatchSessionAction(
+    action: SessionAction,
+    timeoutMs: number,
+    doing: string
+): Promise<SessionResult> {
+    const id = newRequestId()
+    writeSessionRequest(id, action)
+    const result = await waitForSessionResult(id, timeoutMs)
+    if (!result) {
+        throw new Error(
+            `timed out waiting for the session to ${doing} — is a \`qar session\` running?`
+        )
+    }
+    return result
 }

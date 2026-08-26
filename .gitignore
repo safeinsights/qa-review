@@ -9,6 +9,11 @@ gui/build/*.zip
 .env.local
 config/settings.local.json
 config/age-identity.txt
+# Extracted private keys — `qar get-secret --name <ROLE>_RESULTS_PRIVATE_KEY_<ENV>`
+# writes a real results-decryption PEM to wherever you redirect it. Unlike the .png
+# case below, a blanket extension rule is safe here: no .pem is tracked, and this repo
+# has no legitimate reason to commit one.
+*.pem
 *.log
 .worktrees/
 .DS_Store

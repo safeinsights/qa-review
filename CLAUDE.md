@@ -85,7 +85,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | sync | session | jira-comment |
+  request-access | rekey | set-secret | get-secret | sync | session | jira-comment |
   jira-delete-comment`.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
   See "Posting Jira comments with inline screenshots" below for why this exists
@@ -158,6 +158,16 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   is treated as absent, not as an explicit name — the GUI sends one). Re-running is
   safe and idempotent: the same key reuses its keyring entry and its branch, and an
   already-open PR is reported rather than duplicated.
+  A failing `git commit` is **fatal** instead of being swallowed as "already
+  committed": the old catch read every commit failure as a no-op, so a commit git
+  refused pushed a branch with NOTHING on it and `gh pr create` died with `No
+  commits between main and access/<name>`, which `open-access-pr` could not repair
+  (it only retries the create). `git diff --cached --quiet` now decides which case
+  it is (nothing staged = genuinely already committed), and an identity-shaped
+  failure gets the exact `git config` commands appended (`commitFailureMessage`).
+  There is deliberately NO up-front `git config` gate — unset config alone doesn't
+  stop git (it auto-detects `<username>@<hostname>` and commits with a warning), so
+  a pre-check would lock out users whose commits work fine.
 - `pnpm qar access-status` — report where your access request stands, as JSON:
   `no-identity`, `no-branch`, `branch-no-pr`, `pr-open`, `pr-closed`,
   `merged-awaiting-rekey`, `ready`. Keyed on the local age **public key** (stored
@@ -169,11 +179,25 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   fields come back empty and the branch falls back to `git config user.name`.
 - `pnpm qar open-access-pr` — open (or report) the PR for an already-pushed access
   branch. This is the retry path for the real state where the branch push succeeded
-  but PR creation didn't, which nothing could previously re-drive.
+  but PR creation didn't, which nothing could previously re-drive. It special-cases
+  GitHub's `No commits between …` rejection — the one create failure retrying can
+  never fix — and tells the user to set their git identity and re-run
+  `request-access` instead of relaying the raw GraphQL error. That check runs only
+  AFTER the "is a PR already open?" lookup, so a healthy already-open PR still wins.
 - `pnpm qar rekey` — re-encrypts all secrets to the current keyring and updates
   `keyring.lock`. Used by the reviewer when adding a recipient, and after revoking.
 - `pnpm qar set-secret --key <VAR> --value <v>` — encrypts one secret to all
   recipients (the GUI Settings "save secret" path).
+- `pnpm qar get-secret --name <VAR> [--force]` — the READ half: prints one decrypted
+  value to stdout. The var is named with **`--name`, not `--key`** — `BOOLEANS` in
+  `bin/qar.ts` is ONE list shared by every subcommand and `key` is already in it
+  (`fix-account`'s valueless switch), so `--key FOO` would parse to `true`, drop
+  `FOO`, and look up a var literally named "true" — a silent wrong answer, not an
+  error. Writes NO trailing newline, so a PEM stays byte-exact, and refuses to print
+  to a TTY without `--force` (keeps private keys out of scrollback):
+  `qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem`.
+  `*.pem` is gitignored, but delete the extracted file when done anyway — it's a
+  live results-decryption key on disk.
 - `pnpm qar sync` — fast-forward-only `git pull` (distributes suites + keyring +
   secrets). Skips when the working copy is dirty or diverged; the GUI's "Reset to
   clean & sync" discards only **uncommitted** edits (keeps local commits).
@@ -277,6 +301,52 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
+## The Claude command sandbox blocks three things QA sessions need
+
+Claude Code runs Bash in a sandbox that confines both **network egress** and
+**filesystem writes**. That sandbox is what a validation session actually trips over,
+and all three failures look like broken tooling rather than a permissions boundary —
+so each one gets retried, guessed at, or reported as a bug in `qar`:
+
+- **`qar jira-comment` → `fetch failed`.** `openstax.atlassian.net` was not on the
+  allowlist. Node's `fetch` rejects with a bare `TypeError: fetch failed` for *every*
+  transport failure, naming neither host nor cause. `jiraFetch()`
+  (`src/engine/jira.ts`) now wraps all four Jira calls and rewrites that into
+  "Could not reach `<host>` … add it to `sandbox.network.allowedDomains`".
+- **`gh` → `x509: failed to verify certificate: OSStatus -26276`.** Not auth, not
+  network: `gh` is a Go binary that verifies TLS through the macOS keychain, and the
+  sandbox blocks the `com.apple.trustd.agent` Mach service it needs.
+  `sandbox.enableWeakerNetworkIsolation` re-opens exactly that service.
+- **`qar study-state` → `Failed to create a ProcessSingleton for your profile
+  directory`.** Misleading — no other Chromium held the profile. The real lines are
+  above it: `Failed to create socket directory` and `open …/Chrome/Crashpad/
+  settings.dat: Operation not permitted`. It launches its OWN Playwright Chrome (it
+  needs an admin token, so it does not reuse the session browser), and that browser
+  writes outside the sandbox's writable set.
+
+`.claude/settings.json` carries the config. Two things to know about it:
+
+- The **network allowlist is `sandbox.network.allowedDomains`**. Hosts also arrive
+  from `WebFetch(domain:…)` permission rules, which is why a host can work for
+  whoever accumulated that rule in their **gitignored** `.claude/settings.local.json`
+  and fail for everyone else. Put shared hosts in the committed file. Wildcards are
+  supported: `*.qa.safeinsights.org` covers `app.qa` AND every `pr<N>.qa` preview
+  host from `prBaseUrl()` — a bare `app.qa.safeinsights.org` entry would make QA
+  runs work while PR-preview runs fail with the same unnamed transport error. The
+  list also carries every non-Jira host the engine reaches via Node `fetch`
+  (currently `api.mail.tm`, the signup suite's disposable-inbox API) — a new
+  outbound host in the engine needs a matching entry here.
+- **`sandbox.excludedCommands` did NOT take effect.** The key is schema-valid and has
+  listed `qar`/`pnpm qar`/`gh` since the file was created, yet sandboxed `gh` still
+  failed the keychain check while its host WAS allowlisted — proof the command ran
+  sandboxed anyway. Treat exclusion as unreliable and make the sandboxed path work;
+  don't delete the key, but don't count on it either.
+
+Sandbox settings are read at **session start**, so an edit here changes nothing until
+a new session. `qar study-state` and `pnpm vitest`/`pnpm typecheck` still need
+`dangerouslyDisableSandbox` — vitest because `node_modules` symlinks into the `.app`
+(read-only), which surfaces as `EPERM … mkdir node_modules/.vite-temp`.
+
 ## PATH order decides which `node` npx runs
 
 `guiPathDirs` is a **priority ranking**, not a set — its order picks which of
@@ -348,7 +418,7 @@ runner there is no config to read, so it polls with NO deadline. Note that
 which `toPass` never consults.
 
 So `src/engine/run.ts` gives every **`ctx.step()`** a wall-clock deadline
-(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Two details are
+(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Three details are
 deliberate:
 
 - It wraps the action INSIDE `ctx.step()`, not `step.run(ctx)`. `ctx.step`'s own
@@ -358,9 +428,30 @@ deliberate:
 - The abandoned body gets a `.catch()`. Playwright has no cancellation, so it
   keeps polling until teardown and would otherwise land as an **unhandled
   rejection** after the step was already recorded failed.
+- Because that body is not cancelled, it keeps driving the SAME `page` the retry
+  re-runs against, so a zombie attempt's clicks could land underneath the live one.
+  **`ctx.page` is guarded, so suites do not have to think about this.** It is a
+  Proxy bound to the generation the body read it at; once the deadline fires, every
+  action through it — and through any locator or frame reached from it — throws
+  `StepAbandonedError` rather than touching the browser. A plain body written with
+  no awareness of any of this is already safe, which is the point: a rule that says
+  "remember to check a flag" is one the next helper forgets.
+
+  `ctx.signal.aborted` is still there for a body that would rather leave a long
+  loop quietly than by throwing.
+
+  The engine's own bookkeeping — screenshot, `currentUrl`, console drain — reads the
+  RAW page rather than `ctx.page`, so a timed-out step still records the
+  diagnostics that make it debuggable.
 
 The message contains the word `timeout`, so `categorize()` files it as
 `environment`, matching how a plain Playwright timeout already reads.
+
+**This bounds `ctx.step()` bodies and nothing else.** `openBrowser` and
+`deps.login` run OUTSIDE the step loop and remain unbounded, so a Clerk sign-in
+that hangs still reproduces the original symptom — no failure row, no screenshot,
+the run frozen. Those paths need their own deadline; this section does not cover
+them.
 
 **`QAR_STEP_TIMEOUT_MS`** overrides the 5-minute default; `0` disables the
 deadline (an escape hatch for hand-debugging a parked step). A non-numeric or
@@ -424,12 +515,20 @@ every `qar` call in the packaged app); quoted it becomes one nonexistent command
 name. Split into one path per var, each expansion is a single word and quotes
 correctly. Don't recombine them.
 
-**The shim does NOT fall back to `pnpm` when `QAR_REPO_DIR` is set but `QAR_NODE`
-isn't.** That combination means a PACKAGED app whose `Resources/engine/qar.bundle.mjs`
-wasn't found (`resourcesDir()` returned `""`), and the `pnpm qar` fallback is for a
-DEV CHECKOUT — there, `node_modules` is a symlink into the `.app`, so pnpm dead-ends
-on a node-version or pinned-pnpm error that names nothing real. The shim exits 127
-with the actual cause instead. `withGuiPath()` correspondingly STRIPS inherited
+**`QAR_REPO_DIR` set without `QAR_NODE`/`QAR_BUNDLE` is ambiguous, and the shim
+resolves it by looking for `bin/qar.ts` in that dir.** The combination has two
+causes with opposite fixes: (a) a DEV CHECKOUT pinning the repo explicitly — both
+`wails dev` (where `resourcesDir()` is `""` by design) and `scripts/approve-access.sh`,
+which sets `QAR_REPO_DIR="$REPO"` to target a clone; and (b) a PACKAGED app whose
+`Resources/engine/qar.bundle.mjs` wasn't found. `pnpm qar` is right for (a) and
+cannot work for (b) — there `node_modules` is a symlink into the `.app`, so pnpm
+dead-ends on a node-version or pinned-pnpm error that names nothing real.
+`bin/qar.ts` is the engine SOURCE: present in every checkout, never shipped in the
+`.app` (`Resources/engine/` holds only the bundle + `node_modules`), so its presence
+separates the two. The shim exits 127 with the real cause only for (b).
+Treating the var alone as "packaged" broke `approve-access.sh` in an ordinary dev
+checkout (`tests/cli/qar-shim.test.ts` pins this).
+`withGuiPath()` correspondingly STRIPS inherited
 `QAR_NODE`/`QAR_BUNDLE` (it already stripped `PATH`/`QAR_REPO_DIR`): `QAR_REPO_DIR` is
 appended unconditionally while the pair is packaged-only, so without stripping, the
 two halves of the shim's contract can disagree.
@@ -548,8 +647,10 @@ through the issue attachment endpoint only.
 - `pnpm qar open-access-pr` — open/report the PR for an already-pushed access branch
 - `pnpm qar rekey` — re-encrypt all secrets to the current keyring (reviewer step)
 - `scripts/approve-access.sh <pr#>` — reviewer one-shot: check out an access PR's
-  branch, `qar rekey`, push, and merge (honors `QAR_REPO_DIR`; runs the engine via
-  the `bin/qar` shim)
+  branch, `qar rekey`, push, approve, and merge (honors `QAR_REPO_DIR`; runs the
+  engine via the `bin/qar` shim). The approve step satisfies the org `require-pr`
+  ruleset (1 review on the default branch, not admin-bypassable); since GitHub
+  forbids self-approval, a PR you opened yourself still needs a second reviewer
 - `scripts/revoke-access.sh "<name>" [--no-pr] [--yes]` — remove a user from the
   keyring, rekey to the survivors, and open a revocation PR
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)

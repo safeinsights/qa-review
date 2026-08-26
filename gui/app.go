@@ -87,12 +87,31 @@ func withGuiPath() []string {
 		if strings.HasPrefix(e, "CLAUDE_CODE_") {
 			continue
 		}
+		// Drop inherited terminal-capability vars; we set our own below. NO_COLOR is
+		// dropped too — it overrides TERM entirely, so a user who exports it for their
+		// shell would otherwise get a monochrome embedded terminal with no way to tell
+		// why. The xterm we render into is always color-capable regardless.
+		if strings.HasPrefix(e, "TERM=") || strings.HasPrefix(e, "COLORTERM=") ||
+			strings.HasPrefix(e, "NO_COLOR=") {
+			continue
+		}
 		out = append(out, e)
 	}
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
 	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
 	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
 	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// Declare the terminal we actually render into. A Finder-launched .app inherits
+	// NO TERM (launchd sets none, only a shell does), so `claude` saw a terminal with
+	// no declared capabilities and emitted plain text — the embedded xterm rendered
+	// black-and-white. Under `wails dev` the launching shell's TERM leaked in, which
+	// is why this only ever reproduced in the packaged app. Setting it unconditionally
+	// (paired with the strip above) makes dev and packaged behave identically instead
+	// of depending on how the app happened to be started.
+	//
+	// xterm.js implements xterm-256color and supports truecolor SGR, so both values
+	// describe the real frontend rather than overstating it.
+	out = append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 	out = append(out, qarBinEnv()...)
 	// Give `claude` a bigger MCP startup budget than its 30s default. A COLD
 	// `uvx mcp-atlassian` builds an ephemeral venv and installs ~100 packages before
@@ -218,8 +237,8 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// shutdown runs when the app is quitting — tear down any live authoring session
-// so we never orphan a Chrome (remote-debugging) or claude process.
+// shutdown runs when the app is quitting — tear down everything the app owns, so
+// we never orphan a Chrome (remote-debugging), a claude process, or a suite run.
 //
 // teardownSession() only SIGTERMs; the SIGKILL escalation runs in goroutines that
 // fire seconds later (escalateKill, pty.stop). On quit the process exits first, so
@@ -230,15 +249,28 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	// Capture the PIDs BEFORE teardown: it clears sessionCmd and closes the PTY
 	// immediately, so app state stops being a usable signal the moment it returns.
-	pids := a.sessionPids()
+	pids := a.livePids()
+	// Stop the RUN gracefully BEFORE the group kills below. The engine handles
+	// SIGTERM (run.ts onStop) and closes its own Playwright browser, which is the
+	// only thing that reliably disposes of that browser: Playwright launches Chrome
+	// DETACHED, so the browser leads its own process group and a kill aimed at the
+	// engine's group never reaches it (same for the screencast ffmpeg). A no-op
+	// when no run is in flight.
+	a.terminateRun()
 	a.StopSession()
 	killGroupsNow(pids)
-	logDiag("app", "shutdown complete (%d session group(s) reaped)", len(pids))
+	logDiag("app", "shutdown complete (%d process group(s) reaped)", len(pids))
 }
 
-// sessionPids returns the PIDs of the live session processes (the engine/browser
-// session and the claude PTY), each a process-group leader.
-func (a *App) sessionPids() []int {
+// livePids returns the PIDs of every process this app owns that must not outlive
+// it: the engine/browser session, the claude PTY, and the in-flight suite run.
+// Each is spawned with Setpgid, so each is its own process-group leader.
+//
+// The RUN belongs here even though it is not session state and StopSession does
+// not touch it. Leaving it out is how a `qar run` started at 09:14:51 survived the
+// 09:23:59 quit that logged "0 session group(s) reaped", and was still alive four
+// days later still holding a Chrome, an esbuild service and an ffmpeg recorder.
+func (a *App) livePids() []int {
 	var pids []int
 	a.sessionMu.Lock()
 	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
@@ -248,6 +280,14 @@ func (a *App) sessionPids() []int {
 	if pid := a.pty.pid(); pid != 0 {
 		pids = append(pids, pid)
 	}
+	// streamCmd reserves the run slot with a placeholder &exec.Cmd{} before Start,
+	// so a tracked run can legitimately have no Process yet — hence the nil check
+	// rather than assuming a non-nil runCmd has been started.
+	a.runMu.Lock()
+	if a.runCmd != nil && a.runCmd.Process != nil {
+		pids = append(pids, a.runCmd.Process.Pid)
+	}
+	a.runMu.Unlock()
 	return pids
 }
 
@@ -937,8 +977,14 @@ func (a *App) streamCmd(cmd *exec.Cmd, label string, track bool) error {
 		a.emitSpawnFailure(label, err)
 		return err
 	}
-	// Own process group so StopRun can signal the engine AND its children (the
-	// Chromium it launches), not just the parent.
+	// Own process group so StopRun can signal the engine and the helpers it keeps
+	// in-group (the esbuild service), not just the parent.
+	//
+	// It does NOT cover the Playwright browser: Playwright spawns Chrome detached,
+	// so the browser is its own group leader (observed: engine pgid 95893, its
+	// Chrome pgid 95895), as is the screencast ffmpeg. Those are disposed of by the
+	// engine's own SIGTERM handler, which is why terminateRun signals TERM first and
+	// only escalates to KILL — going straight to KILL leaves the browser behind.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		// Surface spawn failures (e.g. program not found) as a visible line + a
@@ -1275,11 +1321,32 @@ func (a *App) Sync(cwd string) (string, error) {
 	if strings.TrimSpace(status) != "" {
 		return "skipped-dirty", nil
 	}
-	if _, err := a.git(dir, "pull", "--ff-only"); err != nil {
+	// `-c pull.rebase=false` is required, not cosmetic: with a user's
+	// `pull.rebase true`, `pull --ff-only` runs the REBASE path and dies on config
+	// states that are not divergence at all ("Cannot rebase onto multiple
+	// branches"). Pinning it keeps --ff-only a genuine fast-forward check.
+	out, err := a.git(dir, "-c", "pull.rebase=false", "pull", "--ff-only")
+	if err != nil {
+		// Only a true non-fast-forward is recoverable by resetting. Reporting a
+		// broken upstream ref or unusable config as "diverged" offers a Reset
+		// button that reruns the same failure and never clears its own banner.
+		if isGitConfigFailure(out) {
+			return "failed: " + firstLines(out, 2), nil
+		}
 		return "skipped-diverged", nil
 	}
 	// Newly-pulled .ts suites are loaded directly by the engine (tsx) — no compile step.
 	return "synced", nil
+}
+
+// gitConfigFailureRE matches pull failures that resetting the working copy cannot
+// fix: a stale/missing upstream ref, no tracking branch, or rebase config git
+// refuses to act on. Mirrors isConfigFailure in src/cli/commands/sync.ts.
+var gitConfigFailureRE = regexp.MustCompile(
+	`(?i)cannot rebase onto multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
+
+func isGitConfigFailure(out string) bool {
+	return gitConfigFailureRE.MatchString(out)
 }
 
 // keyringFiles are the tracked config files that determine keyring access
@@ -1462,10 +1529,30 @@ func (a *App) Rekey(cwd string) (string, error) {
 	return string(out), nil
 }
 
+// ShareWork commits the working copy to a branch, opens a PR, and returns to a
+// synced main. It is the non-destructive half of the dirty-working-copy choice:
+// the user either shares the edits or discards them, and before this the app only
+// offered discard.
+func (a *App) ShareWork(cwd, description string) (string, error) {
+	out, err := engineCmd("share-work", "--description", description).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ResetAndSync discards ONLY uncommitted tracked edits (git restore .) — keeping
 // local commits — then runs a fast-forward Sync. Returns the Sync status string.
 func (a *App) ResetAndSync(cwd string) (string, error) {
-	if _, err := a.git(repoDir(), "restore", "."); err != nil {
+	dir := repoDir()
+	if _, err := a.git(dir, "restore", "."); err != nil {
+		return "", err
+	}
+	// `restore` ignores UNTRACKED files, so a stray file left status dirty and the
+	// banner reappeared unchanged — a Reset button that visibly did nothing. `-d`
+	// without `-x` deliberately keeps gitignored files (age identity,
+	// settings.local.json): removing those would sign the user out of their secrets.
+	if _, err := a.git(dir, "clean", "-fd"); err != nil {
 		return "", err
 	}
 	return a.Sync(cwd)
@@ -2338,6 +2425,23 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, DoctorCheck{Name: t.label, OK: true, Detail: ver})
 	}
 
+	// Advisory: without an explicit identity, git commits fall back to the
+	// auto-detected `<username>@<hostname>` — and when even that auto-detection
+	// fails, `git commit` refuses, which used to surface only much later as a
+	// pushed-but-empty access branch and a PR that failed with "No commits
+	// between main and access/<name>".
+	if toolOnPath("git") {
+		name, nameErr := runTool("git", "config", "user.name")
+		email, emailErr := runTool("git", "config", "user.email")
+		if nameErr != nil {
+			name = ""
+		}
+		if emailErr != nil {
+			email = ""
+		}
+		checks = append(checks, gitIdentityCheck(name, email))
+	}
+
 	// gh must be authenticated (PR + issue + clone flows depend on it).
 	if toolOnPath("gh") {
 		out, err := runTool("gh", "auth", "status")
@@ -2391,7 +2495,42 @@ func (a *App) RunDoctor() []DoctorCheck {
 
 	checks = append(checks, jiraCheck(a.readJiraConfig()))
 
+	// Figma MCP + access — `claude mcp list` health-checks every server claude is
+	// configured with (the same set a session inherits alongside its --mcp-config),
+	// so one shell-out answers both "is a figma server set up" and "is it connected".
+	if toolOnPath("claude") {
+		out, err := runToolFull("claude", "mcp", "list")
+		checks = append(checks, figmaMcpCheck(out, err))
+	}
+
 	return checks
+}
+
+// gitIdentityCheck reports whether git has an author identity configured. Unset
+// config does NOT usually stop a commit — with the default user.useConfigOnly=false,
+// git auto-detects `<username>@<hostname>` and commits with a warning — so this row
+// is advisory: it flags the poor attribution a fallback identity produces, not a
+// guaranteed failure. It is kept separate from RunDoctor (which shells out) so the
+// missing/partial/complete cases are testable without a git config on the machine
+// running the tests.
+//
+// `git config user.name` exits non-zero when the key is unset, so callers pass "" for
+// both the error and empty-output cases — they are the same condition.
+func gitIdentityCheck(name, email string) DoctorCheck {
+	const label = "git identity"
+	const hint = "Run `git config --global user.name \"Your Name\"` and `git config --global user.email \"you@example.com\"`."
+	const docURL = "https://docs.github.com/en/get-started/getting-started-with-git/setting-your-username-in-git"
+
+	name, email = strings.TrimSpace(name), strings.TrimSpace(email)
+	switch {
+	case name == "" && email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name or user.email — commits fall back to <username>@<hostname>", Hint: hint, DocURL: docURL}
+	case name == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.name (email is " + email + ")", Hint: hint, DocURL: docURL}
+	case email == "":
+		return DoctorCheck{Name: label, OK: false, Detail: "no user.email (name is " + name + ")", Hint: hint, DocURL: docURL}
+	}
+	return DoctorCheck{Name: label, OK: true, Detail: name + " <" + email + ">"}
 }
 
 // jiraCheck validates that validation verdicts can actually be posted. The token is
@@ -2521,6 +2660,73 @@ func jiraMissingPermissions(cfg JiraCfg) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+// figmaMcpCheck reports whether a Figma MCP server is configured for `claude` and
+// actually connected, from the output of `claude mcp list`. Sessions launch claude
+// with a per-session --mcp-config, but that file is ADDITIVE, not exclusive — user-
+// level servers (including the Figma plugin's) load alongside it, so `claude mcp
+// list`, which health-checks every configured server, sees the same Figma server a
+// session gets. "Connected" on the remote Figma server also proves the OAuth grant
+// is live — an unauthenticated server reports "Needs authentication" instead — so
+// one probe covers both "is the MCP working" and "do we have Figma access".
+//
+// Kept separate from RunDoctor (which shells out) so the parse/verdict cases are
+// testable without a claude install or a Figma account.
+func figmaMcpCheck(out string, err error) DoctorCheck {
+	const name = "Figma MCP"
+	const docURL = "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server"
+
+	if err != nil {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "`claude mcp list` failed: " + firstLines(out, 3),
+			Hint:   "Fix the Claude Code install first (see its row above), then re-run the doctor.",
+		}
+	}
+
+	// Server lines look like:
+	//   plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected
+	//   chrome-devtools: npx chrome-devtools-mcp@latest - ✘ Failed to connect
+	// Match on the server NAME (before the first ": ") so an endpoint or command that
+	// merely mentions figma (a wrapper script path, a proxy) doesn't count as one.
+	type server struct{ name, status string }
+	var figmas []server
+	for _, ln := range strings.Split(out, "\n") {
+		dash := strings.LastIndex(ln, " - ")
+		colon := strings.Index(ln, ": ")
+		if dash < 0 || colon < 0 || colon > dash {
+			continue
+		}
+		sName := strings.TrimSpace(ln[:colon])
+		if !strings.Contains(strings.ToLower(sName), "figma") {
+			continue
+		}
+		figmas = append(figmas, server{name: sName, status: strings.TrimSpace(ln[dash+len(" - "):])})
+	}
+
+	if len(figmas) == 0 {
+		return DoctorCheck{
+			Name: name, OK: false,
+			Detail: "no figma server in `claude mcp list`",
+			Hint: "Add the Figma MCP server to Claude Code: `claude mcp add --transport http figma https://mcp.figma.com/mcp`, " +
+				"then authenticate it with `/mcp` inside a claude session.",
+			DocURL: docURL,
+		}
+	}
+	for _, s := range figmas {
+		// Both checkmark glyphs: the CLI emits ✔ (U+2714) but ✓ has appeared in other
+		// terminals/versions; "Connected" alone also matches in case the glyph changes.
+		if strings.Contains(s.status, "Connected") || strings.Contains(s.status, "✔") || strings.Contains(s.status, "✓") {
+			return DoctorCheck{Name: name, OK: true, Detail: s.name + " — " + s.status}
+		}
+	}
+	return DoctorCheck{
+		Name: name, OK: false,
+		Detail: figmas[0].name + " — " + figmas[0].status,
+		Hint:   "Start a `claude` session and run `/mcp` to reconnect (or re-authenticate) the figma server.",
+		DocURL: docURL,
+	}
 }
 
 const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"

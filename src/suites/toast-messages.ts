@@ -370,6 +370,7 @@ export const toastMessagesSuite: Suite = {
                     // ActivityContext that raises these toasts, so its footer is this
                     // step's readiness signal — not just "some page rendered".
                     await ctx.page.locator('.mantine-AppShell-footer').waitFor({ state: 'visible' })
+                    let restoreFailure: Error | undefined
                     try {
                         // Park the page's Date five minutes short of the eight-hour
                         // timeout. setFixedTime, NOT install()/fastForward(): it fakes
@@ -408,20 +409,38 @@ export const toastMessagesSuite: Suite = {
                         )
                         // What IS asserted is the consequence: signed out, back on the
                         // sign-in form. The 'Session Expired' toast is not, and please read
-                        // this before adding it: the tray that renders it lives INSIDE the
-                        // signed-in AppShell (app-shell.tsx mounts <Notifications /> and
-                        // <ActivityContext /> as siblings), and use-sign-out
-                        // router.replace()s away from that shell immediately, so the toast
-                        // is racing its own unmount. A check that only passes when it wins
-                        // a race is a flake, and one that passes because it lost would be
-                        // worse. Whether a signed-out user can actually READ why they were
-                        // logged out is worth a ticket, not a coin-flip assertion.
+                        // this before adding it. It is raised at the moment use-sign-out
+                        // router.replace()s to /account/signin, which swaps the signed-in
+                        // AppShell for FocusedLayout. Both mount their OWN <Notifications />
+                        // against the same module-global Mantine store, so the notice
+                        // probably does survive that swap — and "probably" is the whole
+                        // problem: nobody has watched it happen in a real browser. Asserting
+                        // unobserved behaviour across a layout swap plus a soft navigation is
+                        // how a suite acquires a flake. Watch it by hand, then assert what
+                        // you saw.
                         await ctx.page.getByLabel('Email').waitFor({ state: 'visible' })
                     } finally {
                         // Hand back a real, flowing clock. There is no uninstall, so this
                         // is the closest thing to one; without it a retry — or a jump to
                         // another step — would run eight hours in the future.
-                        await ctx.page.clock.setSystemTime(new Date()).catch(() => {})
+                        //
+                        // Recorded rather than swallowed: a failed restore is not a local
+                        // problem, it poisons every later step, which then fails for
+                        // reasons that look nothing like the cause. Stashed on ctx.state
+                        // and rethrown below only if the body itself succeeded — throwing
+                        // from `finally` would replace a real assertion failure with this
+                        // one and hide what actually broke.
+                        restoreFailure = await ctx.page.clock
+                            .setSystemTime(new Date())
+                            .then(() => undefined)
+                            .catch((cause: unknown) => cause as Error)
+                    }
+                    if (restoreFailure) {
+                        throw new Error(
+                            `could not restore the page clock (${restoreFailure.message}) — ` +
+                                'every later step would run eight hours in the future',
+                            { cause: restoreFailure }
+                        )
                     }
                 }),
         },

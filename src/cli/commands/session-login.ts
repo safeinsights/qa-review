@@ -1,4 +1,4 @@
-import { newRequestId, waitForSessionResult, writeSessionRequest } from '@/engine/session-rpc'
+import { dispatchSessionAction } from '@/engine/session-rpc'
 import type { Role } from '@/engine/types'
 
 // `qar session-login --role <r>` — trigger an on-demand login of a running
@@ -13,14 +13,8 @@ export async function sessionLoginCommand(opts: Record<string, string>): Promise
         )
     }
 
-    const id = newRequestId()
-    writeSessionRequest(id, { action: 'login', role })
-
     // loginAs runs a full Clerk+MFA flow, so allow a generous window.
-    const result = await waitForSessionResult(id, 90_000)
-    if (!result) {
-        throw new Error('timed out waiting for the session to log in — is a `qar session` running?')
-    }
+    const result = await dispatchSessionAction({ action: 'login', role }, 90_000, 'log in')
     if (!result.ok) {
         throw new Error(`login as ${role} failed: ${result.error ?? 'unknown error'}`)
     }

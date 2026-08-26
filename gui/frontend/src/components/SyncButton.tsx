@@ -1,14 +1,17 @@
 import { Button } from '@mantine/core'
 import { useEffect, useState } from 'react'
-import { commitsBehind, isInDrift, rekey, resetAndSync, sync } from '../lib/ipc'
+import { commitsBehind, isInDrift, rekey, resetAndSync, shareWork, sync } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
 
-// A skipped sync is only worth acting on if you know what it cost you. "Sync
-// skipped" alone reads as dismissable; the commit count is what makes it urgent,
-// because a stale clone fails without ever mentioning staleness. 0 means current
-// or undeterminable (offline), so the count is simply omitted.
-function skippedBannerText(behind: number): string {
-    const base = 'Sync skipped — working copy has uncommitted edits or diverged.'
+// A skipped sync is only worth acting on if you know what it cost you. The
+// problem statement alone reads as dismissable; the commit count is what makes it
+// urgent, because a stale clone fails without ever mentioning staleness. 0 means
+// current or undeterminable (offline), so the count is simply omitted.
+//
+// The base sentence is a parameter because the two skipped states say different
+// things — dirty can offer a PR, diverged cannot — and flattening them into one
+// generic line to carry the count would cost more than the count adds.
+function skippedBannerText(base: string, behind: number): string {
     if (behind <= 0) return base
     const plural = behind === 1 ? '' : 's'
     return `${base} Your test repo is ${behind} commit${plural} behind — until it syncs, stale suites, skills and the qar shim can fail in ways that never mention staleness.`
@@ -43,30 +46,37 @@ export function SyncButton({
         }
     }
 
+    // Shared by sync and reset: both end in the same place, and the banner state is
+    // driven entirely by the status string the engine returns.
+    const applySyncResult = async (result: string) => {
+        setSyncState(result)
+        if (result === 'synced') {
+            setStatus('Up to date — new suites are ready.')
+            setBehind(0) // a successful pull makes the count 0 by definition
+            onSynced?.() // refresh the suite list — a pull may have added/removed suites
+            try {
+                setDrift(await isInDrift())
+            } catch {
+                setDrift(false)
+            }
+        } else if (result === 'skipped-dirty' || result === 'skipped-diverged') {
+            // The banner below states the problem and offers the choice, so a status
+            // line here would just say the same thing twice.
+            setStatus('')
+            await measureBehind()
+        } else if (result.startsWith('failed:')) {
+            setStatus('')
+        } else {
+            setStatus(result)
+        }
+    }
+
     const syncAction = useAsyncAction(async () => {
         setStatus('Syncing…')
         setDrift(false)
         setBehind(0)
         try {
-            const result = await sync()
-            setSyncState(result)
-            if (result === 'synced') {
-                setStatus('Up to date — new suites are ready.')
-                onSynced?.() // refresh the suite list — a pull may have added/removed suites
-                try {
-                    setDrift(await isInDrift())
-                } catch {
-                    setDrift(false)
-                }
-            } else if (result === 'skipped-dirty') {
-                setStatus('Local edits present — sync skipped.')
-                await measureBehind()
-            } else if (result === 'skipped-diverged') {
-                setStatus('Local branch diverged — sync skipped.')
-                await measureBehind()
-            } else {
-                setStatus(result)
-            }
+            await applySyncResult(await sync())
         } catch (e) {
             setSyncState('')
             setStatus(`Sync failed: ${String(e)}`)
@@ -83,22 +93,34 @@ export function SyncButton({
         if (!window.confirm('Discard uncommitted edits (local commits are kept) and sync?')) return
         setStatus('Resetting & syncing…')
         try {
-            const result = await resetAndSync()
-            setSyncState(result)
-            if (result === 'synced') {
-                setStatus('Up to date — new suites are ready.')
-                setBehind(0)
-                onSynced?.() // refresh the suite list after a reset+sync too
-                try {
-                    setDrift(await isInDrift())
-                } catch {
-                    setDrift(false)
-                }
-            } else {
-                setStatus(result)
-            }
+            await applySyncResult(await resetAndSync())
         } catch (e) {
             setStatus(`Reset failed: ${String(e)}`)
+        }
+    })
+
+    // Commits the working copy to a branch and opens a PR instead of discarding it.
+    // `share-work` ends on a freshly-synced main, so the suite list is refreshed and
+    // drift re-checked exactly as a successful sync would.
+    const shareAction = useAsyncAction(async () => {
+        const description = window.prompt(
+            'Describe these changes (used as the PR title):',
+            'QA: local suite edits'
+        )
+        if (description === null) return
+        setStatus('Opening a pull request…')
+        try {
+            const result = await shareWork(description)
+            setSyncState('synced')
+            setStatus(result)
+            onSynced?.()
+            try {
+                setDrift(await isInDrift())
+            } catch {
+                setDrift(false)
+            }
+        } catch (e) {
+            setStatus(`Could not open a PR: ${String(e)}`)
         }
     })
 
@@ -113,8 +135,31 @@ export function SyncButton({
         }
     })
 
-    const busy = syncAction.busy || resetAction.busy || rekeyAction.busy
-    const needsReset = syncState === 'skipped-dirty' || syncState === 'skipped-diverged'
+    const busy = syncAction.busy || resetAction.busy || shareAction.busy || rekeyAction.busy
+    const dirtyText = skippedBannerText(
+        'You have local edits — open a PR to keep them, or discard them to sync.',
+        behind
+    )
+    const divergedText = skippedBannerText(
+        'Sync skipped — local branch has diverged from origin.',
+        behind
+    )
+    const syncFailure = syncState.startsWith('failed:')
+        ? syncState.slice('failed:'.length).trim()
+        : ''
+
+    // Uncommitted edits are a fork in the road, not an error: the work is either
+    // worth keeping (open a PR) or it isn't (reset). Offering only reset meant the
+    // one destructive option was the sole way out of a stuck sync.
+    const skipActions: BannerAction[] = [
+        { label: 'Open a PR', onClick: () => void shareAction.run() },
+        { label: 'Discard & sync', onClick: () => void resetAction.run() },
+    ]
+    // A diverged branch has local COMMITS, so there is nothing uncommitted for a PR
+    // to capture — reset (which keeps commits) is the only action that applies.
+    const divergedActions: BannerAction[] = [
+        { label: 'Reset to clean & sync', onClick: () => void resetAction.run() },
+    ]
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
@@ -145,37 +190,53 @@ export function SyncButton({
                 </Button>
                 {extraActions}
             </div>
-            {needsReset ? (
-                <Banner
-                    text={skippedBannerText(behind)}
-                    actionLabel="Reset to clean & sync"
-                    onClick={() => void resetAction.run()}
-                    busy={busy}
-                />
-            ) : null}
-            {drift ? (
-                <Banner
-                    text="Secrets out of sync with the keyring."
-                    actionLabel="Rekey"
-                    onClick={() => void rekeyAction.run()}
-                    busy={busy}
-                />
-            ) : null}
+            <Banner
+                isVisible={syncState === 'skipped-dirty'}
+                text={dirtyText}
+                actions={skipActions}
+                busy={busy}
+            />
+            <Banner
+                isVisible={syncState === 'skipped-diverged'}
+                text={divergedText}
+                actions={divergedActions}
+                busy={busy}
+            />
+            <Banner
+                isVisible={syncFailure !== ''}
+                text={`Sync failed — ${syncFailure}`}
+                busy={busy}
+            />
+            <Banner
+                isVisible={drift}
+                text="Secrets out of sync with the keyring."
+                actions={[{ label: 'Rekey', onClick: () => void rekeyAction.run() }]}
+                busy={busy}
+            />
         </div>
     )
 }
 
+interface BannerAction {
+    label: string
+    onClick: () => void
+}
+
+// A banner with no actions is informational only — used when the failure is not
+// something a button in this app can fix. The first action is the recommended
+// one and is rendered as the filled button.
 function Banner({
+    isVisible,
     text,
-    actionLabel,
-    onClick,
+    actions = [],
     busy,
 }: {
+    isVisible: boolean
     text: string
-    actionLabel: string
-    onClick: () => void
+    actions?: BannerAction[]
     busy: boolean
 }) {
+    if (!isVisible) return null
     return (
         <div
             style={{
@@ -192,9 +253,20 @@ function Banner({
             <span className="mono st-dim" style={{ fontSize: 12 }}>
                 {text}
             </span>
-            <Button onClick={onClick} loading={busy} variant="light" color="teal" size="xs">
-                {actionLabel}
-            </Button>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                {actions.map((action, i) => (
+                    <Button
+                        key={action.label}
+                        onClick={action.onClick}
+                        loading={busy}
+                        variant={i === 0 ? 'filled' : 'subtle'}
+                        color="teal"
+                        size="xs"
+                    >
+                        {action.label}
+                    </Button>
+                ))}
+            </div>
         </div>
     )
 }

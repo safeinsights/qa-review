@@ -362,9 +362,13 @@ func TestProbeMcpServersLeavesNoOrphans(t *testing.T) {
 	}
 }
 
-// countMcpProcs counts running chrome-devtools-mcp processes (0 if pgrep finds none).
+// countMcpProcs counts running instances of the PINNED chrome-devtools-mcp the
+// probe spawns (0 if pgrep finds none). Matching the bare package name instead
+// made this test count every unrelated MCP server on the machine — a developer's
+// own editor/agent session runs `chrome-devtools-mcp@latest` — so one of those
+// starting mid-test was misreported as an orphan leaked by the probe.
 func countMcpProcs() int {
-	out, _ := exec.Command("pgrep", "-f", "chrome-devtools-mcp").Output()
+	out, _ := exec.Command("pgrep", "-f", chromeDevtoolsMcpPkg).Output()
 	n := 0
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.TrimSpace(l) != "" {

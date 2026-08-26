@@ -3,6 +3,185 @@ import type { EnvConfig, Role } from '@/engine/types'
 
 export class AuthError extends Error {}
 
+// The bare "dashboard" text every authenticated landing page shows — the shared
+// signal for "sign-in went straight through" in submitCredentialsToPin and the
+// fallback success marker in loginAs.
+function dashboardMarker(page: Page) {
+    return page.locator('text=dashboard').first()
+}
+
+// Where submitCredentialsToPin landed: at the 6-digit code entry, or signed
+// straight in with no second factor. The failure paths (credentials rejected,
+// picker clicked but the code entry never appearing) throw instead of returning,
+// so a caller can't mistake them for one of the two legitimate outcomes.
+type CredentialsOutcome = 'at-pin' | 'no-mfa'
+
+// Drive the Clerk sign-in page to a usable, hydrated email/password form: drop any
+// existing session, then dismiss the "already signed in" interstitial if it wins the
+// race. Shared by loginAs and signInStopAtMfa so both begin from an identical clean
+// slate — the sign-out and interstitial handling here are the root-cause fixes for
+// the stale-session bug and must not drift apart between the two callers.
+async function reachSignInForm(page: Page, env: EnvConfig): Promise<void> {
+    await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
+
+    // Proactively sign out any existing Clerk session BEFORE we start, so we
+    // always begin from a clean slate. This is the root-cause fix for the
+    // stale-session bug: relying only on the "sign in with a different account"
+    // interstitial (a racy UI click) could leave the PREVIOUS role's session
+    // active alongside the new one, so the app kept acting as the old user while
+    // login "succeeded". Clerk.signOut() drops ALL sessions. Best-effort: Clerk
+    // may not be loaded yet on the very first visit, in which case there is no
+    // session to clear anyway. After signing out, reload so the form re-renders
+    // without the interstitial.
+    const signedOut = await page
+        .evaluate(async () => {
+            const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } }).Clerk
+            if (!clerk?.signOut) return false
+            await clerk.signOut()
+            return true
+        })
+        .catch(() => false)
+    if (signedOut) {
+        await page
+            .goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
+            .catch(() => {})
+    }
+
+    // Clerk may STILL show a "You're already signed in as <x>" interstitial (e.g.
+    // signOut wasn't ready in time, or a session survived) — this suite switches
+    // roles mid-run via loginAs, so the PREVIOUS role's session can still be
+    // live here. Clicking "Sign in with a different account" drops that session
+    // and reveals the real form.
+    //
+    // The interstitial hydrates on its own timeline (client-rendered, behind a
+    // spinner), so a one-shot "is the button visible right now?" peek races the
+    // hydration and skips the click — then we'd wait uselessly for an Email
+    // field the interstitial is covering. Instead race the two possible outcomes
+    // (interstitial button vs. Email field); if the interstitial wins, dismiss it
+    // and wait for the form. Retry the click because the button briefly disables
+    // itself while Clerk tears the session down.
+    const emailField = page.getByLabel('Email')
+    const differentAccount = page.getByRole('button', {
+        name: /sign in with a different account/i,
+    })
+    await Promise.race([
+        emailField.waitFor({ state: 'visible', timeout: 30_000 }),
+        differentAccount.waitFor({ state: 'visible', timeout: 30_000 }),
+    ]).catch(() => {})
+    if (await differentAccount.isVisible().catch(() => false)) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            await differentAccount.click().catch(() => {})
+            const gone = await emailField
+                .waitFor({ state: 'visible', timeout: 10_000 })
+                .then(() => true)
+                .catch(() => false)
+            if (gone) break
+        }
+    }
+    // The app is client-rendered: a loading spinner shows first, then the
+    // form hydrates. Wait for the Email field to actually appear before
+    // interacting (web-first wait absorbs the spinner).
+    await emailField.waitFor({ state: 'visible', timeout: 30_000 })
+}
+
+// Submit credentials and, when the account has a second factor, advance to the
+// 6-digit pin input WITHOUT entering a code. Returns 'at-pin' when the pin input
+// is showing, 'no-mfa' when sign-in went straight through (no second factor);
+// anything else (rejected credentials, a picker whose code entry never renders)
+// throws rather than being folded into a success-shaped return. Callers decide
+// what to type — which is what lets loginAs submit a working code while
+// signInStopAtMfa deliberately hands the field to the caller untouched.
+async function submitCredentialsToPin(
+    page: Page,
+    email: string,
+    password: string
+): Promise<CredentialsOutcome> {
+    await page.getByLabel('Email').fill(email)
+    await page.getByLabel('Password').fill(password)
+    await page.getByRole('button', { name: 'Login' }).click()
+
+    // After Login there is a spinner before the next screen. The account
+    // either lands straight on the dashboard, or hits the MFA picker. The
+    // second factor depends on the env: qa/staging test accounts use "SMS
+    // Verification" (a fixed code); production accounts use an authenticator
+    // app (a TOTP code computed from the seed). Both lead to the same 6-digit
+    // pin input. Wait for ANY of the three to appear before deciding.
+    const smsButton = page.getByRole('button', { name: 'SMS Verification' })
+    const authenticatorButton = page.getByRole('button', {
+        name: /authenticator|authentication app|totp/i,
+    })
+    const dashboard = dashboardMarker(page)
+    await Promise.race([
+        smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
+        authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
+        dashboard.waitFor({ state: 'visible', timeout: 30_000 }),
+    ]).catch(() => {})
+
+    // MFA branch: pick whichever second-factor option this env presents. The
+    // picker→code transition has its own spinner and a Mantine re-render can drop
+    // the first click, so retry until the pin input appears.
+    const pinInput = page.getByTestId('sms-pin-input')
+    const mfaChoice = (await authenticatorButton.isVisible().catch(() => false))
+        ? authenticatorButton
+        : (await smsButton.isVisible().catch(() => false))
+          ? smsButton
+          : null
+    if (!mfaChoice) {
+        if (await dashboard.isVisible().catch(() => false)) return 'no-mfa'
+        throw new Error(
+            'neither a second-factor picker nor the dashboard appeared after Login — ' +
+                'the credentials were likely rejected'
+        )
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await mfaChoice.click().catch(() => {})
+        const appeared = await pinInput
+            .waitFor({ state: 'visible', timeout: 10_000 })
+            .then(() => true)
+            .catch(() => false)
+        if (appeared) return 'at-pin'
+    }
+    throw new Error(
+        'the second-factor picker was clicked but the 6-digit code entry never appeared'
+    )
+}
+
+// Sign in as an ARBITRARY account (email + password, not one of the shared roles)
+// and STOP at the second-factor code entry without submitting a code.
+//
+// This exists because the auth screens' own error states — an incomplete code, a
+// code Clerk rejects, a spent recovery code — can only be reached by failing the
+// second factor, and loginAs only ever submits a code it expects to work. QA's
+// Clerk is a development instance with test mode on (the shared accounts sign in
+// with the fixed test code), so any OTHER six-digit code is rejected
+// deterministically, with no real SMS and no unpredictable delivery.
+//
+// Intended for a THROWAWAY user from createUserViaInvite: wrong codes count against
+// the account's rate limit, and the shared accounts are what CI depends on. Throws
+// AuthError if the account never reached a second factor, since a caller asking to
+// stop at MFA cannot do anything useful without it.
+export async function signInStopAtMfa(
+    page: Page,
+    env: EnvConfig,
+    email: string,
+    password: string
+): Promise<void> {
+    try {
+        await reachSignInForm(page, env)
+        const outcome = await submitCredentialsToPin(page, email, password)
+        if (outcome !== 'at-pin') {
+            throw new Error(
+                'signed in without reaching a second-factor code entry — the account has ' +
+                    'no MFA enrolled'
+            )
+        }
+    } catch (cause) {
+        throw new AuthError(
+            `Could not reach the MFA step as ${email} on ${env.name}: ${(cause as Error).message}`
+        )
+    }
+}
+
 // Logs `page` into the live app as `role` by driving the real Clerk sign-in UI
 // (email + password, then the second-factor code — a fixed SMS code on qa/staging,
 // or an authenticator-app TOTP code on production). Returns the session
@@ -18,110 +197,13 @@ export async function loginAs(
     const account = env.accounts[role]
 
     try {
-        await page.goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
-
-        // Proactively sign out any existing Clerk session BEFORE we start, so we
-        // always begin from a clean slate. This is the root-cause fix for the
-        // stale-session bug: relying only on the "sign in with a different account"
-        // interstitial (a racy UI click) could leave the PREVIOUS role's session
-        // active alongside the new one, so the app kept acting as the old user while
-        // login "succeeded". Clerk.signOut() drops ALL sessions. Best-effort: Clerk
-        // may not be loaded yet on the very first visit, in which case there is no
-        // session to clear anyway. After signing out, reload so the form re-renders
-        // without the interstitial.
-        const signedOut = await page
-            .evaluate(async () => {
-                const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } })
-                    .Clerk
-                if (!clerk?.signOut) return false
-                await clerk.signOut()
-                return true
-            })
-            .catch(() => false)
-        if (signedOut) {
-            await page
-                .goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
-                .catch(() => {})
-        }
-
-        // Clerk may STILL show a "You're already signed in as <x>" interstitial (e.g.
-        // signOut wasn't ready in time, or a session survived) — this suite switches
-        // roles mid-run via loginAs, so the PREVIOUS role's session can still be
-        // live here. Clicking "Sign in with a different account" drops that session
-        // and reveals the real form.
-        //
-        // The interstitial hydrates on its own timeline (client-rendered, behind a
-        // spinner), so a one-shot "is the button visible right now?" peek races the
-        // hydration and skips the click — then we'd wait uselessly for an Email
-        // field the interstitial is covering. Instead race the two possible outcomes
-        // (interstitial button vs. Email field); if the interstitial wins, dismiss it
-        // and wait for the form. Retry the click because the button briefly disables
-        // itself while Clerk tears the session down.
-        const emailField = page.getByLabel('Email')
-        const differentAccount = page.getByRole('button', {
-            name: /sign in with a different account/i,
-        })
-        await Promise.race([
-            emailField.waitFor({ state: 'visible', timeout: 30_000 }),
-            differentAccount.waitFor({ state: 'visible', timeout: 30_000 }),
-        ]).catch(() => {})
-        if (await differentAccount.isVisible().catch(() => false)) {
-            for (let attempt = 0; attempt < 3; attempt++) {
-                await differentAccount.click().catch(() => {})
-                const gone = await emailField
-                    .waitFor({ state: 'visible', timeout: 10_000 })
-                    .then(() => true)
-                    .catch(() => false)
-                if (gone) break
-            }
-        }
-        // The app is client-rendered: a loading spinner shows first, then the
-        // form hydrates. Wait for the Email field to actually appear before
-        // interacting (web-first wait absorbs the spinner).
-        await emailField.waitFor({ state: 'visible', timeout: 30_000 })
-        await emailField.fill(account.email)
-        await page.getByLabel('Password').fill(account.password)
-        await page.getByRole('button', { name: 'Login' }).click()
-
-        // After Login there is a spinner before the next screen. The account
-        // either lands straight on the dashboard, or hits the MFA picker. The
-        // second factor depends on the env: qa/staging test accounts use "SMS
-        // Verification" (a fixed code); production accounts use an authenticator
-        // app (a TOTP code computed from the seed). Both lead to the same 6-digit
-        // pin input. Wait for ANY of the three to appear before deciding.
-        const smsButton = page.getByRole('button', { name: 'SMS Verification' })
-        const authenticatorButton = page.getByRole('button', {
-            name: /authenticator|authentication app|totp/i,
-        })
-        const dashboard = page.locator('text=dashboard').first()
-        await Promise.race([
-            smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
-            authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
-            dashboard.waitFor({ state: 'visible', timeout: 30_000 }),
-        ]).catch(() => {})
-
-        // MFA branch: pick whichever second-factor option this env presents, then
-        // enter the code (account.mfaCode is fixed for qa/staging, TOTP-computed for
-        // production). The picker→code transition has its own spinner and a Mantine
-        // re-render can drop the first click, so retry until the pin input appears.
-        const pinInput = page.getByTestId('sms-pin-input')
-        const mfaChoice = (await authenticatorButton.isVisible().catch(() => false))
-            ? authenticatorButton
-            : (await smsButton.isVisible().catch(() => false))
-              ? smsButton
-              : null
-        if (mfaChoice) {
-            for (let attempt = 0; attempt < 3; attempt++) {
-                await mfaChoice.click().catch(() => {})
-                const appeared = await pinInput
-                    .waitFor({ state: 'visible', timeout: 10_000 })
-                    .then(() => true)
-                    .catch(() => false)
-                if (appeared) break
-            }
+        await reachSignInForm(page, env)
+        const outcome = await submitCredentialsToPin(page, account.email, account.password)
+        if (outcome === 'at-pin') {
             await fillPin(page, account.mfaCode)
             await page.getByRole('button', { name: /verify code/i }).click()
         }
+        const dashboard = dashboardMarker(page)
 
         // Success = we've left the sign-in page and an authenticated marker is
         // present. After verifying the code there is a redirect chain (+ a

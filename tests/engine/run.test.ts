@@ -929,6 +929,37 @@ describe('withStepDeadline', () => {
         }
         expect(seen).toEqual([])
     })
+
+    it('signals the abandonment before it rejects', async () => {
+        // Ordering matters: the retry loop regains control the moment this rejects, so
+        // the zombie body has to be marked stale BEFORE that happens, not after.
+        const events: string[] = []
+        await expect(
+            withStepDeadline(
+                's',
+                10,
+                () => new Promise(() => {}),
+                () => events.push('abandoned')
+            )
+        ).rejects.toThrow(/step timeout/)
+        events.push('rejected')
+        expect(events).toEqual(['abandoned', 'rejected'])
+    })
+
+    it('does not signal abandonment when the action settles in time', async () => {
+        let abandoned = false
+        await expect(
+            withStepDeadline(
+                's',
+                5_000,
+                async () => 'done',
+                () => {
+                    abandoned = true
+                }
+            )
+        ).resolves.toBe('done')
+        expect(abandoned).toBe(false)
+    })
 })
 
 describe('runEngine step deadline', () => {
@@ -948,5 +979,140 @@ describe('runEngine step deadline', () => {
         expect(result.steps[0].error).toMatch(/step timeout/)
         // 'timeout' in the message routes it the same way a Playwright timeout is.
         expect(result.failureCategory).toBe('environment')
+    })
+
+    it('threads the RESOLVED default through, not a hardcoded literal', async () => {
+        // Every other test in here sets QAR_STEP_TIMEOUT_MS, so hardcoding any value at
+        // the ctx.step call site would leave them all green. Assert the default reaches
+        // the step by reading the limit back out of the timeout message.
+        const d = deps({ vars: { ...ENV_VARS } })
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'reports the limit',
+                    // Fail immediately, but report the deadline the engine handed us.
+                    run: ctx =>
+                        ctx.step(async () => {
+                            throw new Error('deliberate')
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        // The step failed on its own error, which proves the deadline did not fire at
+        // some tiny hardcoded value — a literal small enough to matter would have won
+        // the race and reported a step timeout instead.
+        expect(result.steps[0].error).toMatch(/deliberate/)
+    })
+
+    it('marks a timed-out attempt aborted so a retry body can bail', async () => {
+        // The zombie hazard: a timed-out body keeps driving the same page the retry
+        // re-runs against. ctx.signal is how a body notices it is no longer live.
+        const d = deps({ vars: { ...ENV_VARS, QAR_STEP_TIMEOUT_MS: '25' } })
+        let abortedAfterDeadline: boolean | undefined
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'hangs',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            const signal = ctx.signal
+                            expect(signal.aborted).toBe(false)
+                            await new Promise(r => setTimeout(r, 120))
+                            abortedAfterDeadline = signal.aborted
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        // Give the abandoned body time to finish its sleep and record what it saw.
+        await new Promise(r => setTimeout(r, 150))
+        expect(abortedAfterDeadline).toBe(true)
+    })
+
+    it('stops an abandoned body from driving the page, without it checking anything', async () => {
+        // The point of guarding ctx.page: the body below never consults ctx.signal.
+        // It is the ordinary shape of a suite step, and it must STILL be prevented
+        // from touching the browser once its deadline has passed.
+        const d = deps({ vars: { ...ENV_VARS, QAR_STEP_TIMEOUT_MS: '25' } })
+        let zombieError: Error | undefined
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'hangs then keeps clicking',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            const page = ctx.page
+                            await new Promise(r => setTimeout(r, 120))
+                            try {
+                                // Post-deadline. A raw page would happily run this.
+                                await page.evaluate(() => {})
+                            } catch (cause) {
+                                zombieError = cause as Error
+                                throw cause
+                            }
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        await new Promise(r => setTimeout(r, 150))
+        expect(zombieError?.name).toBe('StepAbandonedError')
+    })
+
+    it('lets the live attempt use the page while a zombie is locked out', async () => {
+        // The guard must not be a blanket lock: the whole reason to stop the zombie is
+        // so the NEXT attempt has the browser to itself.
+        const d = deps({ vars: { ...ENV_VARS, QAR_STEP_TIMEOUT_MS: '25' } })
+        let liveCallSucceeded = false
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'slow first, fine after',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            // Second and later reads happen after the first attempt's
+                            // deadline; a fresh ctx.page read must work normally.
+                            await ctx.page.evaluate(() => {})
+                            liveCallSucceeded = true
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        expect(liveCallSucceeded).toBe(true)
+    })
+
+    it('still records url and screenshot for a step whose body was abandoned', async () => {
+        // The engine's own post-timeout bookkeeping reads the RAW page, not ctx.page.
+        // If the guard leaked into those paths, a timed-out step would lose exactly the
+        // diagnostics it most needs.
+        const d = deps({ vars: { ...ENV_VARS, QAR_STEP_TIMEOUT_MS: '25' } })
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [{ name: 'hangs', run: ctx => ctx.step(() => new Promise(() => {})) }],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(false)
+        expect(result.steps[0].status).toBe('failed')
+        expect(result.steps[0].url).toBe('https://app.qa.safeinsights.org/')
     })
 })

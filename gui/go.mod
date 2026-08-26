@@ -1,6 +1,15 @@
 module qa-runner
 
-go 1.24.0
+go 1.25.0
+
+// The BUILD toolchain, deliberately separate from the `go` line above (which is
+// only the language-compatibility floor). CI resolves its Go from this file via
+// setup-go's `go-version-file`, so without this it built with 1.25.x and shipped
+// five reachable stdlib vulnerabilities that govulncheck flags in crypto/tls,
+// encoding/asn1, net/textproto and crypto/x509 — all fixed by 1.26.6. Bump this
+// when `govulncheck ./...` reports a stdlib finding; it is the one place that
+// changes the Go used by CI, `make dmg`, and local builds alike.
+toolchain go1.26.6
 
 require (
 	filippo.io/age v1.3.1
@@ -34,8 +43,8 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )

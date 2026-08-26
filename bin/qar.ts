@@ -3,6 +3,7 @@ import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
+import { getSecretCommand } from '@/cli/commands/get-secret'
 import { inviteCommand } from '@/cli/commands/invite'
 import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
@@ -17,7 +18,9 @@ import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
+import { sessionSignInCommand } from '@/cli/commands/session-signin'
 import { setSecretCommand } from '@/cli/commands/set-secret'
+import { shareWorkCommand } from '@/cli/commands/share-work'
 import { studyStateCommand } from '@/cli/commands/study-state'
 import { syncCommand } from '@/cli/commands/sync'
 import { totpCommand } from '@/cli/commands/totp'
@@ -38,6 +41,10 @@ const BOOLEANS = [
     'password',
     'key',
     'yes',
+    // get-secret: valueless switch that permits printing a secret to a terminal.
+    'force',
+    // session-create-user: opt in to printing the new account's TOTP secret.
+    'print-mfa-secret',
 ]
 
 async function main() {
@@ -82,12 +89,18 @@ async function main() {
             return rekeyCommand()
         case 'set-secret':
             return setSecretCommand(opts)
+        case 'get-secret':
+            return getSecretCommand(opts, await loadSettings())
         case 'sync':
             return syncCommand()
+        case 'share-work':
+            return shareWorkCommand(String(opts.description ?? ''))
         case 'session':
             return sessionCommand(opts, await loadSettings())
         case 'session-login':
             return sessionLoginCommand(opts)
+        case 'session-signin':
+            return sessionSignInCommand(opts)
         case 'session-create-user':
             return sessionCreateUserCommand(opts)
         case 'session-create-study':
