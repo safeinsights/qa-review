@@ -5,6 +5,7 @@ import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
 import { totp } from '../totp'
 import type { EnvConfig } from '../types'
+import { clickUntil } from './interactions'
 
 // Shared signup-flow helpers, extracted from src/suites/signup.ts so BOTH the
 // signup suite AND ad-hoc validation suites drive the SAME flow. These take a
@@ -51,15 +52,12 @@ export async function inviteUser(
     const org = ORG_FOR_ROLE[role]
     await page.goto(`${baseURL}/${org}/admin/team`, { waitUntil: 'domcontentloaded' })
     // "Invite People" is server-rendered, so it is present and clickable BEFORE React
-    // wires its onClick. A one-shot click at domcontentloaded therefore lands on a
-    // dead button — it takes focus, no dialog opens, and we then wait out the full
-    // timeout on an email field that was never going to appear. Re-click until the
-    // dialog actually renders.
+    // wires its onClick, and a one-shot click at domcontentloaded lands on a dead
+    // button: it takes focus, no dialog opens, and we then wait out the full timeout on
+    // an email field that was never going to appear. clickUntil re-clicks until the
+    // dialog renders, under the shared (and bounded) ready policy.
     const emailField = page.getByRole('textbox', { name: /invite by email/i })
-    await expect(async () => {
-        await page.getByRole('button', { name: /invite people/i }).click()
-        await expect(emailField).toBeVisible()
-    }).toPass()
+    await clickUntil(page.getByRole('button', { name: /invite people/i }), emailField)
     await emailField.fill(email)
     await page
         .getByRole('radio', { name: /contributor/i })

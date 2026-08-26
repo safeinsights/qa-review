@@ -1,5 +1,5 @@
 import { Button } from '@mantine/core'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { commitsBehind, isInDrift, rekey, resetAndSync, shareWork, sync } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
 
@@ -17,6 +17,15 @@ function skippedBannerText(base: string, behind: number): string {
     return `${base} Your test repo is ${behind} commit${plural} behind — until it syncs, stale suites, skills and the qar shim can fail in ways that never mention staleness.`
 }
 
+// Failing to MEASURE the staleness is itself worth saying out loud: 0 renders
+// identically to a healthy clone, so a silent fallback hides the very staleness the
+// banner exists to surface. Appended to whatever the sync itself had to say, since
+// both concern the same click.
+function checkFailedNote(status: string): string {
+    if (status === '') return 'Could not check how far behind the clone is.'
+    return `${status} (could not check how far behind the clone is)`
+}
+
 export function SyncButton({
     extraActions,
     onSynced,
@@ -28,22 +37,41 @@ export function SyncButton({
     const [syncState, setSyncState] = useState('')
     const [drift, setDrift] = useState(false)
     const [behind, setBehind] = useState(0)
+    // Identifies the newest measurement. Because a measurement is fired rather than
+    // awaited (below), one still in flight can answer AFTER a later sync has already
+    // settled the count; only the newest attempt may write, and bumping this is how
+    // every other path cancels one.
+    const measureId = useRef(0)
 
-    // Only asked for when a sync was skipped: it costs a `git fetch`, and after a
-    // successful pull the answer is always 0.
-    const measureBehind = async () => {
-        try {
-            setBehind(await commitsBehind())
-        } catch {
-            // Say so rather than swallowing it. 0 renders identically to a healthy
-            // clone, so a silent catch hides the very staleness the banner exists to
-            // surface. The Go side never returns an error — it answers 0 for offline,
-            // no upstream, or unparseable output — so anything landing here is a
-            // binding failure, and the user is better off being told the check did not
-            // run than being shown a reassuring zero.
-            setBehind(0)
-            setStatus(s => `${s} (could not check how far behind the clone is)`)
-        }
+    const settleBehind = (value: number) => {
+        measureId.current += 1
+        setBehind(value)
+    }
+
+    // Only asked for when a sync was SKIPPED: it costs a `git fetch`, and after a
+    // successful pull the answer is 0 by definition.
+    //
+    // Fired, never awaited. Awaiting it inside the sync handler left the button
+    // spinning for the whole network round trip — on a blackholed network, the full
+    // 20s ceiling of the fetch, with nothing on screen to explain it. The banner this
+    // annotates is already rendered by then, so the count just arrives a moment later.
+    const measureBehind = () => {
+        measureId.current += 1
+        const id = measureId.current
+        void (async () => {
+            try {
+                const count = await commitsBehind()
+                if (id === measureId.current) setBehind(count)
+            } catch {
+                // The Go side never returns an error — it answers 0 for offline, no
+                // upstream, or unparseable output — so anything landing here is a
+                // binding failure, and the user is better off told the check did not
+                // run than shown a reassuring zero.
+                if (id !== measureId.current) return
+                setBehind(0)
+                setStatus(checkFailedNote)
+            }
+        })()
     }
 
     // Shared by sync and reset: both end in the same place, and the banner state is
@@ -52,7 +80,7 @@ export function SyncButton({
         setSyncState(result)
         if (result === 'synced') {
             setStatus('Up to date — new suites are ready.')
-            setBehind(0) // a successful pull makes the count 0 by definition
+            settleBehind(0) // a successful pull makes the count 0 by definition
             onSynced?.() // refresh the suite list — a pull may have added/removed suites
             try {
                 setDrift(await isInDrift())
@@ -63,7 +91,7 @@ export function SyncButton({
             // The banner below states the problem and offers the choice, so a status
             // line here would just say the same thing twice.
             setStatus('')
-            await measureBehind()
+            measureBehind()
         } else if (result.startsWith('failed:')) {
             setStatus('')
         } else {
@@ -74,7 +102,7 @@ export function SyncButton({
     const syncAction = useAsyncAction(async () => {
         setStatus('Syncing…')
         setDrift(false)
-        setBehind(0)
+        settleBehind(0)
         try {
             await applySyncResult(await sync())
         } catch (e) {

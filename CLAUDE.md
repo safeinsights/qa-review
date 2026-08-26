@@ -460,7 +460,28 @@ guard — a typo must not reinstate the hang. It is read from the merged setting
 like any other var, so `config/settings.local.json` works as well as the env.
 
 Suites must still not set inline Playwright timeouts (see "Code rules"): this is
-the global backstop, not permission to sprinkle `{ timeout: … }` around.
+the global backstop, not permission to sprinkle `{ timeout: … }` around. There is
+exactly ONE sanctioned exception, and it is a shared helper rather than a suite:
+`clickUntil` (`src/engine/flows/interactions.ts`) bounds its own `toPass` at
+`CLICK_UNTIL_READY_TIMEOUT_MS`. A `toPass` is the one construct the deadline
+above cannot express better — it polls forever in library mode, so the choice
+there is not between a shorter wait and a longer one but between a number and an
+infinite one, and failing in 60s with a message naming the CONTROL beats failing
+in 5 minutes with one naming the step.
+
+`clickUntil(control, target)` is also the answer to a failure this app produces
+often enough that three flows had each grown their own copy: a control is
+**server-rendered, so it is clickable BEFORE React wires its onClick**. The click
+takes focus, nothing opens, and the caller then burns its whole action timeout on
+a dialog that was never going to appear. (A click landing pre-hydration can also
+navigate outside the router's knowledge and be undone.) So it re-clicks until the
+target is visible AND enabled — enabled because Mantine renders a control
+disabled while its data loads, and a visible-but-disabled control just moves the
+failure one line down. It skips the click once the target is attached, or once the
+control has detached, so a control that navigates away is not re-clicked into a
+timeout. `inviteUser` (signup), `beginProposal` (study) and `toast-messages`'
+modal/popover opens all call it; a new pre-hydration click belongs here too, not
+in a fourth copy.
 
 ## Packaging a standalone Mac app (`.dmg` for staff)
 

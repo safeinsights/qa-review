@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { clickUntil } from '../engine/flows/interactions'
 import { beginProposal, chooseOrgAndCaptureId, openProposalDashboard } from '../engine/flows/study'
 import type { RunContext, Suite } from './types'
 
@@ -119,16 +120,6 @@ async function dismissToasts(page: Page): Promise<void> {
         await closeButton.click().catch(() => {})
     }
     await expect(page.locator(TOAST)).toHaveCount(0)
-}
-
-// A server-rendered control is present and clickable BEFORE React wires its onClick, so a
-// one-shot click can land on a dead button and nothing opens (the same failure the
-// inviteUser flow documents). Re-click until the target actually renders.
-async function clickUntil(control: Locator, target: Locator): Promise<void> {
-    await expect(async () => {
-        await control.click()
-        await expect(target).toBeVisible()
-    }).toPass()
 }
 
 async function openModal(page: Page, buttonName: string, dialogName: string): Promise<Locator> {

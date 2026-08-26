@@ -1598,6 +1598,10 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 // established — offline, no upstream, unparseable output. A staleness warning that
 // cries wolf when it simply couldn't fetch is worse than one that stays quiet, and
 // this must never block the sync path it annotates.
+//
+// cwd is unused — the repo is always repoDir(). It is there for parity with the
+// Sync/Rekey/IsInDrift bindings beside it, which take and ignore it the same way, so
+// the frontend passes '' rather than a path it would have to invent.
 func (a *App) CommitsBehind(cwd string) int {
 	dir := repoDir()
 	// Compare against freshly-fetched refs; a stale origin/* would under-report.
