@@ -3,6 +3,7 @@ import { clickUntil } from '../engine/flows/interactions'
 import {
     beginProposal,
     completeSetupAndCaptureId,
+    fitStudyTitle,
     openProposalDashboard,
 } from '../engine/flows/study'
 import type { RunContext, Suite } from './types'
@@ -178,8 +179,11 @@ async function expectInvitationNotices(ctx: RunContext): Promise<void> {
 function probeSourceName(ctx: RunContext): string {
     return `QA toast probe ${ctx.tag}`
 }
+// Fitted to OTTER-690's 60-character cap, because this title is BOTH what Step 1
+// persists and how the draft's row is found later (`Delete draft study <title>`).
+// Letting the page truncate it would break the lookup, not just the fill.
 function probeDraftTitle(ctx: RunContext): string {
-    return `Toast probe draft ${ctx.tag}`
+    return fitStudyTitle(`Toast probe draft ${ctx.tag}`)
 }
 function settingsUrl(ctx: RunContext): string {
     return `${ctx.baseURL}/${ADMIN_ORG}/admin/settings`

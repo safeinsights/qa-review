@@ -23,6 +23,50 @@ export interface StudyContent {
     resultsApprovalFeedback: string
 }
 
+// OTTER-690's "Set up study" page caps the title at 60 characters and blocks
+// "Save & continue" until it fits, so the title must be BUILT to fit rather than
+// trimmed after the fact. `ctx.tag` alone is 33 characters
+// (`qa-<suite>-<startedAt>`), which left every generated title over the limit.
+export const STUDY_TITLE_MAX = 60
+
+// Trim at a word boundary so a truncated title still reads as words rather than
+// stopping mid-word.
+function trimToWords(text: string, max: number): string {
+    if (text.length <= max) {
+        return text
+    }
+    const cut = text.slice(0, max)
+    const lastSpace = cut.lastIndexOf(' ')
+    return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd()
+}
+
+// The tag is what makes the row findable, so when the 60-character budget is tight
+// the DESCRIPTIVE half gives way and the tag is kept whole.
+function taggedTitle(subject: string, tag: string): string {
+    const suffix = ` (QA ${tag})`
+    const room = STUDY_TITLE_MAX - suffix.length
+    if (room < 1) {
+        // A tag longer than the whole budget: keep its TAIL, which carries the
+        // per-run timestamp that actually distinguishes one run from another.
+        return `(QA ${tag})`.slice(-STUDY_TITLE_MAX)
+    }
+    return trimToWords(subject, room) + suffix
+}
+
+// Fit a title that was assembled elsewhere — or carried over in ctx.state from a
+// previous attempt, which is what a single-step RETRY re-uses. The trailing
+// "(QA <tag>)" group is kept whole; only the descriptive half is trimmed.
+export function fitStudyTitle(title: string): string {
+    if (title.length <= STUDY_TITLE_MAX) {
+        return title
+    }
+    const tagged = title.match(/\s*\(QA ([^)]*)\)\s*$/)
+    if (!tagged || tagged.index === undefined) {
+        return trimToWords(title, STUDY_TITLE_MAX)
+    }
+    return taggedTitle(title.slice(0, tagged.index), tagged[1])
+}
+
 // Realistic-but-synthetic study + review text via faker, using English-word
 // generators (not the Latin faker.lorem). The title keeps `tag` (the
 // unique-per-run suffix) so the study row stays findable and traceable.
@@ -47,7 +91,7 @@ export function generateStudyContent(tag: string): StudyContent {
     const body = (paras: number) =>
         faker.helpers.multiple(para, { count: { min: 1, max: paras } }).join('\n\n')
     return {
-        title: `${faker.company.catchPhraseNoun()} and ${outcome} (QA ${tag})`,
+        title: taggedTitle(`${faker.company.catchPhraseNoun()} and ${outcome}`, tag),
         researchQuestion: `How does ${topic} relate to ${outcome} among ${cohort} students? ${faker.hacker.phrase()}`,
         summary: body(2),
         impact: `This work informs ${faker.company.buzzPhrase()}. ${faker.hacker.phrase()}`,
@@ -107,6 +151,14 @@ export async function startProposal(page: Page, baseURL: string): Promise<void> 
 // OTTER-690 moved the field to Step 1 so that every saved draft has a title from the
 // start, and Step 2 no longer renders a title field at all.
 export async function completeSetupAndCaptureId(page: Page, title: string): Promise<string> {
+    // An over-long title leaves the form invalid, so "Save & continue" never opens the
+    // modal and clickUntil burns its full budget on a timeout that names the DIALOG.
+    // Fail here instead, naming the real cause.
+    if (title.length > STUDY_TITLE_MAX) {
+        throw new Error(
+            `Study title is ${title.length} characters; the Set up study page allows ${STUDY_TITLE_MAX}: ${title}`
+        )
+    }
     await page.getByLabel('Study title').fill(title)
     await page.getByTestId('org-select').click()
     await page

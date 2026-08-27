@@ -13,7 +13,7 @@ describe('suite-registry', () => {
         expect(studyHappyPath?.steps.slice(0, 3)).toEqual([
             'Open the researcher org dashboard',
             'Start a new study proposal',
-            'Step 1: choose org and language, then capture the study id',
+            'Step 1: name the study, choose org and language, then capture the study id',
         ])
         expect(studyHappyPath?.steps.at(-1)).toBe('Verify the study is deleted')
     })

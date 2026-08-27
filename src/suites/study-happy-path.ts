@@ -2,10 +2,12 @@ import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { clickUntil } from '../engine/flows/interactions'
 import {
     beginProposal,
     completeSetupAndCaptureId,
     fillProposal,
+    fitStudyTitle,
     generateStudyContent,
     openProposalDashboard,
     type StudyContent,
@@ -124,9 +126,16 @@ export const studyHappyPathSuite: Suite = {
             name: 'Step 1: name the study, choose org and language, then capture the study id',
             run: async ctx => {
                 await ctx.step(async () => {
+                    // OTTER-690 caps the title at 60 characters. generateStudyContent
+                    // already fits it, but a RETRY of this step re-uses the title the
+                    // first attempt put in ctx.state — so the clamp also has to live in
+                    // the step that fills the field, and is written back so state
+                    // matches the record that gets created.
+                    const study = content(ctx)
+                    study.title = fitStudyTitle(study.title)
                     // Proceeding to Step 2 creates the study record. Capture + track
                     // its id the instant it exists, so no created study is untracked.
-                    const studyId = await completeSetupAndCaptureId(ctx.page, content(ctx).title)
+                    const studyId = await completeSetupAndCaptureId(ctx.page, study.title)
                     ctx.state.studyId = studyId
                     ctx.trackStudy(studyId)
                 })
@@ -378,6 +387,22 @@ export const studyHappyPathSuite: Suite = {
             name: 'Submit the study code (round 1)',
             run: ctx =>
                 ctx.step(async () => {
+                    // Submitting requires an explicitly chosen main file. Every row's star
+                    // starts aria-pressed="false" and "Submit code" stays disabled behind
+                    // "Select a main file to submit" until one is pressed — uploading a file
+                    // named main.r does NOT elect it.
+                    //
+                    // The star's accessible name FLIPS on selection — "Set main.r as main
+                    // file" becomes "main.r is the main file" — so the two names are the
+                    // control and the target. Targeting the Submit button instead would not
+                    // work: it is always attached (merely rendered disabled), so clickUntil
+                    // would count it as arrived and never press the star. Keying on the
+                    // selected name also makes the retry idempotent, since a second press
+                    // would toggle the selection back off.
+                    await clickUntil(
+                        ctx.page.getByRole('button', { name: 'Set main.r as main file' }),
+                        ctx.page.getByRole('button', { name: 'main.r is the main file' })
+                    )
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
