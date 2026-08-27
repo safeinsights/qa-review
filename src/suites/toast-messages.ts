@@ -1,6 +1,10 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { clickUntil } from '../engine/flows/interactions'
-import { beginProposal, chooseOrgAndCaptureId, openProposalDashboard } from '../engine/flows/study'
+import {
+    beginProposal,
+    completeSetupAndCaptureId,
+    openProposalDashboard,
+} from '../engine/flows/study'
 import type { RunContext, Suite } from './types'
 
 // Verifies the app's TOAST messages across all three roles. Every toast in
@@ -298,18 +302,16 @@ export const toastMessagesSuite: Suite = {
                     // reason that says nothing about toasts.
                     await ctx.loginAs('researcher')
                     // Fixture: the smallest thing the delete-draft toast needs is a DRAFT
-                    // study with a known title. Proceeding to Step 2 creates the row;
-                    // "Previous" flushes the title to it (in single-user mode that is the
-                    // only write path). No toast is raised by either, so nothing to assert
-                    // until the delete.
+                    // study with a known title. Step 1 takes the title and "Save &
+                    // continue" persists it with the row, so creating the draft is now the
+                    // whole fixture — the old "fill the title on Step 2, then click
+                    // Previous to flush it" dance is gone with the field that required it
+                    // (OTTER-690 moved the title to Step 1). No toast is raised by
+                    // creating a draft, so there is nothing to assert until the delete.
                     await openProposalDashboard(ctx.page, ctx.baseURL)
                     await beginProposal(ctx.page)
-                    const studyId = await chooseOrgAndCaptureId(ctx.page)
+                    const studyId = await completeSetupAndCaptureId(ctx.page, title)
                     try {
-                        await ctx.page.getByLabel('Study Title').fill(title)
-                        await ctx.page.getByRole('button', { name: /^Previous$/ }).click()
-                        await ctx.page.getByTestId('org-select').waitFor({ state: 'visible' })
-
                         await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASHBOARD}`, {
                             waitUntil: 'domcontentloaded',
                         })
