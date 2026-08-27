@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import {
     beginProposal,
-    chooseOrgAndCaptureId,
+    completeSetupAndCaptureId,
     fillProposal,
     generateStudyContent,
     openProposalDashboard,
@@ -121,12 +121,12 @@ export const studyHappyPathSuite: Suite = {
                 }),
         },
         {
-            name: 'Step 1: choose org and language, then capture the study id',
+            name: 'Step 1: name the study, choose org and language, then capture the study id',
             run: async ctx => {
                 await ctx.step(async () => {
                     // Proceeding to Step 2 creates the study record. Capture + track
                     // its id the instant it exists, so no created study is untracked.
-                    const studyId = await chooseOrgAndCaptureId(ctx.page)
+                    const studyId = await completeSetupAndCaptureId(ctx.page, content(ctx).title)
                     ctx.state.studyId = studyId
                     ctx.trackStudy(studyId)
                 })
