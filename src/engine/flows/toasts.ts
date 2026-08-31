@@ -1,0 +1,33 @@
+import { expect, type Page } from '@playwright/test'
+
+// Mantine's public class names for a notification. `role=alert` alone is NOT specific enough
+// to find a toast: the App Router mounts its own permanently-empty `div[role=alert]` route
+// announcer. Shared so the class names live in ONE place — they are the part most likely to
+// move under a Mantine upgrade, and a suite that silently stops finding toasts would keep
+// passing while asserting nothing.
+export const TOAST = '.mantine-Notification-root'
+export const TOAST_TITLE = '.mantine-Notification-title'
+export const TOAST_BODY = '.mantine-Notification-description'
+export const TOAST_CLOSE = '.mantine-Notification-closeButton'
+
+// "This toast came up, with this title" — for suites whose subject is the ACTION rather than
+// the notification. The exhaustive checks (severity colour, role, the absence of a title on
+// the message-only notices) belong to the toast-messages suite, which owns that surface.
+//
+// `message` is optional because a real call site passes none: use-submit-proposal raises
+// 'Proposal submitted' with `message: ''`, and Mantine renders no description element for an
+// empty string — so asserting one would fail on a toast behaving exactly as written.
+export async function expectToastVisible(
+    page: Page,
+    expected: { title: string; message?: string }
+): Promise<void> {
+    const toast = page.locator(TOAST).filter({ hasText: expected.title })
+    // waitFor, not expect, for the appearance: these toasts are raised on a server round trip,
+    // which needs the action timeout rather than the shorter assertion one. (Timeouts are
+    // configured globally, never inline.)
+    await toast.waitFor({ state: 'visible' })
+    await expect(toast.locator(TOAST_TITLE)).toHaveText(expected.title)
+    if (expected.message) {
+        await expect(toast.locator(TOAST_BODY)).toHaveText(expected.message)
+    }
+}

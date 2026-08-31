@@ -14,6 +14,7 @@ import {
     type StudyContent,
     submitProposal,
 } from '../engine/flows/study'
+import { expectToastVisible } from '../engine/flows/toasts'
 import { repoDir } from '../engine/paths'
 import type { RunContext, Suite } from './types'
 
@@ -179,6 +180,13 @@ export const studyHappyPathSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     await submitProposal(ctx.page)
+                    // Asserted AFTER submitProposal's own arrival wait, on purpose: the toast
+                    // is raised before use-submit-proposal router.push()es, and the comment at
+                    // that call site claims it survives the push because the Notifications
+                    // provider lives in the persistent app shell. Checking it here is what
+                    // verifies that claim rather than assuming it. This notice carries an
+                    // EMPTY message, so the title is the whole assertion.
+                    await expectToastVisible(ctx.page, { title: 'Proposal submitted' })
                 }),
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
@@ -462,6 +470,11 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByTestId('code-under-review-banner')
                         .waitFor({ state: 'visible' })
+                    await expectToastVisible(ctx.page, {
+                        title: 'Study Code Submitted',
+                        message:
+                            'Your code has been successfully submitted to the Data Partner. Check your dashboard for status updates.',
+                    })
                 }),
         },
         // ---- Reviewer: request code changes (round 1) ----
@@ -519,6 +532,10 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('heading', { name: /Edit study code/i })
                         .waitFor({ state: 'hidden' })
+                    await expectToastVisible(ctx.page, {
+                        title: 'Study Code Resubmitted',
+                        message: 'Your updated code has been submitted to the Data Partner.',
+                    })
                 }),
         },
         // ---- Reviewer: approve code (round 2) ----

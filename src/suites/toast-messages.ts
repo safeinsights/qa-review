@@ -1,11 +1,14 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { clickUntil } from '../engine/flows/interactions'
+import { inviteUser } from '../engine/flows/signup'
 import {
     beginProposal,
     completeSetupAndCaptureId,
     openProposalDashboard,
     taggedTitle,
 } from '../engine/flows/study'
+import { TOAST, TOAST_BODY, TOAST_CLOSE, TOAST_TITLE } from '../engine/flows/toasts'
+import { activeDomain, createInbox, deleteInbox } from '../engine/mailtm'
 import type { RunContext, Suite } from './types'
 
 // Verifies the app's TOAST messages across all three roles. Every toast in
@@ -17,9 +20,15 @@ import type { RunContext, Suite } from './types'
 // researcher who authored the throwaway draft so teardown cleanup has delete authority.
 //
 // ROLE COVERAGE, and its honest limits:
-//   admin      — the SI-admin legal upload reject, plus the org-admin data source
-//                add/delete pair (the only `reportSuccess()` call sites in the app).
-//   researcher — the "Proposal draft deleted" toast.
+//   admin      — the SI-admin legal upload reject, plus the org-admin data source and code
+//                environment triples (add/update/delete each). Those six messages come from
+//                the app's only four `reportSuccess()` call sites: each form's hook raises
+//                added-or-updated off one ternary, and each list raises the delete.
+//                Also the org-admin invite trio (resent / re-invited / revoked), which is the
+//                one place here that needs an outside service: see that step for why the
+//                invited address has to be a real mail.tm inbox rather than a synthetic one.
+//   researcher — the "Proposal draft deleted" toast, plus the code-upload dropzone's
+//                "Unsupported file type" reject, both raised on the one throwaway draft.
 //                The four profile "Saved"/"Save failed" toasts are deliberately NOT here:
 //                the `user-profile` suite already asserts them card by card, and a profile
 //                is a SINGLETON per user. Two suites writing the same profile — that one
@@ -44,11 +53,13 @@ import type { RunContext, Suite } from './types'
 // needs an induced server failure, and faking one is the kind of masking that makes a
 // suite lie.
 //
-// Writes: the data source pair and the draft proposal are created and then deleted by the
-// suite itself — the deletes ARE the assertions. The researcher's first name is edited and
-// restored in the same step. A run that dies mid-step can therefore leave one data source
-// named `QA toast probe <tag>`, one draft titled `Toast probe draft (QA <tag>)` (registered with
-// ctx.trackStudy on that failure path only, so teardown cleanup catches it).
+// Writes: the data source, the code environment and the draft proposal are created and then
+// deleted by the suite itself — the deletes ARE the assertions. The researcher's first name is
+// edited and restored in the same step. A run that dies mid-step can therefore leave one data
+// source named `QA toast probe <tag>`, one code environment named `QA toast probe env <tag>`,
+// one draft titled `Toast probe draft (QA <tag>)` (registered with ctx.trackStudy on that
+// failure path only, so teardown cleanup catches it). Only the study is reachable by teardown
+// cleanup — it tracks studies and users, so a stranded settings row has to be deleted by hand.
 
 // Mirrors INACTIVITY_TIMEOUT_MS / WARNING_THRESHOLD_MS in the app's src/lib/types.ts:
 // eight hours idle signs you out, with a warning over the last ten minutes.
@@ -60,20 +71,29 @@ const INACTIVITY_TIMEOUT_MS = 8 * 60 * 60 * 1000
 const EXPIRY_OFFSET_MS = 5 * 60 * 1000
 
 const ADMIN_ORG = 'openstax' // the org the shared admin account administers
+const RESEARCHER_ORG = 'openstax-lab' // where the researcher account's drafts live
+// The invite modal, its pending-invite list and all three of its toasts live behind this one
+// button, so every message in that step is reached without leaving the dialog.
+const INVITE_DIALOG = 'Invite others to join your team'
 // ?audience=researcher pins the personal dashboard's tab, so the draft row is on screen
 // regardless of which tab the signed-in account defaults to.
 const RESEARCHER_DASHBOARD = '/dashboard?audience=researcher'
 
-// Mantine's public class names. `role=alert` alone is NOT specific enough to find a toast:
-// the App Router mounts its own permanently-empty `div[role=alert]` route announcer.
-const TOAST = '.mantine-Notification-root'
-const TOAST_TITLE = '.mantine-Notification-title'
-const TOAST_BODY = '.mantine-Notification-description'
-const TOAST_CLOSE = '.mantine-Notification-closeButton'
 const POPOVER = '.mantine-Popover-dropdown'
+// react-dropzone's own hidden input, inside the Mantine Dropzone the code page's drop overlay
+// wraps its panel in. Scoped to that root because the input carries no attribute of its own —
+// and left unscoped it would silently pick up any other file input the page grows.
+const CODE_DROPZONE_INPUT = '.mantine-Dropzone-root input[type="file"]'
 
 const DELETE_SOURCE_CONFIRM =
     'Are you sure you want to delete this data source? This cannot be undone.'
+const DELETE_ENV_CONFIRM =
+    'Are you sure you want to delete this code environment? This cannot be undone.'
+
+// The code environment URL field validates against the OCI image-reference grammar, so this
+// has to be a well-formed ref rather than a placeholder string. Nothing ever pulls it: the
+// create action only writes a row, and the suite deletes that row two steps later.
+const PROBE_ENV_IMAGE = 'harbor.safeinsights.org/openstax/r-base:2025-05-15'
 
 type ExpectedToast = {
     // A RegExp for the session-expiry warning only: its description holds a live minute
@@ -179,6 +199,28 @@ async function expectInvitationNotices(ctx: RunContext): Promise<void> {
 function probeSourceName(ctx: RunContext): string {
     return `QA toast probe ${ctx.tag}`
 }
+function probeEnvName(ctx: RunContext): string {
+    return `QA toast probe env ${ctx.tag}`
+}
+// The identifier column accepts only [a-z0-9_], and ctx.tag is hyphenated. Folding the
+// hyphens to underscores keeps the run's timestamp intact, so the value stays unique per run
+// — stripping them would too, but a shared prefix collides the moment two runs overlap.
+function probeEnvIdentifier(ctx: RunContext): string {
+    return ctx.tag.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+}
+
+// The innermost div holding BOTH the name and the row's controls is the row. Its ancestors
+// match the same filters, and a parent precedes its child in document order, so .last() is the
+// row itself. Data source controls are labelled per ACTION ('Edit data source'), not per row,
+// so scoping to the row is the only thing that makes them unique — unlike the code environment
+// rows, whose controls carry the environment's own name.
+function dataSourceRow(page: Page, name: string): Locator {
+    return page
+        .locator('div')
+        .filter({ hasText: name })
+        .filter({ has: page.getByLabel('Delete data source') })
+        .last()
+}
 // BUILT to OTTER-690's 60-character cap rather than trimmed to it, because this title
 // is BOTH what Step 1 persists and how the draft's row is found later (`Delete draft
 // study <title>`). taggedTitle keeps the tag whole and gives way on the descriptive
@@ -253,20 +295,42 @@ export const toastMessagesSuite: Suite = {
                 }),
         },
         {
+            name: 'Admin: data source updated toast',
+            run: ctx =>
+                ctx.step(async () => {
+                    const name = probeSourceName(ctx)
+                    // Re-navigate so this step stands alone on a retry.
+                    await ctx.page.goto(settingsUrl(ctx), { waitUntil: 'domcontentloaded' })
+                    const dialog = ctx.page.getByRole('dialog', { name: 'Edit Data Source' })
+                    await clickUntil(
+                        dataSourceRow(ctx.page, name).getByLabel('Edit data source'),
+                        dialog
+                    )
+                    // Only the description changes: 'added' and 'updated' are the two arms of
+                    // ONE ternary in use-data-source-form, so reaching the second arm is the
+                    // whole point — and leaving the name alone keeps the row where the delete
+                    // step below looks it up.
+                    await dialog
+                        .getByRole('textbox', { name: /^Description/ })
+                        .fill('Edited by the toast-messages suite; removed by the next step.')
+                    await dialog.getByRole('button', { name: 'Update Data Source' }).click()
+                    await expectToast(ctx.page, {
+                        title: 'Success',
+                        message: 'Data source updated successfully',
+                        color: 'teal',
+                    })
+                    await expect(dialog).toBeHidden()
+                    await dismissToasts(ctx.page)
+                }),
+        },
+        {
             name: 'Admin: data source deleted toast (and cleanup)',
             run: ctx =>
                 ctx.step(async () => {
                     const name = probeSourceName(ctx)
                     // Re-navigate so this step stands alone on a retry.
                     await ctx.page.goto(settingsUrl(ctx), { waitUntil: 'domcontentloaded' })
-                    // The innermost div holding BOTH the name and a delete control is the
-                    // row. Its ancestors match the same filters, and a parent precedes its
-                    // child in document order, so .last() is the row itself.
-                    const row = ctx.page
-                        .locator('div')
-                        .filter({ hasText: name })
-                        .filter({ has: ctx.page.getByLabel('Delete data source') })
-                        .last()
+                    const row = dataSourceRow(ctx.page, name)
                     const confirm = ctx.page
                         .locator(POPOVER)
                         .filter({ hasText: DELETE_SOURCE_CONFIRM })
@@ -287,6 +351,163 @@ export const toastMessagesSuite: Suite = {
                 }),
         },
         {
+            name: 'Admin: code environment added toast',
+            run: ctx =>
+                ctx.step(async () => {
+                    await ctx.page.goto(settingsUrl(ctx), { waitUntil: 'domcontentloaded' })
+                    const dialog = await openModal(
+                        ctx.page,
+                        'Add Code Environment',
+                        'Add Code Environment'
+                    )
+                    await dialog
+                        .getByRole('textbox', { name: /^Identifier/ })
+                        .fill(probeEnvIdentifier(ctx))
+                    await dialog.getByRole('textbox', { name: /^Name/ }).fill(probeEnvName(ctx))
+                    await dialog
+                        .getByRole('textbox', { name: /^URL to code environment/ })
+                        .fill(PROBE_ENV_IMAGE)
+                    // Created as a TESTING image so the row stays deletable. canDeleteCodeEnv
+                    // short-circuits on isTesting; a normal environment is undeletable unless
+                    // its language has a sibling that passed scanning, which is a precondition
+                    // of the org's real data and not something this suite can guarantee.
+                    await dialog.getByRole('checkbox', { name: /Is testing image/ }).check()
+                    // Starter code is required on create, and the form separately requires a
+                    // command line for EVERY starter file's extension — hence the .r file and
+                    // the 'r' command below. Language defaults to R, so it is left untouched.
+                    await dialog
+                        .locator('[data-testid="starter-code-dropzone"] input[type="file"]')
+                        .setInputFiles({
+                            name: 'main.r',
+                            mimeType: 'text/plain',
+                            buffer: Buffer.from('print("qa toast probe")\n'),
+                        })
+                    // Left in the draft pair rather than committed with the "+" button: the
+                    // form validates a complete pair in place and onSubmit folds it into
+                    // commandLines, so the extra click would assert nothing.
+                    await dialog.getByPlaceholder('Extension (e.g. r, py)').fill('r')
+                    await dialog.getByPlaceholder('Command (e.g. Rscript %f)').fill('Rscript %f')
+                    await dialog.getByRole('button', { name: 'Save Code Environment' }).click()
+                    await expectToast(ctx.page, {
+                        title: 'Success',
+                        message: 'Code environment added successfully',
+                        color: 'teal',
+                    })
+                    await expect(dialog).toBeHidden()
+                    await dismissToasts(ctx.page)
+                }),
+        },
+        {
+            name: 'Admin: code environment updated toast',
+            run: ctx =>
+                ctx.step(async () => {
+                    const name = probeEnvName(ctx)
+                    await ctx.page.goto(settingsUrl(ctx), { waitUntil: 'domcontentloaded' })
+                    const dialog = ctx.page.getByRole('dialog', { name: 'Edit Code Environment' })
+                    // No row scoping needed here: these controls are labelled with the
+                    // environment's own name, so the label is already unique to this run's row.
+                    await clickUntil(ctx.page.getByLabel(`Edit ${name}`), dialog)
+                    // The example-data path is the smallest edit that reaches the update arm of
+                    // the ternary. Starter code is optional on edit — an untouched dropzone
+                    // leaves the existing file in place, which the form's per-extension command
+                    // check still reads, so the .r/'r' pairing from the add step keeps holding.
+                    await dialog.getByRole('textbox', { name: /^Data Path/ }).fill('data/')
+                    await dialog.getByRole('button', { name: 'Update Code Environment' }).click()
+                    await expectToast(ctx.page, {
+                        title: 'Success',
+                        message: 'Code environment updated successfully',
+                        color: 'teal',
+                    })
+                    await expect(dialog).toBeHidden()
+                    await dismissToasts(ctx.page)
+                }),
+        },
+        {
+            name: 'Admin: code environment deleted toast (and cleanup)',
+            run: ctx =>
+                ctx.step(async () => {
+                    const name = probeEnvName(ctx)
+                    await ctx.page.goto(settingsUrl(ctx), { waitUntil: 'domcontentloaded' })
+                    const confirm = ctx.page
+                        .locator(POPOVER)
+                        .filter({ hasText: DELETE_ENV_CONFIRM })
+                    await clickUntil(ctx.page.getByLabel(`Delete ${name}`), confirm)
+                    await confirm.getByRole('button', { name: 'Yes' }).click()
+                    await expectToast(ctx.page, {
+                        title: 'Success',
+                        message: 'Code environment was deleted successfully',
+                        color: 'teal',
+                    })
+                    await expect(ctx.page.getByText(name, { exact: true })).toHaveCount(0)
+                    await dismissToasts(ctx.page)
+                }),
+        },
+        {
+            // All three invite toasts in one step because they share one fixture: a pending
+            // invite that only exists between the first invite and the revoke. Splitting them
+            // would leave each step re-deriving an address it cannot derive — the other
+            // multi-step fixtures here are re-findable by a name built from ctx.tag, and a
+            // mail.tm address is issued by the API, not chosen.
+            name: 'Admin: invite resent, re-invited and revoked toasts',
+            run: ctx =>
+                ctx.step(async () => {
+                    // A REAL deliverable address rather than a synthetic one: the
+                    // already-invited branch of orgAdminInviteUserAction AWAITS the Mailgun
+                    // send before it returns, so an address that cannot receive mail risks
+                    // failing the very mutation whose toast this step asserts. (The other two
+                    // paths fire the send off unawaited, but they need the same invite.)
+                    const inbox = await createInbox(await activeDomain())
+                    try {
+                        // Raises no toast — it swaps the modal to a success panel. This is the
+                        // fixture the three messages below need, so it is not asserted here
+                        // beyond inviteUser's own wait for that panel.
+                        await inviteUser(ctx.page, ctx.baseURL, inbox.address, 'reviewer')
+                        const dialog = ctx.page.getByRole('dialog', { name: INVITE_DIALOG })
+                        // Back to the form, which is also what re-renders the pending list the
+                        // last two toasts are driven from.
+                        await dialog
+                            .getByRole('button', { name: 'Continue to invite people' })
+                            .click()
+                        await dialog
+                            .getByRole('textbox', { name: /invite by email/i })
+                            .fill(inbox.address)
+                        await dialog.getByRole('radio', { name: /^Contributor/ }).check()
+                        await dialog.getByRole('button', { name: 'Send invitation' }).click()
+                        await expectToast(ctx.page, {
+                            title: 'Invite resent',
+                            message: 'This user has already been invited. Resending invite.',
+                            color: 'green',
+                        })
+                        await dismissToasts(ctx.page)
+                        // Per-email test ids, so these address THIS run's invite even though
+                        // the org's other pending invites are listed alongside it. The address
+                        // is already lowercase (mail.tm issues it from a lowercase alphabet),
+                        // which matters because the action lowercases before storing.
+                        await dialog.getByTestId(`re-invite-${inbox.address}`).click()
+                        await expectToast(ctx.page, {
+                            message: `${inbox.address} has been re-invited`,
+                            color: 'green',
+                        })
+                        await dismissToasts(ctx.page)
+                        await dialog.getByTestId(`delete-${inbox.address}`).click()
+                        await expectToast(ctx.page, {
+                            message: `The invite for ${inbox.address} has been revoked`,
+                            color: 'green',
+                        })
+                        // The revoke IS this step's cleanup, so prove the row is gone rather
+                        // than trusting the toast.
+                        await expect(dialog.getByTestId(`re-invite-${inbox.address}`)).toHaveCount(
+                            0
+                        )
+                        await dismissToasts(ctx.page)
+                    } finally {
+                        // Best-effort: a stranded mail.tm inbox costs nothing and expires on
+                        // its own, so it must not turn a real toast failure into this one.
+                        await deleteInbox(inbox).catch(() => {})
+                    }
+                }),
+        },
+        {
             name: 'Reviewer: session renders toasts',
             // No reviewer-SPECIFIC toast is asserted here — see the role-coverage note at
             // the top of this file for why there isn't one to reach. What this does prove is
@@ -298,7 +519,7 @@ export const toastMessagesSuite: Suite = {
                 }),
         },
         {
-            name: 'Researcher: proposal draft deleted toast (and cleanup)',
+            name: 'Researcher: unsupported file type, then proposal draft deleted',
             run: ctx =>
                 ctx.step(async () => {
                     const title = probeDraftTitle(ctx)
@@ -312,12 +533,41 @@ export const toastMessagesSuite: Suite = {
                     // continue" persists it with the row, so creating the draft is now the
                     // whole fixture — the old "fill the title on Step 2, then click
                     // Previous to flush it" dance is gone with the field that required it
-                    // (OTTER-690 moved the title to Step 1). No toast is raised by
-                    // creating a draft, so there is nothing to assert until the delete.
+                    // (OTTER-690 moved the title to Step 1). Creating the draft raises no
+                    // toast of its own, so the first assertion is the code-upload reject
+                    // below; that same draft is then what the delete toast is raised on.
                     await openProposalDashboard(ctx.page, ctx.baseURL)
                     await beginProposal(ctx.page)
                     const studyId = await completeSetupAndCaptureId(ctx.page, title)
                     try {
+                        // Straight to Step 4 rather than clicking through the proposal: the
+                        // /code route only redirects when the study has no language, and
+                        // Step 1 has just set one, so a plain draft renders the upload panel.
+                        // No submission or reviewer approval is needed to reach it.
+                        await ctx.page.goto(
+                            `${ctx.baseURL}/${RESEARCHER_ORG}/study/${studyId}/code`,
+                            { waitUntil: 'domcontentloaded' }
+                        )
+                        const dropzone = ctx.page.locator(CODE_DROPZONE_INPUT)
+                        await dropzone.waitFor({ state: 'attached' })
+                        // '.md' with a text/plain MIME is the combination that reaches the
+                        // toast. The dropzone's `accept` is keyed by MIME, so text/plain gets
+                        // the file PAST react-dropzone; the overlay then re-checks the
+                        // EXTENSION and rejects it. A file that failed the MIME check would
+                        // never reach the handler that raises this message, and one with an
+                        // accepted extension would upload for real.
+                        const rejected = `not-code-${ctx.tag}.md`
+                        await dropzone.setInputFiles({
+                            name: rejected,
+                            mimeType: 'text/plain',
+                            buffer: Buffer.from('# not code'),
+                        })
+                        await expectToast(ctx.page, {
+                            title: 'Unsupported file type',
+                            message: `${rejected} — Accepted formats: .r, .rmd, .json, .csv, .txt, .py, .ipynb.`,
+                            color: 'red',
+                        })
+                        await dismissToasts(ctx.page)
                         await ctx.page.goto(`${ctx.baseURL}${RESEARCHER_DASHBOARD}`, {
                             waitUntil: 'domcontentloaded',
                         })
