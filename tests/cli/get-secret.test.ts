@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseArgs } from '@/cli/args'
+import { booleansFor, parseArgs } from '@/cli/args'
 import { getSecretCommand, readSecret } from '@/cli/commands/get-secret'
 
 const PEM = '-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----\n'
@@ -50,6 +50,14 @@ describe('getSecretCommand', () => {
         await expect(getSecretCommand({}, { K: PEM })).rejects.toThrow(/--name <VAR> is required/)
     })
 
+    // Without this the message is the generic "--name is required", which does not
+    // tell someone who typed `--key K` what they got wrong.
+    it('names --key as the mistake rather than reporting a missing --name', async () => {
+        await expect(getSecretCommand({ key: 'true' }, { K: PEM })).rejects.toThrow(
+            /Use `--name <VAR>` instead/
+        )
+    })
+
     it('suggests redirecting rather than --force when refusing a TTY', async () => {
         const orig = process.stdout.isTTY
         process.stdout.isTTY = true
@@ -63,24 +71,13 @@ describe('getSecretCommand', () => {
     })
 })
 
-// The parser shares ONE booleans list across every subcommand, so fix-account's
-// valueless --key switch would have eaten get-secret's var name: `--key FOO` parses
-// to {key:'true'} and the following token is dropped entirely. That fails silently
-// (a lookup of a var literally named "true"), which is why the flag is --name.
-describe('--key is a global boolean and must not be reused', () => {
-    const BOOLEANS = [
-        'json',
-        'headed',
-        'screencast',
-        'help',
-        'admin',
-        'password',
-        'key',
-        'yes',
-        'force',
-    ]
+// `--key` is listed valueless for get-secret: it was the documented flag once, and
+// letting it carry a value now would look up a var literally named "true". It stays
+// valueless so the command can reject it by name, which is why the flag is --name.
+describe('--key is valueless for get-secret and must not be reused', () => {
+    const BOOLEANS = booleansFor('get-secret')
 
-    it('would swallow the var name if get-secret used --key', () => {
+    it('swallows the var name if get-secret used --key', () => {
         const opts = parseArgs(['--key', 'REVIEWER_RESULTS_PRIVATE_KEY_QA'], { booleans: BOOLEANS })
         expect(opts.key).toBe('true')
         expect(opts.name).toBeUndefined()

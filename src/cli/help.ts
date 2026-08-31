@@ -5,9 +5,17 @@ interface CommandHelp {
     details?: string
 }
 
+// Every subcommand name, as a union of literals rather than `string`. Derived from
+// COMMANDS below (`as const satisfies`, which checks the shape without widening the
+// names), so this list stays the single place a command is named. `booleansFor` keys
+// its per-command switch sets by this type, which is what stops a typo there from
+// silently resolving to "no switches for this command" — the failure mode that made
+// `session-signin --password` swallow its value in the first place.
+export type CommandName = (typeof COMMANDS)[number]['name']
+
 // One entry per subcommand in bin/qar.ts. Keep this list in sync with the switch
 // there — `qar --help` is the discovery path for anyone who doesn't know the flags.
-export const COMMANDS: CommandHelp[] = [
+export const COMMANDS = [
     {
         name: 'run',
         usage: 'qar run --suite <name> (--env <env> | --pr <n>) [--role <role>] [--headed] [--json]',
@@ -67,8 +75,8 @@ export const COMMANDS: CommandHelp[] = [
         usage: 'qar get-secret --name <VAR> [--force]',
         summary: 'Print one decrypted secret to stdout (the read half of set-secret).',
         details:
-            "The var is named with --name, not --key: --key is fix-account's valueless\n" +
-            'boolean switch and the parser shares one booleans list across subcommands.\n\n' +
+            'The var is named with --name, not --key: --key is listed valueless for this\n' +
+            'command, so it cannot carry a var name. Passing it is an error, not an alias.\n\n' +
             'Prints the raw value with NO trailing newline, so a PEM survives byte-for-byte:\n' +
             '  qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem\n\n' +
             'Refuses to write to a terminal unless --force is given, so a private key does\n' +
@@ -197,7 +205,7 @@ export const COMMANDS: CommandHelp[] = [
         summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',
         details: 'Call right after posting a verdict comment + transition to Jira.',
     },
-]
+] as const satisfies readonly CommandHelp[]
 
 export function commandNames(): string[] {
     return COMMANDS.map(c => c.name)
@@ -222,7 +230,10 @@ export function topLevelHelp(): string {
 
 // `qar <command> --help` — usage line plus any caveats worth knowing before running.
 export function commandHelp(name: string): string | null {
-    const command = COMMANDS.find(c => c.name === name)
+    // Widened back to CommandHelp: `as const` on COMMANDS keeps the names as literals
+    // (which is what CommandName needs), but it also drops `details` from the entries
+    // that omit it, so the union has no such property to read below.
+    const command: CommandHelp | undefined = COMMANDS.find(c => c.name === name)
     if (!command) return null
     const parts = [command.summary, '', `Usage: ${command.usage}`]
     if (command.details) parts.push('', command.details)

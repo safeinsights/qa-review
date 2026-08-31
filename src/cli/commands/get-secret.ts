@@ -19,12 +19,19 @@ export function readSecret(vars: Vars, key: string): string {
     return value
 }
 
-// The var is named with --name, NOT --key: `key` is a global boolean in bin/qar.ts
-// (fix-account's valueless --key switch), and the parser's booleans list is shared
-// across subcommands — so `--key FOO` would parse to 'true' and look up a var called
-// "true". Reusing the name here would silently break rather than error.
+// The var is named with --name, NOT --key. `key` is listed valueless for this command
+// in src/cli/args.ts, so `--key FOO` parses to 'true' and drops FOO. That is
+// deliberate: `--key` was the documented flag once, and letting it through now would
+// look up a var called "true" — a silent wrong answer. Kept valueless so the guard
+// below can name the mistake instead.
 export async function getSecretCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
     const key = opts.name
+    if (!key && opts.key) {
+        throw new Error(
+            'get-secret: `--key <VAR>` is parsed as a valueless switch and loses the name. ' +
+                'Use `--name <VAR>` instead.'
+        )
+    }
     if (!key) throw new Error('get-secret: --name <VAR> is required')
     const value = readSecret(vars, key)
 

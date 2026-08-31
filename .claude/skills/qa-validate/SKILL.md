@@ -164,11 +164,10 @@ you, so you do NOT need this to fix drift), `qar get-secret` is the read half of
 qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > .tmp/reviewer-qa.pem
 ```
 
-The var is named with **`--name`, not `--key`** — `--key` is `fix-account`'s valueless
-boolean and the parser shares one booleans list across subcommands, so `--key <VAR>`
-resolves to `true` and drops the name. This applies to `set-secret` as well, which
-now rejects `--key` outright (it used to encrypt under a var named "true" and report
-success). Output carries no trailing newline
+The var is named with **`--name`, not `--key`** — `key` is listed valueless for both
+secret commands, so `--key <VAR>` resolves to `true` and drops the name. Both reject
+it outright rather than aliasing it (it used to encrypt under a var named "true" and
+report success). Output carries no trailing newline
 (a PEM stays byte-exact) and printing to a terminal is refused without `--force`, so
 always redirect. Write it under `.tmp/` and **delete it when done** — this key
 decrypts real study results, and leaving it on disk outlives the session that needed

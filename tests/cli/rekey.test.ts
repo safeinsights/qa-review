@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BOOLEANS, parseArgs } from '@/cli/args'
+import { booleansFor, parseArgs } from '@/cli/args'
 import { rekeyAll } from '@/cli/commands/rekey'
 import { setSecret, setSecretCommand } from '@/cli/commands/set-secret'
 import { createIdentity, readIdentity } from '@/engine/identity'
@@ -62,11 +62,12 @@ describe('rekey', () => {
         expect(readLock(dir)).toBe(fingerprint([aPub]))
     })
 
-    // `--key` was the documented flag, but `key` is in bin/qar.ts's shared BOOLEANS
-    // list, so the parser turns `--key REVIEWER_EMAIL_DEMO` into 'true' and drops the
-    // name. That silently encrypted a secret called "true" and printed success.
+    // `--key` was the documented flag, but `key` is listed valueless for set-secret,
+    // so the parser turns `--key REVIEWER_EMAIL_DEMO` into 'true' and drops the name.
+    // That silently encrypted a secret called "true" and printed success, which is
+    // why the command rejects the flag outright.
     describe('set-secret arg parsing', () => {
-        const parse = (argv: string[]) => parseArgs(argv, { booleans: BOOLEANS })
+        const parse = (argv: string[]) => parseArgs(argv, { booleans: booleansFor('set-secret') })
 
         it('rejects --key instead of writing a secret named "true"', async () => {
             const opts = parse(['--key', 'REVIEWER_EMAIL_DEMO', '--value', 'a@b.c'])
