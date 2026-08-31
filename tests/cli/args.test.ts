@@ -1,5 +1,8 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { booleansFor, parseArgs } from '@/cli/args'
+import { commandNames } from '@/cli/help'
 
 describe('parseArgs', () => {
     it('parses --key value pairs', () => {
@@ -60,6 +63,29 @@ describe('booleansFor', () => {
             })
             expect(out.key).toBe('true')
             expect(out.name).toBeUndefined()
+        }
+    })
+})
+
+// COMMAND_BOOLEANS keys are typed as CommandName, so a typo there is a compile error
+// rather than a switch set that silently applies to nothing. That only holds while
+// CommandName describes the commands the CLI actually dispatches, which the type
+// system cannot see — bin/qar.ts's switch is control flow, not data. These two pin
+// the ends the type cannot reach.
+describe('command names stay in sync', () => {
+    const qar = fs.readFileSync(path.join(__dirname, '../../bin/qar.ts'), 'utf8')
+    const dispatched = [...qar.matchAll(/^\s*case '([^']+)':/gm)].map(m => m[1])
+
+    it('dispatches every command the help list advertises', () => {
+        expect(dispatched.sort()).toEqual(commandNames().sort())
+    })
+
+    // The failure this catches: renaming a command in bin/qar.ts and COMMANDS but not
+    // in COMMAND_BOOLEANS is a compile error, whereas renaming it ONLY in bin/qar.ts
+    // leaves both lists agreeing with each other and disagreeing with the CLI.
+    it('declares switches only for commands that are dispatched', () => {
+        for (const command of commandNames()) {
+            expect(dispatched).toContain(command)
         }
     })
 })

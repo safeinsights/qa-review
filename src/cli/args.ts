@@ -1,3 +1,5 @@
+import type { CommandName } from './help'
+
 export interface ParseArgsOptions {
     booleans: string[]
 }
@@ -12,7 +14,12 @@ export interface ParseArgsOptions {
 // naming nothing that pointed at the parser.
 //
 // Scoping the sets means a new switch can only ever affect its own command.
-const COMMAND_BOOLEANS: Record<string, readonly string[]> = {
+//
+// Keyed by CommandName rather than by string: these keys are the only thing tying a
+// switch set to a command, and a typo'd or renamed one would otherwise be a silent
+// no-op resolving to "no switches here" — the same quiet shape as the bug above.
+// Partial because most commands declare none.
+const COMMAND_BOOLEANS: Partial<Record<CommandName, readonly string[]>> = {
     run: ['json', 'headed', 'screencast'],
     invite: ['admin'],
     'fix-account': ['password', 'key', 'yes'],
@@ -31,11 +38,12 @@ const COMMAND_BOOLEANS: Record<string, readonly string[]> = {
 // one flag every subcommand answers, so it is the one flag that stays global.
 const GLOBAL_BOOLEANS = ['help'] as const
 
-// The valueless switches for one subcommand. An unknown subcommand still gets the
-// globals, so `qar nonsense --help` reaches the unknown-command message rather than
-// consuming the next token.
+// The valueless switches for one subcommand. Takes a plain string because it is fed
+// straight from argv: an unknown subcommand still gets the globals, so `qar nonsense
+// --help` reaches the unknown-command message rather than consuming the next token.
 export function booleansFor(command: string | undefined): string[] {
-    return [...GLOBAL_BOOLEANS, ...(COMMAND_BOOLEANS[command ?? ''] ?? [])]
+    const declared = command ? COMMAND_BOOLEANS[command as CommandName] : undefined
+    return [...GLOBAL_BOOLEANS, ...(declared ?? [])]
 }
 
 // Minimal `--key value` / `--bool` parser. Returns a flat string map. Boolean
