@@ -18,11 +18,12 @@ export async function setSecret(dir: string, key: string, plain: string): Promis
 }
 
 // The var is named with **`--name`, not `--key`** — the same trap that already made
-// get-secret use `--name`. `key` lives in the ONE shared BOOLEANS list in
-// src/cli/args.ts (fix-account's valueless switch), so `--key FOO` parses to 'true'
-// and drops FOO entirely. That wrote a secret literally named "true" and reported
-// success, so `--key` is rejected outright rather than aliased: there is no way for
-// it to carry a var name through this parser.
+// get-secret use `--name`. `key` is listed valueless for this command in
+// src/cli/args.ts, so `--key FOO` parses to 'true' and drops FOO entirely. That wrote
+// a secret literally named "true" and reported success, so `--key` is rejected
+// outright rather than aliased. The listing is deliberate now that boolean sets are
+// per-command: dropping it would turn `--key` into a working alias, which is a
+// behaviour change and not one this command wants.
 export async function setSecretCommand(opts: Record<string, string>): Promise<void> {
     const key = opts.name
     const value = opts.value

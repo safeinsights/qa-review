@@ -1,4 +1,4 @@
-import { BOOLEANS, parseArgs } from '@/cli/args'
+import { booleansFor, parseArgs } from '@/cli/args'
 import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
@@ -30,7 +30,7 @@ import { loadSettings } from '@/engine/settings'
 
 async function main() {
     const [subcommand, ...rest] = process.argv.slice(2)
-    const opts = parseArgs(rest, { booleans: BOOLEANS })
+    const opts = parseArgs(rest, { booleans: booleansFor(subcommand) })
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
         console.log(topLevelHelp())

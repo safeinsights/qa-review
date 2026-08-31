@@ -67,8 +67,8 @@ export const COMMANDS: CommandHelp[] = [
         usage: 'qar get-secret --name <VAR> [--force]',
         summary: 'Print one decrypted secret to stdout (the read half of set-secret).',
         details:
-            "The var is named with --name, not --key: --key is fix-account's valueless\n" +
-            'boolean switch and the parser shares one booleans list across subcommands.\n\n' +
+            'The var is named with --name, not --key: --key is listed valueless for this\n' +
+            'command, so it cannot carry a var name. Passing it is an error, not an alias.\n\n' +
             'Prints the raw value with NO trailing newline, so a PEM survives byte-for-byte:\n' +
             '  qar get-secret --name REVIEWER_RESULTS_PRIVATE_KEY_QA > reviewer-qa.pem\n\n' +
             'Refuses to write to a terminal unless --force is given, so a private key does\n' +
