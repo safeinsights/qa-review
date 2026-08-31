@@ -10,6 +10,20 @@ export const TOAST_TITLE = '.mantine-Notification-title'
 export const TOAST_BODY = '.mantine-Notification-description'
 export const TOAST_CLOSE = '.mantine-Notification-closeButton'
 
+// Clear the tray so a still-open toast can neither satisfy the next assertion nor cover a
+// control. Mantine holds a notification for 8s, which is long enough for two consecutive
+// saves of the SAME card to fall inside one window — so without this, the second save's
+// assertion is satisfied by the first save's toast and proves nothing.
+//
+// Clicking each close button beats waiting out the autoClose; the clicks are best-effort
+// (one can hit autoClose mid-loop, detaching the node), and `toHaveCount(0)` is the real gate.
+export async function dismissToasts(page: Page): Promise<void> {
+    for (const closeButton of await page.locator(TOAST_CLOSE).all()) {
+        await closeButton.click().catch(() => {})
+    }
+    await expect(page.locator(TOAST)).toHaveCount(0)
+}
+
 // "This toast came up, with this title" — for suites whose subject is the ACTION rather than
 // the notification. The exhaustive checks (severity colour, role, the absence of a title on
 // the message-only notices) belong to the toast-messages suite, which owns that surface.

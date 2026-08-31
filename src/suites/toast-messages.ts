@@ -7,7 +7,7 @@ import {
     openProposalDashboard,
     taggedTitle,
 } from '../engine/flows/study'
-import { TOAST, TOAST_BODY, TOAST_CLOSE, TOAST_TITLE } from '../engine/flows/toasts'
+import { dismissToasts, TOAST, TOAST_BODY, TOAST_CLOSE, TOAST_TITLE } from '../engine/flows/toasts'
 import { activeDomain, createInbox, deleteInbox } from '../engine/mailtm'
 import type { RunContext, Suite } from './types'
 
@@ -138,17 +138,6 @@ async function expectToast(page: Page, expected: ExpectedToast): Promise<void> {
             new RegExp(`--notification-color:\\s*var\\(--mantine-color-${expected.color}-filled\\)`)
         )
     }
-}
-
-// Clear the tray between checks so a still-open toast can neither satisfy the next
-// assertion nor cover a control. Clicking each close button beats waiting out the 8s
-// autoClose; the clicks are best-effort (one can hit autoClose mid-loop, detaching the
-// node), and the `toHaveCount(0)` below is the real gate.
-async function dismissToasts(page: Page): Promise<void> {
-    for (const closeButton of await page.locator(TOAST_CLOSE).all()) {
-        await closeButton.click().catch(() => {})
-    }
-    await expect(page.locator(TOAST)).toHaveCount(0)
 }
 
 async function openModal(page: Page, buttonName: string, dialogName: string): Promise<Locator> {

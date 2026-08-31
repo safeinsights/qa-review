@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { dismissToasts, TOAST } from '../engine/flows/toasts'
 import type { RunContext, Suite } from './types'
 
 // Regression coverage for the User Profile feature (/researcher/profile).
@@ -59,12 +60,29 @@ const RESEARCH = {
     featured: ['https://doi.org/10.1234/qa-review-one', 'https://doi.org/10.1234/qa-review-two'],
 }
 const INVALID_URL = 'not-a-valid-url'
+// The interest the cap must refuse. Named so the rejection can be asserted by value
+// rather than only by a count that never moved.
+const SIXTH_INTEREST = 'Sixth Interest'
 // The research-interests field caps at five, so clearing it can never need more
 // clicks than that plus slack. Bounds the removal loop in setInterests.
 const MAX_PILL_REMOVALS = 10
 
+// Mantine's public class names, named here rather than inlined at three call sites.
+// They are the part of this suite most likely to move under a Mantine upgrade, and a
+// selector that silently stops matching would leave the suite green while asserting
+// nothing. toast-messages keeps its own class constants the same way.
+const CARD = '.mantine-Paper-root'
+const PILL = '.mantine-Pill-root'
+// Addressed by class because there is nothing else to address it by: Mantine renders the
+// pill's X as aria-hidden="true" tabindex="-1" with no label and no text, so it is
+// invisible to getByRole. That is Mantine's pill pattern rather than an app defect — the X
+// is a mouse affordance and the accessible path is Backspace in the field, which was
+// verified to work (one pill, Backspace, count 1 -> 0). So: not a bug to file, just a
+// control that only a class selector can reach.
+const PILL_REMOVE = '.mantine-Pill-remove'
+
 const sectionCard = (page: Page, heading: string): Locator =>
-    page.locator('.mantine-Paper-root').filter({
+    page.locator(CARD).filter({
         has: page.getByRole('heading', { level: 3, name: heading, exact: true }),
     })
 
@@ -78,6 +96,25 @@ async function openForEdit(section: Locator, anyFieldId: string): Promise<void> 
     if (await field.isVisible().catch(() => false)) return
     await section.getByRole('button', { name: 'Edit', exact: true }).click()
     await field.waitFor({ state: 'visible' })
+}
+
+// Converge on "no second position" before one is added. A run that died between the
+// add and the delete in the second-position step strands a leftover row, and on the
+// NEXT run the same locator would resolve to two rows — a strict-mode violation whose
+// message names the locator rather than the stale data that caused it. Absorbing the
+// leftover is the same idempotency move `originalName` makes for a stray "-QA".
+//
+// Targeted at the second affiliation rather than "every row with a Delete button":
+// once two positions exist BOTH rows offer delete, so a blind sweep could remove the
+// primary position instead.
+async function removeSecondPositions(section: Locator): Promise<void> {
+    const rows = section.getByRole('row').filter({ hasText: SECOND_POSITION.affiliation })
+    // Bounded by the initial count, and each pass asserts the count actually fell, so a
+    // delete that stops deleting fails here instead of spinning to the step deadline.
+    for (let remaining = await rows.count(); remaining > 0; remaining--) {
+        await rows.first().getByRole('button', { name: 'Delete current position' }).click()
+        await expect(rows).toHaveCount(remaining - 1)
+    }
 }
 
 // The institutional card is the ONE section without a plain "Edit" button: saved
@@ -98,12 +135,26 @@ async function clearAndBlur(field: Locator): Promise<void> {
 }
 
 // Save a card and wait for its own toast. Each section emits a distinct message,
-// so asserting the text is what proves the right card was persisted.
+// so asserting the text is what proves the right card was persisted — but only
+// against an EMPTY tray. Mantine holds a toast for 8s, and both of the repeat
+// saves here (personal information saves twice inside one step; institutional
+// saves once per step across two consecutive steps) land well inside that window,
+// so a leftover toast would satisfy the next assertion without the save having
+// happened at all. Clear, save, assert, clear.
+//
+// Scoped to the notification root rather than page.getByText: an unscoped text
+// match can be satisfied by ordinary card copy, and would keep passing if the tray
+// stopped rendering entirely. Whether the string arrives as the toast's title or
+// its body is deliberately NOT asserted — that surface belongs to toast-messages.
 async function saveSection(page: Page, section: Locator, toast: string): Promise<void> {
+    await dismissToasts(page)
     const button = saveButton(section)
     await expect(button).toBeEnabled()
     await button.click()
-    await expect(page.getByText(toast, { exact: true })).toBeVisible()
+    // waitFor, not expect: the toast is raised on a server round trip, which needs
+    // the action timeout rather than the shorter assertion one.
+    await page.locator(TOAST).filter({ hasText: toast }).waitFor({ state: 'visible' })
+    await dismissToasts(page)
 }
 
 // Mantine Select renders its options in a portal OUTSIDE the card, so the option
@@ -114,16 +165,12 @@ async function selectDegree(page: Page, section: Locator, degree: string): Promi
     await expect(section.locator('#degree')).toHaveValue(degree)
 }
 
-const pills = (section: Locator): Locator => section.locator('.mantine-Pill-root')
+const pills = (section: Locator): Locator => section.locator(PILL)
 
 // Reset the research-interests pills to `values`.
-//
-// The pill remove control is addressed by class, not by role/name, because it
-// carries NO accessible name — no aria-label and no text content, so there is
-// nothing for getByRole to match. If that is fixed, switch to getByRole here.
 async function setInterests(section: Locator, values: string[]): Promise<void> {
     const input = section.locator('#researchInterests')
-    const remove = section.locator('.mantine-Pill-remove')
+    const remove = section.locator(PILL_REMOVE)
     // Bounded, not `while (count > 0)`: if a click ever stops removing (disabled
     // control, a pill that re-adds itself) an unbounded loop spins until the global
     // step timeout with nothing said about why. The field caps at five, so anything
@@ -182,7 +229,11 @@ async function gotoProfile(ctx: RunContext): Promise<void> {
 export const userProfileSuite: Suite = {
     name: 'user-profile',
     description: 'Regression: User Profile, all four cards save, validate and persist',
-    roles: ['admin', 'researcher', 'reviewer'],
+    // NOT 'reviewer', and that is BY DESIGN — a reviewer has no profile, confirmed by
+    // the team. Their account menu carries no Profile item, so step 1 times out waiting
+    // on it. Don't re-add the role and don't file it as a bug; admin and researcher
+    // pass end to end and are the whole supported set.
+    roles: ['admin', 'researcher'],
     steps: [
         {
             name: 'Open Profile from the account menu',
@@ -200,6 +251,19 @@ export const userProfileSuite: Suite = {
                             ctx.page.getByRole('heading', { level: 3, name: heading, exact: true })
                         ).toBeVisible()
                     }
+                    // There is no SECOND route to this page to cover. The "Profile" row in
+                    // the sidebar is not a link of its own — it is the account menu above,
+                    // rendered inline in the sidebar while expanded, which is exactly what
+                    // gotoProfile already drives. A dump of every anchor on the loaded page
+                    // returns five ('/', '/dashboard' twice, one empty) and no element
+                    // anywhere carries the text 'Profile' while the menu is closed.
+                    //
+                    // Worth stating because the obvious selectors fail in a MISLEADING way:
+                    // getByRole('link', { name: 'Profile' }) and a[href$="/profile"] both
+                    // find nothing, which reads like a control with bad semantics. It isn't
+                    // one — the element simply is not rendered until the menu opens, and
+                    // gotoProfile's getByRole('menuitem', { name: 'Profile' }) matching on
+                    // every run is proof it has both a role and an accessible name.
                 }),
         },
         {
@@ -278,6 +342,21 @@ export const userProfileSuite: Suite = {
                         await field.blur()
                     }
                     await expect(saveButton(section)).toBeEnabled()
+
+                    // The degree is required too, but it is deliberately NOT exercised the
+                    // way the two text fields above are, because on this account it CANNOT
+                    // be: once a degree is chosen there is no way to un-choose it. The card
+                    // offers no clear control (its only button in edit mode is "Save
+                    // changes"), and emptying the Select's text does not empty its value —
+                    // running exactly that leaves the input reading '' while Save stays
+                    // ENABLED, because the selection survives the cleared search text.
+                    //
+                    // So the "degree required" rule is only reachable on a never-saved
+                    // profile, which a shared QA account is not after its first run. A
+                    // check that selected a degree and asserted Save enabled would assert
+                    // nothing about the requirement. Left as a known gap rather than a
+                    // check that reads like coverage; it needs either a clear control in
+                    // the app or a throwaway account.
                 }),
         },
         {
@@ -303,6 +382,25 @@ export const userProfileSuite: Suite = {
                     ).toBeVisible()
                     // The checkbox is not echoed as a field of its own — it changes the
                     // degree's LABEL, which is the only place the flag is observable.
+                    await expect(
+                        section.getByText('Degree (currently pursuing)', { exact: true })
+                    ).toBeVisible()
+
+                    // Clearing it has to be observable too. Asserting only the checked
+                    // arm would pass for a label hard-coded to the pursuing text, which
+                    // is exactly how this flag would break unnoticed.
+                    await openForEdit(section, '#educationalInstitution')
+                    await pursuing.uncheck()
+                    await saveSection(page, section, 'Education updated')
+                    await expect(section.getByText('Degree', { exact: true })).toBeVisible()
+                    await expect(
+                        section.getByText('Degree (currently pursuing)', { exact: true })
+                    ).toHaveCount(0)
+
+                    // Leave the flag set, so the reload step downstream sees one known state.
+                    await openForEdit(section, '#educationalInstitution')
+                    await pursuing.check()
+                    await saveSection(page, section, 'Education updated')
                     await expect(
                         section.getByText('Degree (currently pursuing)', { exact: true })
                     ).toBeVisible()
@@ -370,10 +468,12 @@ export const userProfileSuite: Suite = {
                     await expect(
                         section.getByRole('row').filter({ hasText: PRIMARY_POSITION.affiliation })
                     ).toBeVisible()
-                    // The saved URL renders as a real anchor, not plain text.
+                    // The saved URL renders as a real anchor, not plain text — and one
+                    // that actually POINTS at the URL. Matching only the visible name
+                    // passes for an anchor whose text is the URL and whose href is not.
                     await expect(
                         section.getByRole('link', { name: PRIMARY_POSITION.profileUrl })
-                    ).toBeVisible()
+                    ).toHaveAttribute('href', PRIMARY_POSITION.profileUrl)
                 }),
         },
         {
@@ -385,6 +485,7 @@ export const userProfileSuite: Suite = {
                     const secondRow = section
                         .getByRole('row')
                         .filter({ hasText: SECOND_POSITION.affiliation })
+                    await removeSecondPositions(section)
 
                     await section
                         .getByRole('button', { name: /Add another current position/ })
@@ -417,8 +518,15 @@ export const userProfileSuite: Suite = {
                     // count must not move — this is the assertion that catches a
                     // regression in the cap itself.
                     const input = section.locator('#researchInterests')
-                    await input.fill('Sixth Interest')
+                    await input.fill(SIXTH_INTEREST)
                     await input.press('Enter')
+                    // Named, not just counted. `toHaveCount(5)` alone is satisfied the
+                    // instant it is evaluated — including in the world where a sixth pill
+                    // was one tick from landing — so it can pass while the cap is broken.
+                    // Asserting the specific rejected value is absent still can't prove a
+                    // negative on its own, but it survives a re-render that merely
+                    // reorders or relabels pills, which a bare count does not.
+                    await expect(pills(section).filter({ hasText: SIXTH_INTEREST })).toHaveCount(0)
                     await expect(pills(section)).toHaveCount(5)
 
                     await setInterests(section, RESEARCH.interests)
@@ -463,6 +571,12 @@ export const userProfileSuite: Suite = {
                     const { page } = ctx
                     const section = sectionCard(page, SECTION.research)
                     await openForEdit(section, '#detailedPublicationsUrl')
+                    // Set the interests here rather than inheriting the unsaved form the
+                    // cap step happened to leave behind. This step is what PERSISTS them,
+                    // and the engine can retry or jump straight to it — against a profile
+                    // that has none, inheriting would save an empty set and only fail one
+                    // step later, in the reload check, pointing at the wrong step.
+                    await setInterests(section, RESEARCH.interests)
                     await section.locator('#detailedPublicationsUrl').fill(RESEARCH.detailedUrl)
                     await section.locator('#featured0').fill(RESEARCH.featured[0])
                     await section.locator('#featured1').fill(RESEARCH.featured[1])
@@ -483,6 +597,16 @@ export const userProfileSuite: Suite = {
                         page.getByRole('heading', { level: 1, name: PROFILE_HEADING })
                     ).toBeVisible()
 
+                    // Personal information is checked here for the RESTORE, not the save:
+                    // the rename step asserts its own summary re-render, which a save that
+                    // never reached the server would also satisfy. A "-QA" suffix surviving
+                    // a reload is that failure, and this is the only place it shows up.
+                    const personal = sectionCard(page, SECTION.personal)
+                    await expect(
+                        personal.getByText(ctx.account.email, { exact: true })
+                    ).toBeVisible()
+                    await expect(personal.getByText(/-QA$/)).toHaveCount(0)
+
                     const education = sectionCard(page, SECTION.education)
                     await expect(
                         education.getByText(EDUCATION.institution, { exact: true })
@@ -497,18 +621,29 @@ export const userProfileSuite: Suite = {
                     const institutional = sectionCard(page, SECTION.institutional)
                     await expect(
                         institutional.getByRole('link', { name: PRIMARY_POSITION.profileUrl })
-                    ).toBeVisible()
+                    ).toHaveAttribute('href', PRIMARY_POSITION.profileUrl)
                     const positionRow = institutional
                         .getByRole('row')
                         .filter({ hasText: PRIMARY_POSITION.position })
                     await expect(positionRow).toBeVisible()
+                    // The delete must have reached the server too. Asserting the row is
+                    // gone only from the live DOM would pass for a delete that removed the
+                    // row client-side and never persisted.
+                    await expect(
+                        institutional
+                            .getByRole('row')
+                            .filter({ hasText: SECOND_POSITION.affiliation })
+                    ).toHaveCount(0)
 
                     const research = sectionCard(page, SECTION.research)
                     for (const interest of RESEARCH.interests) {
                         await expect(research.getByText(interest, { exact: true })).toBeVisible()
                     }
                     for (const url of [RESEARCH.detailedUrl, ...RESEARCH.featured]) {
-                        await expect(research.getByRole('link', { name: url })).toBeVisible()
+                        await expect(research.getByRole('link', { name: url })).toHaveAttribute(
+                            'href',
+                            url
+                        )
                     }
                 }),
         },
