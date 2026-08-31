@@ -12,6 +12,8 @@
       "allowedDomains": [
         "openstax.atlassian.net",
         "*.qa.safeinsights.org",
+        "*.staging.safeinsights.org",
+        "*.*.staging.safeinsights.org",
         "app.staging.safeinsights.org",
         "app.safeinsights.org",
         "api.github.com",
