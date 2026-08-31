@@ -847,35 +847,39 @@ async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void
 
 // Reach the code-review editor. When the reviewer hasn't acked the agreements, an
 // agreements gate (STEP 2A/2B/2C) renders first and its "Proceed to Step 3" button
-// advances to the code-review editor. On the live preview that gate can take a
-// moment to hydrate, so poll: each round, if the code-review section is up we're
-// done; else click "Proceed to Step 3" if present and wait.
+// advances to the code-review editor.
+//
+// OTTER-727 hid this gate too, not just the researcher one above: REVIEWER_SCREEN_RULES
+// dropped its `reviewer-agreements` entry, so /review renders the editor directly and
+// the screen is retained only as unreachable. Kept tolerant of both shapes for the same
+// reason as the researcher step — restoring the gate is re-adding ONE rule entry — so
+// this cannot become that bug in reverse when it comes back.
+//
+// The four-round poll this replaces existed to absorb slow gate hydration. With no gate
+// left to hydrate it only bought repeated re-navigation on the way to a failure, which
+// is the retry masking the suite rules forbid; one race over the two shapes is the
+// whole decision.
 async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     const section = ctx.page.getByTestId('code-review-section')
     const proceed = ctx.page.getByRole('button', { name: /Proceed to Step 3/i })
-    for (let attempt = 0; attempt < 4; attempt++) {
-        await gotoReview(ctx, studyId)
-        // Either the editor renders directly, or the agreements gate does — wait
-        // for whichever appears first before deciding.
-        await Promise.race([
-            section.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
-            proceed.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
-        ])
-        if (await section.isVisible().catch(() => false)) return
-        if (await proceed.isVisible().catch(() => false)) {
-            await proceed.click().catch(() => {})
-            if (
-                await section
-                    .waitFor({ state: 'visible', timeout: 20_000 })
-                    .then(() => true)
-                    .catch(() => false)
-            ) {
-                return
-            }
-        }
+    await gotoReview(ctx, studyId)
+    // Either the editor renders directly, or the agreements gate does — wait for
+    // whichever appears first before deciding.
+    await Promise.race([
+        section.waitFor({ state: 'visible' }).catch(() => {}),
+        proceed.waitFor({ state: 'visible' }).catch(() => {}),
+    ])
+    // Checked AFTER the race rather than instead of it: a gate that is on screen still
+    // has to be clicked, even when the race was won by the other locator.
+    if (
+        !(await section.isVisible().catch(() => false)) &&
+        (await proceed.isVisible().catch(() => false))
+    ) {
+        await proceed.click()
     }
-    // Final wait so a genuine failure surfaces the real timeout error.
-    await section.waitFor({ state: 'visible', timeout: 15_000 })
+    // The assertion either shape has to satisfy, and the error a genuine failure
+    // surfaces. The gate does not render the editor, so this cannot pass on the gate.
+    await section.waitFor({ state: 'visible' })
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
