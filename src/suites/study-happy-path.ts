@@ -253,12 +253,37 @@ export const studyHappyPathSuite: Suite = {
                     await proceedToStep3.waitFor({ state: 'visible' })
                     await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
                     await proceedToStep3.click()
+                    // OTTER-727 (management-app #975, merged 2026-08-31) HID the
+                    // agreements step this used to lead to: /submitted's Proceed button
+                    // now computes the code step directly, and /agreements/researcher
+                    // redirects rather than rendering. Waiting unconditionally for the
+                    // gate's "Proceed to Step 4" therefore failed this step 30s AFTER it
+                    // had already arrived at /code.
+                    //
+                    // The gate is kept in the codebase as intentionally unreachable, and
+                    // that card notes restoring it is re-adding ONE rule entry — so this
+                    // stays tolerant of both shapes rather than dropping the hop the way
+                    // management-app's own navigateToCodeUpload helper did. Same approach
+                    // openCodeReview() uses for the reviewer-side gate.
+                    //
+                    // Note the button still reads "Proceed to step 3" while landing on a
+                    // page headed "STEP 4" — a known label/numbering gap deferred to
+                    // OTTER-673, NOT a bug to re-report.
                     const proceedToStep4 = ctx.page.getByRole('button', {
                         name: /Proceed to Step 4/i,
                     })
-                    await proceedToStep4.waitFor({ state: 'visible' })
-                    await proceedToStep4.click()
-                    await ctx.page.getByText('Upload your files').waitFor({ state: 'visible' })
+                    const uploadFiles = ctx.page.getByText('Upload your files')
+                    await Promise.race([
+                        proceedToStep4.waitFor({ state: 'visible' }).catch(() => {}),
+                        uploadFiles.waitFor({ state: 'visible' }).catch(() => {}),
+                    ])
+                    // Checked AFTER the race rather than instead of it: a gate that is on
+                    // screen still has to be clicked, even when the race was won by the
+                    // other locator.
+                    if (await proceedToStep4.isVisible().catch(() => false)) {
+                        await proceedToStep4.click()
+                    }
+                    await uploadFiles.waitFor({ state: 'visible' })
                 }),
         },
         {
