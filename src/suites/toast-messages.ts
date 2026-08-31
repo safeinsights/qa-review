@@ -3,8 +3,8 @@ import { clickUntil } from '../engine/flows/interactions'
 import {
     beginProposal,
     completeSetupAndCaptureId,
-    fitStudyTitle,
     openProposalDashboard,
+    taggedTitle,
 } from '../engine/flows/study'
 import type { RunContext, Suite } from './types'
 
@@ -47,7 +47,7 @@ import type { RunContext, Suite } from './types'
 // Writes: the data source pair and the draft proposal are created and then deleted by the
 // suite itself — the deletes ARE the assertions. The researcher's first name is edited and
 // restored in the same step. A run that dies mid-step can therefore leave one data source
-// named `QA toast probe <tag>`, one draft titled `Toast probe draft <tag>` (registered with
+// named `QA toast probe <tag>`, one draft titled `Toast probe draft (QA <tag>)` (registered with
 // ctx.trackStudy on that failure path only, so teardown cleanup catches it).
 
 // Mirrors INACTIVITY_TIMEOUT_MS / WARNING_THRESHOLD_MS in the app's src/lib/types.ts:
@@ -179,11 +179,13 @@ async function expectInvitationNotices(ctx: RunContext): Promise<void> {
 function probeSourceName(ctx: RunContext): string {
     return `QA toast probe ${ctx.tag}`
 }
-// Fitted to OTTER-690's 60-character cap, because this title is BOTH what Step 1
-// persists and how the draft's row is found later (`Delete draft study <title>`).
-// Letting the page truncate it would break the lookup, not just the fill.
+// BUILT to OTTER-690's 60-character cap rather than trimmed to it, because this title
+// is BOTH what Step 1 persists and how the draft's row is found later (`Delete draft
+// study <title>`). taggedTitle keeps the tag whole and gives way on the descriptive
+// half; trimming a plain "<words> <tag>" string would drop the tag instead — which is
+// the half the lookup needs.
 function probeDraftTitle(ctx: RunContext): string {
-    return fitStudyTitle(`Toast probe draft ${ctx.tag}`)
+    return taggedTitle('Toast probe draft', ctx.tag)
 }
 function settingsUrl(ctx: RunContext): string {
     return `${ctx.baseURL}/${ADMIN_ORG}/admin/settings`

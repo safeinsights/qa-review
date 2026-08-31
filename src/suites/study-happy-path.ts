@@ -74,6 +74,14 @@ const RESULTS_RENDER_WAIT_MS = 8_000
 // that is never visible — the same failure with a new cause.
 const RESULTS_KEY_COPY = /(results|security) key/i
 
+// The entry point the enclave sources BY NAME, so it is load-bearing rather than
+// cosmetic: it names the round-1 fixture, the name round 2's different script is
+// staged under, the uploaded row asserted in the table, and both halves of the
+// "elect a main file" accessible-name pair. Those last two only LOOK like
+// interpolated strings, so a rename that missed them would fail as a selector
+// timeout rather than a missing file.
+const MAIN_FILE = 'main.r'
+
 // The files the enclave returns, named exactly as the outputs table lists them.
 // The round-2 script (multi-query-main.r) uploads five result files plus the
 // archive; the security scan log is added by the enclave itself.
@@ -148,8 +156,9 @@ export const studyHappyPathSuite: Suite = {
                     // first attempt put in ctx.state — so the clamp also has to live in
                     // the step that fills the field, and is written back so state
                     // matches the record that gets created.
-                    const study = content(ctx)
+                    const study = { ...content(ctx) }
                     study.title = fitStudyTitle(study.title)
+                    ctx.state.study = study
                     // Proceeding to Step 2 creates the study record. Capture + track
                     // its id the instant it exists, so no created study is untracked.
                     const studyId = await completeSetupAndCaptureId(ctx.page, study.title)
@@ -393,7 +402,7 @@ export const studyHappyPathSuite: Suite = {
                 ctx.step(async () => {
                     await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
                     await ctx.page
-                        .getByRole('cell', { name: 'main.r', exact: true })
+                        .getByRole('cell', { name: MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
                     await ctx.page
                         .getByRole('cell', { name: 'code.r', exact: true })
@@ -417,8 +426,8 @@ export const studyHappyPathSuite: Suite = {
                     // selected name also makes the retry idempotent, since a second press
                     // would toggle the selection back off.
                     await clickUntil(
-                        ctx.page.getByRole('button', { name: 'Set main.r as main file' }),
-                        ctx.page.getByRole('button', { name: 'main.r is the main file' })
+                        ctx.page.getByRole('button', { name: `Set ${MAIN_FILE} as main file` }),
+                        ctx.page.getByRole('button', { name: `${MAIN_FILE} is the main file` })
                     )
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
@@ -468,7 +477,7 @@ export const studyHappyPathSuite: Suite = {
                         .locator('input[type="file"]')
                         .setInputFiles(await resubmitFiles())
                     await ctx.page
-                        .getByRole('cell', { name: 'main.r', exact: true })
+                        .getByRole('cell', { name: MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
                     await ctx.page
                         .getByLabel(/Resubmission Note/i)
@@ -679,7 +688,7 @@ function fixtureDir(): string {
 
 function fixtureFiles(): string[] {
     const dir = fixtureDir()
-    return [path.join(dir, 'main.r'), path.join(dir, 'code.r')]
+    return [path.join(dir, MAIN_FILE), path.join(dir, 'code.r')]
 }
 
 // The round-2 resubmission uploads a DIFFERENT script — the multi-query one, which
@@ -691,7 +700,7 @@ function fixtureFiles(): string[] {
 // round 1's. Copy it to a temp dir under the required name rather than renaming the
 // fixture, so the two scripts can coexist in the repo.
 async function resubmitFiles(): Promise<string[]> {
-    const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), 'main.r')
+    const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), MAIN_FILE)
     await copyFile(path.join(fixtureDir(), 'multi-query-main.r'), staged)
     return [staged]
 }
