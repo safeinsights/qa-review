@@ -107,6 +107,11 @@ async function openForEdit(section: Locator, anyFieldId: string): Promise<void> 
 // Targeted at the second affiliation rather than "every row with a Delete button":
 // once two positions exist BOTH rows offer delete, so a blind sweep could remove the
 // primary position instead.
+//
+// The delete is UNCONFIRMED: positions-table.tsx wires the trash control straight to
+// onDelete, with no popover to answer (unlike the data-source delete in toast-messages).
+// If that ever gains a confirm, this loop fails as a toHaveCount timeout naming the ROW
+// rather than the dialog nobody answered — start here, not at the locator.
 async function removeSecondPositions(section: Locator): Promise<void> {
     const rows = section.getByRole('row').filter({ hasText: SECOND_POSITION.affiliation })
     // Bounded by the initial count, and each pass asserts the count actually fell, so a
@@ -146,6 +151,9 @@ async function clearAndBlur(field: Locator): Promise<void> {
 // match can be satisfied by ordinary card copy, and would keep passing if the tray
 // stopped rendering entirely. Whether the string arrives as the toast's title or
 // its body is deliberately NOT asserted — that surface belongs to toast-messages.
+//
+// Returns with the tray EMPTY, by design. A caller that wants to assert something
+// further about this toast has to do it inside here, not after the call.
 async function saveSection(page: Page, section: Locator, toast: string): Promise<void> {
     await dismissToasts(page)
     const button = saveButton(section)
