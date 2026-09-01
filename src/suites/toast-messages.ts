@@ -60,6 +60,10 @@ import type { RunContext, Suite } from './types'
 // one draft titled `Toast probe draft (QA <tag>)` (registered with ctx.trackStudy on that
 // failure path only, so teardown cleanup catches it). Only the study is reachable by teardown
 // cleanup — it tracks studies and users, so a stranded settings row has to be deleted by hand.
+// The invite step can strand one more thing: a PENDING INVITE to a mail.tm address, if the run
+// dies between the first invite and the revoke. The revoke IS its cleanup, and teardown does not
+// track invites, so those accumulate in the org's pending list under `@<mail.tm domain>` addresses
+// until someone clears them by hand. Harmless (the inboxes expire) but worth knowing the source.
 
 // Mirrors INACTIVITY_TIMEOUT_MS / WARNING_THRESHOLD_MS in the app's src/lib/types.ts:
 // eight hours idle signs you out, with a warning over the last ten minutes.

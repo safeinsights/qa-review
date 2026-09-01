@@ -15,13 +15,21 @@ export const TOAST_CLOSE = '.mantine-Notification-closeButton'
 // the message-only notices) belong to the toast-messages suite, which owns that surface.
 //
 // `message` is optional because a real call site passes none: use-submit-proposal raises
-// 'Proposal submitted' with `message: ''`, and Mantine renders no description element for an
-// empty string — so asserting one would fail on a toast behaving exactly as written.
+// 'Proposal submitted' with `message: ''`. Mantine renders the description element ANYWAY —
+// unlike the title, the description Box carries no `children &&` guard — so the empty case is
+// asserted as EMPTY TEXT rather than as an absent node. `toHaveCount(0)` here would fail against
+// a toast behaving exactly as written.
 export async function expectToastVisible(
     page: Page,
     expected: { title: string; message?: string }
 ): Promise<void> {
-    const toast = page.locator(TOAST).filter({ hasText: expected.title })
+    // Matched on the TITLE ELEMENT, not on `hasText`. `hasText` matches anywhere in the
+    // notification — title or body — and is not anchored, so with two toasts open inside
+    // Mantine's 8s window the assertions below hit a strict-mode violation naming the locator
+    // rather than the leftover toast. Callers here do not clear the tray first.
+    const toast = page
+        .locator(TOAST)
+        .filter({ has: page.locator(TOAST_TITLE, { hasText: expected.title }) })
     // waitFor, not expect, for the appearance: these toasts are raised on a server round trip,
     // which needs the action timeout rather than the shorter assertion one. (Timeouts are
     // configured globally, never inline.)
@@ -29,5 +37,7 @@ export async function expectToastVisible(
     await expect(toast.locator(TOAST_TITLE)).toHaveText(expected.title)
     if (expected.message) {
         await expect(toast.locator(TOAST_BODY)).toHaveText(expected.message)
+    } else {
+        await expect(toast.locator(TOAST_BODY)).toHaveText('')
     }
 }
