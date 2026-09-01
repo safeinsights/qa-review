@@ -539,6 +539,13 @@ export async function runEngine(
             get resultsKey() {
                 return env.accounts[currentRole].privateKey
             },
+            // A getter for the same reason `resultsKey` and `account` are: it has to track
+            // loginAs(), not the role the run started as. Exists so a message about a
+            // per-role value can NAME that role instead of hardcoding one and going stale
+            // the first time a second role reaches the same helper.
+            get role() {
+                return currentRole
+            },
             async loginAs(role) {
                 // Guaranteed clean slate before re-authenticating. Visiting
                 // /account/signin while still signed in trips the app's

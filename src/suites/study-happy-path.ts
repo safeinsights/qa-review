@@ -111,6 +111,23 @@ function resultsKeyBox(ctx: RunContext) {
         .first()
 }
 
+// The results key, or a message naming the account whose key is actually missing.
+// Built from ctx.role rather than hardcoded: the reviewer and the researcher decrypt
+// with DIFFERENT keys (OTTER-688), so a fixed "Reviewer" would send whoever hits this
+// as the researcher to the wrong Settings field — which is the misconfiguration this
+// error exists to prevent them chasing.
+function requireResultsKey(ctx: RunContext): string {
+    const key = ctx.resultsKey
+    if (!key) {
+        const role = `${ctx.role[0].toUpperCase()}${ctx.role.slice(1)}`
+        throw new Error(
+            `Missing ${ctx.role} results key for this environment: set the ${role} ` +
+                '"Results private key" for this env (qa/staging) in the Settings panel.'
+        )
+    }
+    return key
+}
+
 // Short settle after isReactHydrated before clicking the "Proceed to step 3"
 // next/link button: the App Router route entry for the /agreements segment wires
 // up just after initial hydration, and a click in that gap no-ops silently.
@@ -676,15 +693,7 @@ export const studyHappyPathSuite: Suite = {
                     const keyForm = ctx.page.getByTestId('security-key-form')
                     await keyForm.waitFor({ state: 'visible' })
                     await expect(ctx.page.getByText(/Decrypt to view your outputs/i)).toBeVisible()
-                    const key = ctx.resultsKey
-                    if (!key) {
-                        throw new Error(
-                            'Missing researcher results key for this environment: set the ' +
-                                'Researcher "Results private key" for this env (qa/staging) in ' +
-                                'the Settings panel.'
-                        )
-                    }
-                    await resultsKeyBox(ctx).fill(key)
+                    await resultsKeyBox(ctx).fill(requireResultsKey(ctx))
                     await ctx.page.getByRole('button', { name: /^view$/i }).click()
                     // Unlocked phase. The outputs table is the proof the key actually worked —
                     // the banner alone would flip on any state change.
@@ -799,13 +808,7 @@ async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
         outputsReady.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
     ])
     if (await outputsReady.isVisible().catch(() => false)) return
-    const key = ctx.resultsKey
-    if (!key) {
-        throw new Error(
-            'Missing reviewer results key for this environment: set the Reviewer "Results private key" ' +
-                'for this env (qa/staging) in the Settings panel.'
-        )
-    }
+    const key = requireResultsKey(ctx)
     await keyBox.fill(key)
     // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
     // can't drift onto the per-file buttons in the outputs table below, which don't

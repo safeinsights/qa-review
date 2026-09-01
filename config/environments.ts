@@ -21,8 +21,10 @@
 export interface AccountVars {
     emailPrefix: string
     passwordPrefix: string
-    // Results-decryption private key (PEM). Used by study-happy-path to decrypt
-    // results (as the reviewer). Each QA user sets their own, for each env.
+    // Results-decryption private key (PEM). Per ACCOUNT, not just per env: the reviewer
+    // opens the results the enclave returned, the researcher opens the outputs the
+    // reviewer shared back, and the two are wrapped to different keys (OTTER-688).
+    // Each QA user sets their own, for each env.
     privateKeyPrefix: string
     // Fixed second-factor code, typed verbatim at login.
     mfaCodePrefix: string
