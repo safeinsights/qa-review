@@ -14,6 +14,7 @@ import {
     type StudyContent,
     submitProposal,
 } from '../engine/flows/study'
+import { expectToastVisible } from '../engine/flows/toasts'
 import { repoDir } from '../engine/paths'
 import type { RunContext, Suite } from './types'
 
@@ -30,7 +31,7 @@ import type { RunContext, Suite } from './types'
 //   reviewer:   approve code (round 2)
 //   (qa runs the job) -> poll until results appear
 //   reviewer:   decrypt + approve results
-//   researcher: confirm results approved
+//   researcher: decrypt the shared outputs with their OWN key and confirm they render
 //   reviewer:   (end here so teardown cleanup has delete authority)
 //
 // Selectors mirror management-app/tests/study-flow.spec.ts. The suite logs in as
@@ -39,10 +40,13 @@ import type { RunContext, Suite } from './types'
 // The IDE launch opens an external Coder workspace in a new window and is REQUIRED:
 // the button must appear, the popup must open, and it must load, or the step fails.
 //
-// Requires the reviewer's results-decryption private key to approve results:
-// set the Reviewer "Results private key" for the target env (qa/staging) in the
-// Settings panel. The key is per-account AND per-env; env.ts resolves the one
-// matching the running env (PR previews reuse qa) into ctx.resultsKey.
+// Requires TWO results-decryption private keys, because the two roles decrypt
+// different things: the Reviewer's opens the results the enclave returned, and the
+// Researcher's opens the outputs the reviewer then SHARED back (OTTER-688 re-wraps
+// those artifacts to the lab's keys). Set both "Results private key" fields for the
+// target env (qa/staging) in the Settings panel. Each is per-account AND per-env;
+// env.ts resolves the pair matching the running env (PR previews reuse qa), and
+// ctx.resultsKey hands back whichever belongs to the currently signed-in role.
 
 const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
@@ -105,6 +109,23 @@ function resultsKeyBox(ctx: RunContext) {
         .getByRole('textbox', { name: RESULTS_KEY_COPY })
         .or(ctx.page.getByPlaceholder(RESULTS_KEY_COPY))
         .first()
+}
+
+// The results key, or a message naming the account whose key is actually missing.
+// Built from ctx.role rather than hardcoded: the reviewer and the researcher decrypt
+// with DIFFERENT keys (OTTER-688), so a fixed "Reviewer" would send whoever hits this
+// as the researcher to the wrong Settings field — which is the misconfiguration this
+// error exists to prevent them chasing.
+function requireResultsKey(ctx: RunContext): string {
+    const key = ctx.resultsKey
+    if (!key) {
+        const role = `${ctx.role[0].toUpperCase()}${ctx.role.slice(1)}`
+        throw new Error(
+            `Missing ${ctx.role} results key for this environment: set the ${role} ` +
+                '"Results private key" for this env (qa/staging) in the Settings panel.'
+        )
+    }
+    return key
 }
 
 // Short settle after isReactHydrated before clicking the "Proceed to step 3"
@@ -179,6 +200,13 @@ export const studyHappyPathSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     await submitProposal(ctx.page)
+                    // Asserted AFTER submitProposal's own arrival wait, on purpose: the toast
+                    // is raised before use-submit-proposal router.push()es, and the comment at
+                    // that call site claims it survives the push because the Notifications
+                    // provider lives in the persistent app shell. Checking it here is what
+                    // verifies that claim rather than assuming it. This notice carries an
+                    // EMPTY message, so the title is the whole assertion.
+                    await expectToastVisible(ctx.page, { title: 'Proposal submitted' })
                 }),
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
@@ -462,6 +490,11 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByTestId('code-under-review-banner')
                         .waitFor({ state: 'visible' })
+                    await expectToastVisible(ctx.page, {
+                        title: 'Study Code Submitted',
+                        message:
+                            'Your code has been successfully submitted to the Data Partner. Check your dashboard for status updates.',
+                    })
                 }),
         },
         // ---- Reviewer: request code changes (round 1) ----
@@ -519,6 +552,10 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('heading', { name: /Edit study code/i })
                         .waitFor({ state: 'hidden' })
+                    await expectToastVisible(ctx.page, {
+                        title: 'Study Code Resubmitted',
+                        message: 'Your updated code has been submitted to the Data Partner.',
+                    })
                 }),
         },
         // ---- Reviewer: approve code (round 2) ----
@@ -635,15 +672,41 @@ export const studyHappyPathSuite: Suite = {
             run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
-            name: 'Researcher sees the approved results',
+            // OTTER-688 replaced this screen. It used to be a one-line status message
+            // ("The results of your study have been approved by the Data Partner…") that the
+            // researcher could read with no further action; the outputs are now GATED behind
+            // the researcher's own security key, so the honest assertion is the whole
+            // locked -> unlocked transition rather than a string.
+            //
+            // The researcher's key is not the reviewer's: 'share outputs' re-wraps the
+            // artifacts to the LAB's public keys, so this decrypts with
+            // RESEARCHER_RESULTS_PRIVATE_KEY_<ENV> while step 21 used the reviewer's. That is
+            // why ctx.resultsKey now follows loginAs() instead of being pinned to the reviewer.
+            name: 'Researcher decrypts and sees the shared outputs',
             run: ctx =>
                 ctx.step(async () => {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/view`, {
                         waitUntil: 'domcontentloaded',
                     })
+                    // Locked phase. Both halves are asserted: the banner is what tells the
+                    // researcher WHY they are being asked for a key, and the form is the gate.
+                    const keyForm = ctx.page.getByTestId('security-key-form')
+                    await keyForm.waitFor({ state: 'visible' })
+                    await expect(ctx.page.getByText(/Decrypt to view your outputs/i)).toBeVisible()
+                    await resultsKeyBox(ctx).fill(requireResultsKey(ctx))
+                    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+                    // Unlocked phase. The outputs table is the proof the key actually worked —
+                    // the banner alone would flip on any state change.
                     await ctx.page
-                        .getByText(/results of your study have been approved/i)
+                        .getByRole('button', { name: RESULTS_FILE, exact: true })
                         .waitFor({ state: 'visible' })
+                    await expect(
+                        ctx.page.getByText(/Outputs and feedback available/i)
+                    ).toBeVisible()
+                    // The key form must LEAVE the DOM, not merely hide: the input, its error
+                    // state and the decrypt handler all have to exit the tab order once the key
+                    // has done its job, which the app commits to explicitly (OTTER-696 AC).
+                    await expect(keyForm).toHaveCount(0)
                 }),
         },
         {
@@ -745,13 +808,7 @@ async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
         outputsReady.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
     ])
     if (await outputsReady.isVisible().catch(() => false)) return
-    const key = ctx.resultsKey
-    if (!key) {
-        throw new Error(
-            'Missing reviewer results key for this environment: set the Reviewer "Results private key" ' +
-                'for this env (qa/staging) in the Settings panel.'
-        )
-    }
+    const key = requireResultsKey(ctx)
     await keyBox.fill(key)
     // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
     // can't drift onto the per-file buttons in the outputs table below, which don't

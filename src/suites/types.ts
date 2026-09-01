@@ -27,10 +27,18 @@ export interface RunContext {
     // working as the newly-signed-in user. Used by multi-role suites (e.g. a
     // researcher submits, then a reviewer approves).
     loginAs(role: Role): Promise<void>
-    // The reviewer's results-decryption private key, when configured (secret var
-    // REVIEWER_RESULTS_PRIVATE_KEY). Undefined if unset — a suite that needs it
-    // should throw a clear error pointing at `qar set-secret`.
+    // The CURRENTLY signed-in role's results-decryption private key, tracking loginAs()
+    // exactly as `account` below does (secret var `<ROLE>_RESULTS_PRIVATE_KEY_<ENV>`).
+    // Per-role because reviewers and researchers decrypt with DIFFERENT keys — the
+    // reviewer opens the returned results, the researcher opens the outputs the reviewer
+    // shared back (OTTER-688). Undefined if unset — a suite that needs it should throw a
+    // clear error pointing at `qar set-secret`.
     resultsKey?: string
+    // The CURRENTLY signed-in role, tracking loginAs() like the two values around it.
+    // Use it to NAME the role in a message about a per-role value (`resultsKey`,
+    // `account`) rather than hardcoding one — a hardcoded role reads correctly until a
+    // second role reaches the same helper, and then it points at the wrong account.
+    role: Role
     // Credentials for the CURRENTLY signed-in role, tracking loginAs(). A suite
     // needs these when it has to drive a login form the engine's own loginAs()
     // doesn't cover — e.g. the Coder IDE's Clerk-hosted OIDC sign-in, which forces

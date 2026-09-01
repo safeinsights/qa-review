@@ -528,9 +528,24 @@ export async function runEngine(
             },
             trackStudy: id => cleanup.trackStudy(id),
             trackUser: id => cleanup.trackUser(id),
-            // Results are decrypted as the reviewer, so surface the reviewer
-            // account's private key. Undefined when unset (the suite errors clearly).
-            resultsKey: env.accounts.reviewer.privateKey,
+            // The CURRENT role's results-decryption key, a getter for the same reason
+            // `account` above is one. It used to be pinned to the reviewer, on the premise
+            // that only reviewers decrypt. OTTER-688 ended that: the researcher now decrypts
+            // shared outputs with their OWN key, and the two roles hold different keys — so a
+            // pinned reviewer key would hand the researcher a key that cannot decrypt, failing
+            // as "wrong key" rather than as the misconfiguration it is. Both existing readers
+            // are already signed in as the role whose key they want, so this changes no
+            // behaviour where it was correct. Undefined when unset (the suite errors clearly).
+            get resultsKey() {
+                return env.accounts[currentRole].privateKey
+            },
+            // A getter for the same reason `resultsKey` and `account` are: it has to track
+            // loginAs(), not the role the run started as. Exists so a message about a
+            // per-role value can NAME that role instead of hardcoding one and going stale
+            // the first time a second role reaches the same helper.
+            get role() {
+                return currentRole
+            },
             async loginAs(role) {
                 // Guaranteed clean slate before re-authenticating. Visiting
                 // /account/signin while still signed in trips the app's
