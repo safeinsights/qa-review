@@ -386,6 +386,21 @@ The `sandbox` block is read at **session start**, so an edit there changes nothi
 until a new session. The `env` block is NOT subject to that — it reaches new Bash
 calls immediately. `qar study-state` still needs `dangerouslyDisableSandbox`.
 
+**Git writes inside `.git/` are blocked even though the repo directory itself is
+writable.** Two shapes of this, both seen:
+
+- `git push -u` and `git branch --set-upstream-to` fail with `could not lock config
+  file .git/config: Operation not permitted`. Note what the message does NOT say: on
+  `push -u` the **push already succeeded** and the branch is on the remote — only the
+  upstream-tracking write failed. Do not re-push or assume the branch is missing;
+  re-run just the tracking command with the sandbox off.
+- `git checkout` of another branch can abort part-done, leaving **HEAD on the old
+  commit while the index and worktree hold the new one** — `git log -1` and
+  `git status` disagree, and the staged entries look like changes you made. Recover
+  with `git reset` then `git checkout -f -- .`, and redo the checkout with the
+  sandbox off. Back up any unrelated working-tree edits first; a reset makes them
+  much harder to tell apart from the checkout's leftovers.
+
 **Never run `pnpm install`, `pnpm test`, `pnpm typecheck` or `pnpm lint` in a
 packaged-app clone — with OR without the sandbox.** `node_modules` there is a symlink
 into `/Applications/SI QA Review.app/…/Resources/engine/node_modules`, and each of
