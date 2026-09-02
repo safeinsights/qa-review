@@ -22,6 +22,7 @@ export function StepsPanel({
     selectedIndex,
     onSelect,
     cdpPort,
+    companionAlive,
     emphasizeClaude,
     onOpenCompanion,
     onJumpTo,
@@ -44,6 +45,11 @@ export function StepsPanel({
     onSelect: (index: number, step: StepEnvelope) => void
     // The run's CDP port — the companion toggle is disabled until it's known.
     cdpPort: number | null
+    // A companion PTY that outlived its run (the browser is gone but the
+    // conversation isn't). It keeps the toggle enabled with no cdpPort, so a
+    // stopped run can still be discussed — reopening shows that session rather
+    // than spawning against a port that no longer exists.
+    companionAlive: boolean
     // Emphasize the toggle when something needs attention (browser live / failed run).
     emphasizeClaude: boolean
     onOpenCompanion: () => void
@@ -61,7 +67,7 @@ export function StepsPanel({
                 <CompanionToggle
                     onOpen={onOpenCompanion}
                     emphasize={emphasizeClaude}
-                    disabled={!cdpPort}
+                    disabled={!cdpPort && !companionAlive}
                 />
             </div>
             <StepChecklist

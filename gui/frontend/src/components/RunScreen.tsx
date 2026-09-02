@@ -52,6 +52,10 @@ export function RunScreen({
     // covers the bottom of the run content with no way to scroll it into view. The
     // drawer's top drag handle writes this back on resize.
     const [companionHeight, setCompanionHeight] = useState(COMPANION_HEIGHT)
+    // Whether a companion PTY exists, reported by the drawer. A companion outlives
+    // the run that spawned it (the browser dies, the conversation doesn't), so this
+    // — not cdpPort — is what keeps "Ask Claude" reachable after a stop.
+    const [companionAlive, setCompanionAlive] = useState(false)
 
     // The viewed snapshot + recording playback (state that sits beside a run).
     const snap = useSnapshotSelection(stepNames)
@@ -172,6 +176,7 @@ export function RunScreen({
                         selectedIndex={snap.selected?.index ?? null}
                         onSelect={snap.select}
                         cdpPort={run.cdpPort}
+                        companionAlive={companionAlive}
                         emphasizeClaude={emphasizeClaude}
                         onOpenCompanion={() => setCompanionOpen(true)}
                         // Jumping only means something while the engine is still
@@ -211,6 +216,7 @@ export function RunScreen({
                 onClose={() => setCompanionOpen(false)}
                 height={companionHeight}
                 onHeightChange={setCompanionHeight}
+                onAliveChange={setCompanionAlive}
             />
         </>
     )
