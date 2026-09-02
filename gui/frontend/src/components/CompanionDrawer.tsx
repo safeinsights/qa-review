@@ -1,6 +1,7 @@
 import { Alert, Button, Drawer } from '@mantine/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRunCompanion, stopSessionIfOwner } from '../lib/ipc'
+import { companionPortAction } from './companionLifecycle'
 import { Terminal } from './Terminal'
 
 // Companion drawer height in px. COMPANION_HEIGHT is the default the drawer opens
@@ -32,6 +33,7 @@ export function CompanionDrawer({
     onClose,
     height,
     onHeightChange,
+    onAliveChange,
 }: {
     cdpPort: number | null
     suite: string
@@ -41,6 +43,9 @@ export function CompanionDrawer({
     // bottom padding (scroll clears the drawer). Dragging the top handle updates it.
     height: number
     onHeightChange: (h: number) => void
+    // Reports whether a companion PTY currently exists, so the "Ask Claude" toggle
+    // can stay enabled after a run stops (the session outlives its browser).
+    onAliveChange?: (alive: boolean) => void
 }) {
     // xterm measures its container, so mount <Terminal> only after the slide-in
     // transition finishes (drawer at its final height) — otherwise it fits to the
@@ -53,44 +58,86 @@ export function CompanionDrawer({
     // since taken over the shared PTY slot.
     const sessionToken = useRef<string | null>(null)
 
-    // Reset spawn state so the NEXT open respawns a fresh companion. Called when the
-    // PTY dies (Claude quit / evicted) or when the run's browser goes away (cdpPort
-    // changes on stop / a new run) — in both cases the current companion is attached
-    // to a dead endpoint and must not be reused.
-    const resetSpawn = useCallback(() => {
-        spawned.current = false
-        sessionToken.current = null
-    }, [])
+    // Whether the live PTY is attached to a browser that no longer exists (the run
+    // was stopped). The conversation stays usable — that's the point — but the
+    // browser-driving MCP tools in it are dead, so say so rather than let the user
+    // ask for a snapshot and get a confusing failure from inside Claude.
+    const [browserGone, setBrowserGone] = useState(false)
 
-    // The run's CDP port identifies THIS run's browser. When it changes (the run
-    // stopped → null, or a NEW run started → new port), any companion we spawned is
-    // pointed at a dead browser, so drop our spawn state to force a fresh respawn on
-    // the next open. (The stale PTY, if any, is torn down by the Go eviction on the
-    // next Start, or by unmount.)
+    // `spawned` stays a REF because it is the synchronous double-spawn guard: it must
+    // be readable and settable between renders, before startRunCompanion resolves.
+    // markSpawned mirrors it outward for the parts that render off it (the "Ask
+    // Claude" toggle stays enabled once a session exists, even with no cdpPort).
+    const markSpawned = useCallback(
+        (alive: boolean) => {
+            spawned.current = alive
+            onAliveChange?.(alive)
+        },
+        [onAliveChange]
+    )
+
+    // Reset spawn state so the NEXT open spawns a fresh companion. Called when the
+    // PTY dies (Claude quit / evicted) — there is no session left to reuse.
+    const resetSpawn = useCallback(() => {
+        markSpawned(false)
+        sessionToken.current = null
+        setBrowserGone(false)
+    }, [markSpawned])
+
+    // The run's CDP port identifies THIS run's browser. What to do when it changes
+    // is NOT uniform, so the decision lives in companionPortAction:
+    //
+    //   stop (port -> null)  keep the PTY. Its browser tools are dead, but the
+    //                        conversation is the valuable part and the user's next
+    //                        question ("why did step 12 fail") is answerable from
+    //                        the on-disk bundle. Killing it here is what made the
+    //                        run-stop-start cycle lose context.
+    //   new run (new port)   reap and respawn against the new port. Keeping it is
+    //                        unsafe, not just useless: the old port is ephemeral and
+    //                        can be reused, so the companion could silently drive
+    //                        the wrong browser.
     const prevCdpPort = useRef<number | null>(cdpPort)
     useEffect(() => {
-        if (prevCdpPort.current !== cdpPort) {
-            prevCdpPort.current = cdpPort
+        const prev = prevCdpPort.current
+        if (prev === cdpPort) return
+        prevCdpPort.current = cdpPort
+        const action = companionPortAction(prev, cdpPort, spawned.current)
+        if (action === 'keep-stale') {
+            setBrowserGone(true)
+            return
+        }
+        if (action === 'respawn') {
+            // Reap explicitly. The Go side would evict this PTY anyway when the new
+            // companion starts, but doing it here keeps the drawer's own state and
+            // the PTY slot in agreement even if the user never reopens.
+            if (sessionToken.current) void stopSessionIfOwner(sessionToken.current)
             resetSpawn()
         }
     }, [cdpPort, resetSpawn])
 
     // Lazy spawn on first open. Surface a spawn failure inline (Go returns an
     // error on failure — do NOT silently discard the promise).
+    //
+    // The `spawned` flag is claimed BEFORE the await and released only on failure,
+    // so a re-render (or a second "Ask Claude" press) while the promise is in flight
+    // cannot start a second companion — Go would reject that with "a session is
+    // already running" (pty.go's single-slot guard) and the user would see a stray
+    // error over a perfectly healthy session.
     useEffect(() => {
         if (open && !spawned.current && cdpPort) {
-            spawned.current = true
+            markSpawned(true)
             setSpawnError(null)
+            setBrowserGone(false)
             startRunCompanion(cdpPort, suite)
                 .then(token => {
                     sessionToken.current = token
                 })
                 .catch(e => {
                     setSpawnError(String((e as { message?: string })?.message ?? e))
-                    spawned.current = false // allow a retry on reopen
+                    markSpawned(false) // allow a retry on reopen
                 })
         }
-    }, [open, cdpPort, suite])
+    }, [open, cdpPort, suite, markSpawned])
 
     // Tear down the PTY when the run screen goes away / a new run starts (unmount).
     // Closing the drawer (not unmounting) keeps the PTY alive so reopening resumes.
@@ -218,6 +265,13 @@ export function CompanionDrawer({
             {spawnError ? (
                 <Alert color="red" mb="sm">
                     {spawnError}
+                </Alert>
+            ) : null}
+            {browserGone && !spawnError ? (
+                <Alert color="yellow" mb="sm">
+                    The run stopped, so this companion can no longer drive the browser. The
+                    conversation is intact — ask about the finished run. Starting a new run gives
+                    you a fresh companion attached to its browser.
                 </Alert>
             ) : null}
             {entered ? (
