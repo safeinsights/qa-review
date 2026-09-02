@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, stat } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
@@ -79,12 +79,38 @@ const RESULTS_RENDER_WAIT_MS = 8_000
 const RESULTS_KEY_COPY = /(results|security) key/i
 
 // The entry point the enclave sources BY NAME, so it is load-bearing rather than
-// cosmetic: it names the round-1 fixture, the name round 2's different script is
-// staged under, the uploaded row asserted in the table, and both halves of the
-// "elect a main file" accessible-name pair. Those last two only LOOK like
-// interpolated strings, so a rename that missed them would fail as a selector
-// timeout rather than a missing file.
+// cosmetic: it is the name round 2's different script is staged under. It only
+// LOOKS like an interpolated string, so a rename that missed it would fail as a
+// selector timeout rather than a missing file.
 const MAIN_FILE = 'main.r'
+
+// Round 1 uploads its script under a DELIBERATELY distinct name rather than
+// `main.r`, and the distinctness is the point of the test.
+//
+// The IDE step leaves the workspace's own `main.R` in the study's file table. A
+// round-1 upload named `main.r` does not replace that row — the two differ in
+// extension case — so the table ends up holding two near-identical entry points
+// and the "elect a main file" star becomes ambiguous. That is what broke this
+// step: the star locator matched both, since getByRole name matching is
+// case-insensitive by default.
+//
+// Renaming the upload fixes that, but the reason to prefer it over just making
+// the locator exact is that it exercises the case that actually matters. With no
+// uploaded file called `main.r` at all, NOTHING is the entry point by name, so
+// the star click is the only thing that can elect one — the suite proves the
+// selection UI works instead of coincidentally agreeing with a filename. The
+// fixture is uploaded under this name at setInputFiles time (the repo copy keeps
+// its own name), so no checked-in file has to be renamed.
+const UPLOADED_MAIN_FILE = 'MyOwnCodeFile.R'
+
+// The entry-point script that already exists in the researcher's IDE workspace,
+// which the "Run main.r in the IDE" step opens and sources. It arrives in the
+// study's file table as a side effect of that run (with no "Last updated" time,
+// unlike the uploads), so round 1 deletes it before submitting — both to keep the
+// submitted study to the files it meant to send, and to cover the delete control.
+// Cased exactly as the workspace holds it: it is a DIFFERENT file from `main.r`,
+// not a spelling of it, which is the whole reason the two collided.
+const IDE_MAIN_FILE = 'main.R'
 
 // The files the enclave returns, named exactly as the outputs table lists them.
 // The round-2 script (multi-query-main.r) uploads five result files plus the
@@ -409,9 +435,23 @@ export const studyHappyPathSuite: Suite = {
             //     count, e.g. 345).
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.getByRole('treeitem', { name: 'main.R' }).click()
                     await ctx.page
-                        .getByRole('tab', { name: /main\.R/i })
+                        .getByRole('treeitem', { name: IDE_MAIN_FILE, exact: true })
+                        .click()
+                    // Deliberately NOT exact, unlike every file-table locator in this
+                    // suite. A single click opens the file in code-server's PREVIEW mode,
+                    // which decorates the tab's aria-label: the accessible name is
+                    // "main.R, preview", not "main.R", so an exact match can never
+                    // succeed — it times out 30s after the file is already open on screen.
+                    // The same applies to the results.csv tab opened below.
+                    //
+                    // The contrast with the file table is the trap: THERE, exact is
+                    // required, because getByRole name matching is substring and
+                    // case-insensitive and `main.r` would otherwise also match `main.R`.
+                    // Here the Explorer treeitem stays exact (its label really is bare
+                    // `main.R`) while the tab must stay loose. Don't unify them.
+                    await ctx.page
+                        .getByRole('tab', { name: IDE_MAIN_FILE })
                         .waitFor({ state: 'visible' })
                     await ctx.page.getByRole('button', { name: /Run Source/i }).click()
                     // Sourcing spins up (or reuses) the R Interactive terminal; require it.
@@ -453,9 +493,9 @@ export const studyHappyPathSuite: Suite = {
             name: 'Upload the study code (round 1)',
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.locator('input[type="file"]').setInputFiles(fixtureFiles())
+                    await ctx.page.locator('input[type="file"]').setInputFiles(await fixtureFiles())
                     await ctx.page
-                        .getByRole('cell', { name: MAIN_FILE, exact: true })
+                        .getByRole('cell', { name: UPLOADED_MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
                     await ctx.page
                         .getByRole('cell', { name: 'code.r', exact: true })
@@ -468,20 +508,25 @@ export const studyHappyPathSuite: Suite = {
                 ctx.step(async () => {
                     // Submitting requires an explicitly chosen main file. Every row's star
                     // starts aria-pressed="false" and "Submit code" stays disabled behind
-                    // "Select a main file to submit" until one is pressed — uploading a file
-                    // named main.r does NOT elect it.
+                    // "Select a main file to submit" until one is pressed. Round 1 uploads
+                    // its script as UPLOADED_MAIN_FILE precisely so no filename can imply
+                    // the answer — pressing this star is the ONLY way the study gets an
+                    // entry point, which is the behavior under test.
                     //
-                    // The star's accessible name FLIPS on selection — "Set main.r as main
-                    // file" becomes "main.r is the main file" — so the two names are the
-                    // control and the target. Targeting the Submit button instead would not
-                    // work: it is always attached (merely rendered disabled), so clickUntil
-                    // would count it as arrived and never press the star. Keying on the
-                    // selected name also makes the retry idempotent, since a second press
-                    // would toggle the selection back off.
-                    await clickUntil(
-                        ctx.page.getByRole('button', { name: `Set ${MAIN_FILE} as main file` }),
-                        ctx.page.getByRole('button', { name: `${MAIN_FILE} is the main file` })
-                    )
+                    await electMainFile(ctx, UPLOADED_MAIN_FILE)
+                    // Remove the IDE workspace's stray `main.R` and prove the table really
+                    // dropped it. The row is the assertion target rather than the button:
+                    // a delete that only greys the control out, or one that needs a confirm
+                    // we did not click, would still leave the row attached and fail here.
+                    const strayCell = ctx.page.getByRole('cell', {
+                        name: IDE_MAIN_FILE,
+                        exact: true,
+                    })
+                    await expect(strayCell).toBeVisible()
+                    await ctx.page
+                        .getByRole('button', { name: `Remove ${IDE_MAIN_FILE}`, exact: true })
+                        .click()
+                    await expect(strayCell).toHaveCount(0)
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
@@ -537,6 +582,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('cell', { name: MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
+                    // The resubmit form opens with round 1's choice still starred
+                    // (UPLOADED_MAIN_FILE), and adding a file does not move the star. Left
+                    // alone, the enclave re-runs round 1's script — the outputs table then
+                    // shows its lone `results.csv` and the decrypt step times out looking
+                    // for the multi-query files. Round 2 has to elect its own script.
+                    await electMainFile(ctx, MAIN_FILE)
                     await ctx.page
                         .getByLabel(/Resubmission Note/i)
                         .fill(content(ctx).resubmissionNote)
@@ -774,19 +825,61 @@ function fixtureDir(): string {
     return path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
 }
 
-function fixtureFiles(): string[] {
+// Round 1's payload. The entry-point script is uploaded under
+// UPLOADED_MAIN_FILE rather than its on-disk name, so the study's file table
+// holds NO row called `main.r` and the main-file star is the only thing that can
+// elect an entry point (see UPLOADED_MAIN_FILE). Passing it as an in-memory
+// payload renames it at upload time, leaving the checked-in fixture untouched —
+// a temp-dir copy (round 2's approach) would work too, but there is nothing to
+// clean up this way. `code.r` has no such constraint and uploads by path.
+async function fixtureFiles() {
     const dir = fixtureDir()
-    return [path.join(dir, MAIN_FILE), path.join(dir, 'code.r')]
+    return [
+        {
+            name: UPLOADED_MAIN_FILE,
+            mimeType: 'text/plain',
+            buffer: await readFile(path.join(dir, MAIN_FILE)),
+        },
+        {
+            name: 'code.r',
+            mimeType: 'text/plain',
+            buffer: await readFile(path.join(dir, 'code.r')),
+        },
+    ]
+}
+
+// Press a file's main-file star and wait until the table reports it as elected.
+// Both code forms (round 1's upload page and round 2's resubmit page) render the
+// same table, and neither infers the entry point from a filename — the star is
+// the only thing that sets it.
+//
+// The star's accessible name FLIPS on selection — "Set X as main file" becomes
+// "X is the main file" — so the two names are the control and the target.
+// Targeting the Submit button instead would not work: it is always attached
+// (merely rendered disabled), so clickUntil would count it as arrived and never
+// press the star. Keying on the selected name also makes a retry idempotent,
+// since a second press would toggle the selection back off.
+//
+// `exact` guards a collision this table is prone to: the IDE step leaves the
+// workspace's own `main.R` in it, and getByRole name matching is substring AND
+// case-insensitive by default, so an unqualified name can match two stars and
+// die on strict mode.
+async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
+    await clickUntil(
+        ctx.page.getByRole('button', { name: `Set ${fileName} as main file`, exact: true }),
+        ctx.page.getByRole('button', { name: `${fileName} is the main file`, exact: true })
+    )
 }
 
 // The round-2 resubmission uploads a DIFFERENT script — the multi-query one, which
 // runs several queries and uploads five result files plus an archive, so the re-run
 // exercises a materially different job than round 1's single-query main.r.
 //
-// The enclave sources the entry point by name, so the uploaded file has to be
-// `main.r`; the fixture is checked in under its own name to keep it distinct from
-// round 1's. Copy it to a temp dir under the required name rather than renaming the
-// fixture, so the two scripts can coexist in the repo.
+// The entry point is whichever file is STARRED, not whichever is called `main.r`
+// — the resubmit step elects this one after uploading it. Staging it as MAIN_FILE
+// just keeps the row name distinct from round 1's UPLOADED_MAIN_FILE so the two
+// stars can't be confused; the fixture stays checked in under its own name so the
+// two scripts can coexist in the repo.
 async function resubmitFiles(): Promise<string[]> {
     const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), MAIN_FILE)
     await copyFile(path.join(fixtureDir(), 'multi-query-main.r'), staged)
