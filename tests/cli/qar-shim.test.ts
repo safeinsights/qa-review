@@ -23,6 +23,16 @@ async function runShim(env: Record<string, string>) {
     }
 }
 
+// Single-quote a value for the generated script: call sites pass literals today,
+// but a computed one would otherwise be shell, not data.
+function shellQuote(value: string) {
+    return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+// Shell expansion, assembled rather than written literally so biome does not read
+// it as a JS template placeholder (lint/suspicious/noTemplateCurlyInString).
+const PROXY_ENV = ['$', '{NODE_USE_ENV_PROXY:-unset}'].join('')
+
 // A stand-in for a node binary. Reports `-v` as `version`, and for any other
 // argv prints `marker` plus the NODE_USE_ENV_PROXY it was handed — so a test can
 // tell which node the shim chose AND whether it asked for env-proxy support.
@@ -32,8 +42,29 @@ function fakeNode(version: string, marker: string) {
         join(dir, 'node'),
         [
             '#!/usr/bin/env bash',
-            `if [ "$1" = "-v" ]; then echo "${version}"; exit 0; fi`,
-            `echo "${marker} proxy=\${NODE_USE_ENV_PROXY:-unset}"`,
+            `version=${shellQuote(version)}`,
+            `marker=${shellQuote(marker)}`,
+            'if [ "$1" = "-v" ]; then printf \'%s\\n\' "$version"; exit 0; fi',
+            `printf '%s proxy=%s\\n' "$marker" "${PROXY_ENV}"`,
+            '',
+        ].join('\n'),
+        { mode: 0o755 }
+    )
+    return join(dir, 'node')
+}
+
+// An executable node that answers `-v` with nothing usable — a damaged or
+// wrong-arch copy. The shim's existence and executable checks both pass for it, so
+// only the version probe can catch it.
+function unversionedNode(marker: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'qar-badnode-'))
+    writeFileSync(
+        join(dir, 'node'),
+        [
+            '#!/usr/bin/env bash',
+            `marker=${shellQuote(marker)}`,
+            'if [ "$1" = "-v" ]; then exit 1; fi',
+            `printf '%s proxy=%s\\n' "$marker" "${PROXY_ENV}"`,
             '',
         ].join('\n'),
         { mode: 0o755 }
@@ -50,7 +81,7 @@ function fakeBundle() {
     return bundle
 }
 
-const PROXY = 'http://user:pw@localhost:49629'
+const PROXY = 'http://localhost:49629'
 
 // A directory that looks like a dev checkout to the shim: the engine SOURCE is what
 // distinguishes a checkout from a packaged app's Resources dir.
@@ -154,5 +185,19 @@ describe('bin/qar shim', () => {
         })
         expect(r.stdout).toContain('PINNED')
         expect(r.stdout).toContain('proxy=unset')
+    })
+
+    // Distinct from "the pin is old": an unreadable version is a damaged bundle, and
+    // saying nothing would silently swap the pin out — the same unnamed-failure shape
+    // this whole block exists to remove.
+    it('reports a pinned node that cannot state its version', async () => {
+        const onPath = fakeNode('v24.18.0', 'FROM-PATH')
+        const r = await runShim({
+            PATH: `${dirname(onPath)}:/usr/bin:/bin`,
+            QAR_NODE: unversionedNode('PINNED'),
+            QAR_BUNDLE: fakeBundle(),
+            HTTPS_PROXY: PROXY,
+        })
+        expect(r.stderr).toContain('did not report a version')
     })
 })

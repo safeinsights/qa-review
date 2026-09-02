@@ -63,13 +63,21 @@ if [ -n "${QAR_NODE:-}" ] && [ -n "${QAR_BUNDLE:-}" ]; then
     exit 127
   fi
   engine_node="${QAR_NODE}"
-  if proxy_configured && [ "$(node_major "${QAR_NODE}")" -lt 24 ]; then
+  pinned_major="$(node_major "${QAR_NODE}")"
+  # 0 means the binary would not report a version at all — a damaged or wrong-arch
+  # copy, which the executable check above cannot detect. Say so rather than letting
+  # it fall into the "pin is too old" branch and get silently replaced.
+  if [ "${pinned_major}" -eq 0 ]; then
+    echo "qar: the bundled node (${QAR_NODE}) did not report a version." >&2
+    echo "The app bundle may be damaged; reinstall if commands misbehave." >&2
+  fi
+  if proxy_configured && [ "${pinned_major}" -lt 24 ]; then
     path_node="$(command -v node 2>/dev/null || true)"
     if [ -n "${path_node}" ] && [ "$(node_major "${path_node}")" -ge 24 ]; then
       engine_node="${path_node}"
     else
       echo "qar: this shell routes network traffic through a proxy (HTTPS_PROXY)," >&2
-      echo "but the bundled node is v$(node_major "${QAR_NODE}") and NODE_USE_ENV_PROXY needs 24+." >&2
+      echo "but the bundled node is v${pinned_major} and NODE_USE_ENV_PROXY needs 24+." >&2
       echo "Commands that reach the network (jira-comment, mail-inbox, mail-wait," >&2
       echo "invite) will fail with a bare 'fetch failed'. Put Node 24+ on PATH, or" >&2
       echo "re-run this command with the sandbox disabled." >&2
