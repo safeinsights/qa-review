@@ -325,11 +325,11 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
-## The Claude command sandbox blocks three things QA sessions need
+## The Claude command sandbox blocks four things QA sessions need
 
 Claude Code runs Bash in a sandbox that confines both **network egress** and
 **filesystem writes**. That sandbox is what a validation session actually trips over,
-and all three failures look like broken tooling rather than a permissions boundary —
+and all four failures look like broken tooling rather than a permissions boundary —
 so each one gets retried, guessed at, or reported as a bug in `qar`:
 
 - **`qar jira-comment` → `fetch failed`.** `openstax.atlassian.net` was not on the
@@ -337,10 +337,26 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   transport failure, naming neither host nor cause. `jiraFetch()`
   (`src/engine/jira.ts`) now wraps all four Jira calls and rewrites that into
   "Could not reach `<host>` … add it to `sandbox.network.allowedDomains`".
+  That host really was missing. If the host is ALREADY listed, the cause is the
+  fourth item below and adding it again fixes nothing.
 - **`gh` → `x509: failed to verify certificate: OSStatus -26276`.** Not auth, not
   network: `gh` is a Go binary that verifies TLS through the macOS keychain, and the
   sandbox blocks the `com.apple.trustd.agent` Mach service it needs.
   `sandbox.enableWeakerNetworkIsolation` re-opens exactly that service.
+- **Any `qar` command that reaches the network → `fetch failed`, with the host
+  already allowlisted.** The sandbox blocks DNS outright and routes egress through an
+  authenticated proxy named in `HTTPS_PROXY`. `curl` honors that variable; Node's
+  `fetch` (undici) does NOT, unless `NODE_USE_ENV_PROXY=1` — which exists only in
+  **Node 24+**, while the packaged app pins its own `Resources/runtime/node`. When
+  that pin is older than 24 the true error is `getaddrinfo ENOTFOUND <host>`, which
+  undici swallows into a bare `fetch failed`. It therefore reads as a missing
+  allowlist entry and gets "fixed" by re-adding a host that was already allowed —
+  that misdiagnosis cost a full session. `bin/qar` now detects a configured proxy,
+  exports `NODE_USE_ENV_PROXY=1`, and substitutes a Node 24+ found on PATH when the
+  pin is too old, warning by name when it cannot find one. The substitution is gated
+  on the proxy alone: overriding a deliberate pin whenever a newer node happens to be
+  installed would trade a narrow bug for a broad one. `tests/cli/qar-shim.test.ts`
+  pins both halves.
 - **`qar study-state` → `Failed to create a ProcessSingleton for your profile
   directory`.** Misleading — no other Chromium held the profile. The real lines are
   above it: `Failed to create socket directory` and `open …/Chrome/Crashpad/
@@ -366,10 +382,31 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   sandboxed anyway. Treat exclusion as unreliable and make the sandboxed path work;
   don't delete the key, but don't count on it either.
 
-Sandbox settings are read at **session start**, so an edit here changes nothing until
-a new session. `qar study-state` and `pnpm vitest`/`pnpm typecheck` still need
-`dangerouslyDisableSandbox` — vitest because `node_modules` symlinks into the `.app`
-(read-only), which surfaces as `EPERM … mkdir node_modules/.vite-temp`.
+The `sandbox` block is read at **session start**, so an edit there changes nothing
+until a new session. The `env` block is NOT subject to that — it reaches new Bash
+calls immediately. `qar study-state` still needs `dangerouslyDisableSandbox`.
+
+**Never run `pnpm install`, `pnpm test`, `pnpm typecheck` or `pnpm lint` in a
+packaged-app clone — with OR without the sandbox.** `node_modules` there is a symlink
+into `/Applications/SI QA Review.app/…/Resources/engine/node_modules`, and each of
+those commands triggers pnpm's deps-status check, which runs an install. Sandboxed it
+fails with `EPERM … mkdir node_modules/.pnpm`; with `dangerouslyDisableSandbox` it
+SUCCEEDS — writing into the signed application bundle and plausibly breaking the
+engine the GUI depends on. That EPERM is protecting the app, not obstructing you.
+
+To actually run the checks, copy the repo somewhere disposable — `git clone <this
+dir> "$TMPDIR/checks"` needs no network — then `pnpm install` and run them there.
+Two things to know about such a run:
+
+- **Unset `QAR_REPO_DIR` (and `QAR_NODE`/`QAR_BUNDLE`).** The GUI session exports
+  them into every Bash call, and they redirect `suitesSrcDir()` away from the copy,
+  failing three `suite-registry` tests for a reason that has nothing to do with the
+  code under test.
+- `tests/engine/cdp-launch.test.ts` needs the sandbox off wherever it runs
+  (`listen EPERM … 127.0.0.1`, the localhost listener). That is safe in a disposable
+  clone, which has its own real `node_modules` and no link to the `.app`.
+
+With both handled the suite is green, so a failure there is a real one.
 
 ## PATH order decides which `node` npx runs
 

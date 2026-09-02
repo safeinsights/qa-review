@@ -12,6 +12,48 @@
 # `/Applications/SI: No such file or directory`) or quoted whole (not a command).
 # Each var below is one word, so quoting it is both correct and sufficient.
 set -euo pipefail
+
+# --- proxy-capable node selection --------------------------------------------
+#
+# A Claude Code sandbox blocks DNS outright and routes ALL egress through an
+# authenticated HTTP proxy named in HTTPS_PROXY. curl honors that variable; Node's
+# fetch (undici) does NOT, unless NODE_USE_ENV_PROXY=1 — which only exists in
+# Node 24+. The packaged app pins its own node (Resources/runtime/node) so the
+# .app does not depend on the user's toolchain, and while that pin predates 24
+# every outbound qar command (jira-comment, mail-inbox, mail-wait, invite) dies
+# with a bare `fetch failed`. The real error is `getaddrinfo ENOTFOUND <host>`,
+# which undici swallows — so it reads as a missing allowlist host and gets
+# "fixed" by re-adding a host that was already allowed. It cost a session.
+#
+# So: when a proxy IS configured, ask for env-proxy support and, if the pin is too
+# old to provide it, prefer a Node 24+ from PATH. With no proxy set none of this
+# runs and the pin is used exactly as before — overriding a deliberate pin in the
+# normal case would trade a narrow sandbox bug for a broad one.
+#
+# PATH is the only place searched. gui/paths.go `guiPathDirs` already owns the
+# priority ranking of toolchain dirs and withGuiPath() prepends them, so a second
+# hardcoded list here could only disagree with it.
+
+proxy_configured() {
+  [ -n "${HTTPS_PROXY:-}${https_proxy:-}${ALL_PROXY:-}${all_proxy:-}" ]
+}
+
+# Major version of a node binary. Prints 0 — never fails — when the binary will
+# not report a parseable version, so callers can compare numerically unguarded.
+node_major() {
+  local reported
+  reported="$("$1" -v 2>/dev/null || true)"
+  case "${reported}" in
+    v[0-9]*) printf '%s' "${reported#v}" | cut -d. -f1 ;;
+    *) printf '0' ;;
+  esac
+}
+
+# Harmless when no proxy is set and on any node below 24, and it is what makes the
+# dev `pnpm qar` fallback work under the sandbox too.
+if proxy_configured; then
+  export NODE_USE_ENV_PROXY=1
+fi
 if [ -n "${QAR_NODE:-}" ] && [ -n "${QAR_BUNDLE:-}" ]; then
   if [ ! -x "${QAR_NODE}" ] || [ ! -f "${QAR_BUNDLE}" ]; then
     echo "qar: packaged engine is missing files from the app bundle." >&2
@@ -20,7 +62,20 @@ if [ -n "${QAR_NODE:-}" ] && [ -n "${QAR_BUNDLE:-}" ]; then
     echo "Reinstall the app; do NOT expect \`pnpm qar\` to work here." >&2
     exit 127
   fi
-  exec "${QAR_NODE}" --import tsx "${QAR_BUNDLE}" "$@"
+  engine_node="${QAR_NODE}"
+  if proxy_configured && [ "$(node_major "${QAR_NODE}")" -lt 24 ]; then
+    path_node="$(command -v node 2>/dev/null || true)"
+    if [ -n "${path_node}" ] && [ "$(node_major "${path_node}")" -ge 24 ]; then
+      engine_node="${path_node}"
+    else
+      echo "qar: this shell routes network traffic through a proxy (HTTPS_PROXY)," >&2
+      echo "but the bundled node is v$(node_major "${QAR_NODE}") and NODE_USE_ENV_PROXY needs 24+." >&2
+      echo "Commands that reach the network (jira-comment, mail-inbox, mail-wait," >&2
+      echo "invite) will fail with a bare 'fetch failed'. Put Node 24+ on PATH, or" >&2
+      echo "re-run this command with the sandbox disabled." >&2
+    fi
+  fi
+  exec "${engine_node}" --import tsx "${QAR_BUNDLE}" "$@"
 fi
 # QAR_REPO_DIR without QAR_NODE/QAR_BUNDLE has TWO very different causes, and the
 # only thing that tells them apart is whether the repo dir is a real checkout:
