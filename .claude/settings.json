@@ -3,11 +3,24 @@
     "allow": [
       "Bash(pnpm qar:*)",
       "Bash(qar:*)",
-      "Bash(gh:*)"
+      "Bash(gh:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash:*)"
     ]
   },
   "sandbox": {
     "enabled": true,
+    "filesystem": {
+      "allowWrite": [
+        "config"
+      ],
+      "denyWrite": [
+        "config/age-identity.txt",
+        "config/settings.local.json"
+      ]
+    },
     "network": {
       "allowedDomains": [
         "openstax.atlassian.net",
