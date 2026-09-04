@@ -52,3 +52,33 @@ export async function clickUntil(
         await expect(target).toBeEnabled()
     }).toPass({ timeout: timeoutMs })
 }
+
+// Tick every consent box a form renders until `gate` (its submit) goes enabled.
+//
+// Same shell-level cause as clickUntil, one layer up: a form's agreement boxes are
+// not all settled at first paint. The signup form's ORG participation agreement
+// (the "Research Organization Participation Agreement" box, whose PDF link is a
+// presigned URL resolved per org) settles after the static terms box, so a one-shot
+// sweep either misses it entirely or ticks a box that the late render then resets.
+// Either way the submit stays `disabled`, and that surfaces as a click timeout on a
+// dead button — naming neither the missing consent nor the box carrying it.
+//
+// The gate is the assertion rather than the boxes, because "which agreements does
+// this org require" is a server-side answer: a data-partner org renders a different
+// set than a research-lab one, and a new agreement can appear without a code change
+// here. check() no-ops on an already-checked box, so re-sweeping is idempotent and
+// also re-ticks anything a late re-render cleared.
+export async function checkUntilEnabled(
+    boxes: Locator,
+    gate: Locator,
+    timeoutMs: number = CLICK_UNTIL_READY_TIMEOUT_MS
+): Promise<void> {
+    await expect(async () => {
+        const count = await boxes.count()
+        for (let i = 0; i < count; i++) {
+            const box = boxes.nth(i)
+            if (!(await box.isChecked())) await box.check()
+        }
+        await expect(gate).toBeEnabled()
+    }).toPass({ timeout: timeoutMs })
+}
