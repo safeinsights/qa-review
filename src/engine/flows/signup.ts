@@ -59,17 +59,23 @@ export async function inviteUser(
     const emailField = page.getByRole('textbox', { name: /invite by email/i })
     await clickUntil(page.getByRole('button', { name: /invite people/i }), emailField)
     await emailField.fill(email)
-    await page
-        .getByRole('radio', { name: /contributor/i })
-        .check()
-        .catch(async () => {
-            // some Mantine radios expose as clickable label rather than checkable
-            await page
-                .getByText(/contributor/i)
-                .first()
-                .click()
-        })
-    await page.getByRole('button', { name: /send invitation/i }).click()
+    // Mantine overlays the radio input with its own <label>, so .check() on the input
+    // is intercepted by that label; the label is the half that takes the click.
+    //
+    // Both halves must be SCOPED TO THE DIALOG. The previous fallback clicked
+    // `getByText(/contributor/i).first()` page-wide, which reaches the members table
+    // BEHIND the modal — on staging that table has a member literally named
+    // "researcher contributor", so the click landed on an obscured table row and spent
+    // the whole action timeout there. The env with no such member passed; the env with
+    // one did not.
+    const dialog = page.getByRole('dialog')
+    const contributor = dialog.getByRole('radio', { name: /^contributor/i })
+    await dialog
+        .locator('label')
+        .filter({ hasText: /^Contributor/ })
+        .click()
+    await expect(contributor).toBeChecked()
+    await dialog.getByRole('button', { name: /send invitation/i }).click()
     // On success the dialog swaps to a confirmation screen ("Invitation sent
     // successfully!") — the invited address does NOT appear in the main members
     // table (it's only pending), so assert on that confirmation instead.
