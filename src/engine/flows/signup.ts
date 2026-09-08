@@ -5,7 +5,7 @@ import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
 import { totp } from '../totp'
 import type { EnvConfig } from '../types'
-import { clickUntil } from './interactions'
+import { checkUntilEnabled, clickUntil } from './interactions'
 
 // Shared signup-flow helpers, extracted from src/suites/signup.ts so BOTH the
 // signup suite AND ad-hoc validation suites drive the SAME flow. These take a
@@ -112,8 +112,14 @@ export async function completeSignup(
     await page.getByLabel('Last name').fill('Tester')
     await page.getByLabel('Enter password').fill(password)
     await page.getByLabel('Confirm password').fill(password)
-    await page.getByRole('checkbox', { name: /i agree to the terms/i }).check()
-    await page.getByRole('button', { name: /create account/i }).click()
+    // Tick EVERY agreement the org requires, not just the terms box: a research-lab
+    // invite also renders a "Research Organization Participation Agreement" box, and
+    // Create Account stays disabled until all of them are ticked. That box settles
+    // after first paint, so it has to be swept until the submit gate actually opens
+    // rather than once — see checkUntilEnabled.
+    const createAccount = page.getByRole('button', { name: /create account/i })
+    await checkUntilEnabled(page.getByRole('checkbox', { name: /i agree/i }), createAccount)
+    await createAccount.click()
 
     // 3. Mandatory MFA setup — choose the authenticator-app path, which shows the
     //    TOTP secret in plaintext so we can derive codes headlessly.
