@@ -1,7 +1,20 @@
 import { Button, Select, TextInput } from '@mantine/core'
+import type { ReactNode } from 'react'
 import { ENVS } from '../lib/ipc'
+import { type RunActionKind, runActionKind } from './runAction'
 
 const ALL_ROLES = ['admin', 'researcher', 'reviewer']
+
+// The Mantine props each action state renders with.
+interface ActionSpec {
+    onClick: (() => void) | undefined
+    disabled: boolean | undefined
+    loading: boolean
+    color: string
+    shadow: string
+    icon: ReactNode
+    label: string
+}
 
 export interface RunControlsProps {
     env: string
@@ -26,9 +39,15 @@ export interface RunControlsProps {
     // When running, the action button becomes a red Stop that calls onStop.
     running?: boolean
     onStop?: () => void
-    // True after Stop is clicked, while the run tears down — disables the button
-    // and shows "Stopping…" so it doesn't look dead or invite repeat clicks.
+    // True while the run tears down after Stop or Give up — disables the button so
+    // it doesn't look dead or invite a repeat click. Teardown is not instant (test
+    // data cleanup, trace/video save, then the screencast's viewing grace), and a
+    // Stop pressed in that window exits the process before the result line, losing
+    // the verdict the run had already reached.
     stopping?: boolean
+    // Verb for that state, since Give up tears down through the same flag but is not
+    // a stop. Defaults to 'Stopping…'.
+    stoppingLabel?: string
     // When the run is halted at a paused step, the button becomes a Resume that
     // calls onResume (takes precedence over the Stop state).
     paused?: boolean
@@ -64,50 +83,66 @@ export function RunControls(p: RunControlsProps) {
     // group; otherwise the action button carries it so it still pins to the right.
     const editVisible = showSuite && !!p.onEditSuite && !fieldsLocked
     const actionMargin = editVisible ? {} : { marginLeft: 'auto' as const }
-    // The action button's state — Retry step (a step failed, held for retry) takes
-    // precedence, then Resume (paused / error-hold), then Stop (running), else Run.
-    // Resolved once so the JSX renders a single button instead of a nested ternary
-    // with duplicated Mantine props. A step-failed hold also renders a quiet Give up
-    // beside it (below).
-    const action = p.stepFailed
-        ? {
-              onClick: p.onRetryStep,
-              disabled: undefined as boolean | undefined,
-              loading: false,
-              color: 'teal',
-              shadow: '0 6px 18px rgba(12,107,94,0.22)',
-              icon: <span aria-hidden>▶</span>,
-              label: 'Retry step',
-          }
-        : p.paused
-          ? {
-                onClick: p.onResume,
-                disabled: undefined as boolean | undefined,
-                loading: false,
-                color: 'teal',
-                shadow: '0 6px 18px rgba(12,107,94,0.22)',
-                icon: <span aria-hidden>▶</span>,
-                label: 'Resume',
-            }
-          : p.running
-            ? {
-                  onClick: p.onStop,
-                  disabled: p.stopping,
-                  loading: !!p.stopping,
-                  color: 'red',
-                  shadow: '0 6px 18px rgba(176,74,58,0.22)',
-                  icon: p.stopping ? undefined : <span aria-hidden>■</span>,
-                  label: p.stopping ? 'Stopping…' : 'Stop',
-              }
-            : {
-                  onClick: p.onRun,
-                  disabled: p.runDisabled,
-                  loading: false,
-                  color: 'teal',
-                  shadow: '0 6px 18px rgba(12,107,94,0.22)',
-                  icon: <span aria-hidden>▶</span>,
-                  label: p.runLabel ?? 'Run',
-              }
+    // The action button's state, in precedence order: teardown (Stop or Give up
+    // pressed), then Retry step (a step failed, held for retry), then Resume (paused
+    // / error-hold), then Stop (running), else Run. Resolved once so the JSX renders
+    // a single button instead of a nested ternary with duplicated Mantine props. A
+    // step-failed hold also renders a quiet Give up beside it (below).
+    //
+    // Teardown outranks the rest because once the run is finishing there is no valid
+    // action left, and a stale step-failed envelope arriving mid-teardown must not
+    // put an actionable Retry step back under the cursor.
+    const GO = '0 6px 18px rgba(12,107,94,0.22)'
+    const HALT = '0 6px 18px rgba(176,74,58,0.22)'
+    const play = <span aria-hidden>▶</span>
+    const actions: Record<RunActionKind, ActionSpec> = {
+        teardown: {
+            onClick: undefined,
+            disabled: true,
+            loading: true,
+            color: 'red',
+            shadow: HALT,
+            icon: undefined,
+            label: p.stoppingLabel ?? 'Stopping…',
+        },
+        retryStep: {
+            onClick: p.onRetryStep,
+            disabled: undefined,
+            loading: false,
+            color: 'teal',
+            shadow: GO,
+            icon: play,
+            label: 'Retry step',
+        },
+        resume: {
+            onClick: p.onResume,
+            disabled: undefined,
+            loading: false,
+            color: 'teal',
+            shadow: GO,
+            icon: play,
+            label: 'Resume',
+        },
+        stop: {
+            onClick: p.onStop,
+            disabled: undefined,
+            loading: false,
+            color: 'red',
+            shadow: HALT,
+            icon: <span aria-hidden>■</span>,
+            label: 'Stop',
+        },
+        run: {
+            onClick: p.onRun,
+            disabled: p.runDisabled,
+            loading: false,
+            color: 'teal',
+            shadow: GO,
+            icon: play,
+            label: p.runLabel ?? 'Run',
+        },
+    }
+    const action = actions[runActionKind(p)]
 
     return (
         <div
