@@ -5,7 +5,11 @@ import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
 import { getSecretCommand } from '@/cli/commands/get-secret'
 import { inviteCommand } from '@/cli/commands/invite'
-import { jiraCommentCommand, jiraDeleteCommentCommand } from '@/cli/commands/jira'
+import {
+    jiraCommentCommand,
+    jiraDeleteCommentCommand,
+    jiraDescriptionCommand,
+} from '@/cli/commands/jira'
 import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
 import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
@@ -100,6 +104,8 @@ async function main() {
             return studyStateCommand(opts, await loadSettings())
         case 'jira-comment':
             return jiraCommentCommand(opts, await loadSettings())
+        case 'jira-description':
+            return jiraDescriptionCommand(opts, await loadSettings())
         case 'jira-delete-comment':
             return jiraDeleteCommentCommand(opts, await loadSettings())
         case 'verdict-posted':

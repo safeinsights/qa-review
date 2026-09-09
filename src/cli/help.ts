@@ -195,6 +195,12 @@ export const COMMANDS = [
             'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image inline.',
     },
     {
+        name: 'jira-description',
+        usage: 'qar jira-description --issue <KEY> --body-file <path.md>',
+        summary: "Replace an issue's description, as real ADF.",
+        details: 'Body is Markdown, converted the same way jira-comment converts its body.',
+    },
+    {
         name: 'jira-delete-comment',
         usage: 'qar jira-delete-comment --issue <KEY> --ids <id1,id2>',
         summary: 'Delete Jira comments (404 = already gone = success).',
