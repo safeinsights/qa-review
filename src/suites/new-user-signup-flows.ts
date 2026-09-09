@@ -173,8 +173,8 @@ async function gotoMyDashboard(page: Page, baseURL: string): Promise<void> {
     await page.getByRole('heading', { name: 'My studies', level: 3 }).waitFor(VISIBLE)
 }
 
-export const inviteMergeSuite: Suite = {
-    name: 'invite-merge',
+export const newUserSignupFlowsSuite: Suite = {
+    name: 'New user signup flows',
     description:
         'One address invited into a research lab and a data partner, then a second address merged into the same account — MFA and the security key enrolled exactly once',
     roles: ['admin'],
