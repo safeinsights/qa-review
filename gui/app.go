@@ -485,7 +485,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 	go probeMcpServers(cdpPort, JiraCfg{})
 
 	claudeArgs := []string{
-		"--permission-mode", "default",
+		"--permission-mode", "auto",
 		"--allowedTools", strings.Join(authoringAllowedTools, ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
@@ -670,10 +670,10 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 	go probeMcpServers(cdpPort, jiraCfg)
 
 	claudeArgs := []string{
-		// acceptEdits: routine file reads/notes flow without prompts, but Jira MCP
-		// writes (comments/transitions/un-assign) and non-allowlisted Bash still
-		// prompt live in the terminal for a human gate.
-		"--permission-mode", "acceptEdits",
+		// auto: routine file reads/notes flow without prompts. Jira MCP writes
+		// (comments/transitions/un-assign) and non-allowlisted Bash are still
+		// gated by the allowlist below rather than by the permission mode.
+		"--permission-mode", "auto",
 		"--allowedTools", strings.Join(validationAllowedTools, ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
@@ -753,7 +753,7 @@ func (a *App) stopVerdictWatcher() {
 // prose in the skill, not the allowlist.
 func companionClaudeArgs(mcpPath, repo string) []string {
 	return []string{
-		"--permission-mode", "default",
+		"--permission-mode", "auto",
 		"--allowedTools", strings.Join(authoringAllowedTools, ","),
 		"--add-dir", repo,
 		"--mcp-config", mcpPath,
