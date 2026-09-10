@@ -189,6 +189,15 @@ async function openInviteDialog(page: Page, baseURL: string, orgSlug: string): P
     return page.getByRole('dialog')
 }
 
+// Mantine's toast tray, mounted identically by both app shells — the toast-messages
+// suite owns the full treatment of it; these are the two hooks needed here. `role=alert`
+// alone is not specific enough to find a toast.
+const TOAST = '.mantine-Notification-root'
+const TOAST_TITLE = '.mantine-Notification-title'
+
+const toastWith = (page: Page, message: string): Locator =>
+    page.locator(TOAST).filter({ hasText: message })
+
 // Fill and submit the invite form. Split out from inviteUser because that helper
 // asserts success; here the point is the REJECTION an already-a-member address gets.
 async function submitInvite(dialog: Locator, email: string): Promise<void> {
@@ -281,6 +290,40 @@ export const newUserSignupFlowsSuite: Suite = {
                             'link captured earlier is now dead'
                     ).toBe(pendingId)
                     await expect(dialog).toBeVisible()
+                }),
+        },
+        {
+            name: 'Re-submitting a still-pending address re-sends rather than duplicating',
+            // Same ordering constraint as the step above, for the same reason: this
+            // delivers ANOTHER email to the primary inbox, so it must not run while
+            // anything is still waiting on that inbox.
+            run: ctx =>
+                ctx.step(async () => {
+                    const page = ctx.page
+                    const address = primaryInbox(ctx).address
+                    const dialog = await openInviteDialog(
+                        page,
+                        ctx.baseURL,
+                        ORG_FOR_ROLE.researcher
+                    )
+                    // Typing an address that is ALREADY pending, rather than using its
+                    // Re-invite button — the form has to recognise the duplicate itself.
+                    await submitInvite(dialog, address)
+
+                    const toast = toastWith(
+                        page,
+                        'This user has already been invited. Resending invite.'
+                    )
+                    await toast.waitFor(VISIBLE)
+                    // Titled, unlike the message-only toasts elsewhere in this suite, so
+                    // the title is worth pinning — it is what tells the admin the submit
+                    // was understood as a re-send rather than silently swallowed.
+                    await expect(toast.locator(TOAST_TITLE)).toHaveText('Invite resent')
+
+                    // Deduplicated, not appended: the address must still hold exactly one
+                    // pending row, or the list grows an entry per accidental re-submit and
+                    // the org's real outstanding invitations get lost in the noise.
+                    await expect(pendingRow(page, address)).toHaveCount(1)
                 }),
         },
         {
