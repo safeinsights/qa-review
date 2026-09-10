@@ -6,6 +6,7 @@ import {
     jiraConfig,
     jiraConfigFromEnv,
     jiraFetch,
+    setDescriptionAdf,
 } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
@@ -201,5 +202,42 @@ describe('jiraConfig (from merged settings vars)', () => {
 
     it('still fails loudly when the username is absent from settings and env', () => {
         expect(() => jiraConfig({ JIRA_API_TOKEN: 'tok' })).toThrow(/JIRA_USERNAME/)
+    })
+})
+
+describe('setDescriptionAdf', () => {
+    const config = {
+        baseUrl: 'https://openstax.atlassian.net',
+        email: 'qa@example.com',
+        apiToken: 'token',
+    }
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it('PUTs the adf as the description field of the issue', async () => {
+        const calls: [string, RequestInit][] = []
+        vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+            calls.push([url, init])
+            return Promise.resolve(new Response(null, { status: 204 }))
+        })
+
+        const adf = buildCommentAdf([{ type: 'text', text: '## Heading' }])
+        await setDescriptionAdf(config, 'OTTER-775', adf)
+
+        const [url, init] = calls[0]
+        expect(url).toBe('https://openstax.atlassian.net/rest/api/3/issue/OTTER-775')
+        expect(init.method).toBe('PUT')
+        expect(JSON.parse(init.body as string)).toEqual({ fields: { description: adf } })
+    })
+
+    it('names the issue when the update is rejected', async () => {
+        vi.stubGlobal('fetch', () =>
+            Promise.resolve(new Response('no such issue', { status: 404 }))
+        )
+        await expect(setDescriptionAdf(config, 'OTTER-775', buildCommentAdf([]))).rejects.toThrow(
+            /OTTER-775/
+        )
     })
 })

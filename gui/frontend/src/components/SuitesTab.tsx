@@ -13,6 +13,7 @@ import {
 } from '../lib/ipc'
 import { RunControls } from './RunControls'
 import { RunScreen, type RunSpec } from './RunScreen'
+import { teardownLabel } from './runAction'
 
 interface SuiteInfo {
     name: string
@@ -32,6 +33,10 @@ export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
     // True from the moment Stop is clicked until the run actually exits — keeps the
     // button from looking dead (and from firing repeat SIGTERMs) during teardown.
     const [stopping, setStopping] = useState(false)
+    // Which action started the teardown, so the disabled button names it. Give up is
+    // not a stop, and labelling it "Stopping…" invites the same doubt the flag exists
+    // to remove.
+    const [stoppingLabel, setStoppingLabel] = useState<string>()
     // Step names the user marked "pause before", and whether the run is currently
     // halted at one of them.
     const [pausedSteps, setPausedSteps] = useState<Set<string>>(new Set())
@@ -107,6 +112,7 @@ export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
     }
 
     const stop = async () => {
+        setStoppingLabel(teardownLabel('stop'))
         setStopping(true)
         await stopRun()
     }
@@ -120,7 +126,9 @@ export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
     // Once the run has genuinely started, `running` becoming false means it exited
     // (or the stop landed) — clear the transient stopping flag either way.
     useEffect(() => {
-        if (!running) setStopping(false)
+        if (running) return
+        setStopping(false)
+        setStoppingLabel(undefined)
     }, [running])
 
     // Sync the button to the AUTHORITATIVE engine state on mount: if a tracked run
@@ -151,9 +159,16 @@ export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
         await retryStep()
     }
 
-    // Give up on a failed step: the run tears down and finishes FAILED.
+    // Give up on a failed step: the engine rethrows the failure and the run finishes
+    // FAILED. Teardown is NOT instant — cleanup of test data, trace/video save, then
+    // the screencast's viewing grace — so hold the controls in the same disabled
+    // teardown state Stop uses. Without it the button falls through to a live Stop,
+    // which reads as "give up did nothing" and, if pressed, exits the process before
+    // the result line and loses the verdict the run already reached.
     const giveUp = async () => {
         setStepFailed(false)
+        setStoppingLabel(teardownLabel('giveUp'))
+        setStopping(true)
         await giveUpStep()
     }
 
@@ -191,6 +206,7 @@ export function SuitesTab({ refreshKey = 0 }: { refreshKey?: number } = {}) {
                 running={running}
                 onStop={stop}
                 stopping={stopping}
+                stoppingLabel={stoppingLabel}
                 paused={paused}
                 onResume={resume}
                 stepFailed={stepFailed}
