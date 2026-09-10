@@ -5,6 +5,7 @@ import {
     INVITE_EMAIL_TIMEOUT_MS,
     inviteUser,
     isInviteEmail,
+    ORG_FOR_ROLE,
     SIGNUP_PASSWORD,
 } from '../engine/flows/signup'
 import type { Inbox } from '../engine/mailtm'
@@ -31,9 +32,17 @@ import type { RunContext, Suite } from './types'
 // than back in enrolment. Re-enrolling would silently strip the account's ability to
 // decrypt everything encrypted to the old key.
 //
-// KNOWN DEFECT — see "the merge does not carry the email over" below. The last two
-// steps assert what staging does TODAY, not what it should do; each carries a TODO
-// naming the expected behaviour so the suite flips to the requirement in one edit.
+// Alongside that, the admin's side of an invitation's life: an outstanding invite is
+// listed as pending and can be re-sent, an address already in the org is refused, the
+// pending row disappears once the invitation is accepted, and a link that has been
+// used is dead for good — by BOTH acceptance routes, since a still-live invite link
+// would let anyone holding a forwarded invite email into the org.
+//
+// KNOWN DEFECT — see "the merge does not carry the email over" below. Two steps
+// ("Settings lists the account emails after the merge" and "Signing in with the second
+// address") assert what staging does TODAY, not what it should do; each carries a
+// TODO(merge-email) naming the expected behaviour so the suite flips to the
+// requirement in one edit.
 
 const RL_ORG = 'OPE-Research Lab'
 const DP_ORG = 'Openstax'
@@ -161,6 +170,36 @@ async function expectEnrolledExactlyOnce(ctx: RunContext): Promise<void> {
     expect(notice, 'a second security key was generated').toBe(ctx.state.keyNotice as string)
 }
 
+// Each pending row carries data-testid="re-invite-<email>" and a data-pending-id, so a
+// row is addressable by the address it was sent to rather than by position in a list
+// that every other QA run also writes to.
+const pendingRow = (page: Page, email: string): Locator => page.getByTestId(`re-invite-${email}`)
+
+// Open the team page's invite dialog. "Invite People" is server-rendered, so it is
+// clickable BEFORE React wires its onClick — the same pre-hydration trap inviteUser
+// documents, and clickUntil is the shared answer to it.
+async function openInviteDialog(page: Page, baseURL: string, orgSlug: string): Promise<Locator> {
+    await page.goto(`${originOf(baseURL)}/${orgSlug}/admin/team`, {
+        waitUntil: 'domcontentloaded',
+    })
+    await clickUntil(
+        page.getByRole('button', { name: /invite people/i }),
+        page.getByRole('textbox', { name: /invite by email/i })
+    )
+    return page.getByRole('dialog')
+}
+
+// Fill and submit the invite form. Split out from inviteUser because that helper
+// asserts success; here the point is the REJECTION an already-a-member address gets.
+async function submitInvite(dialog: Locator, email: string): Promise<void> {
+    await dialog.getByRole('textbox', { name: /invite by email/i }).fill(email)
+    await dialog
+        .locator('label')
+        .filter({ hasText: /^Contributor/ })
+        .click()
+    await dialog.getByRole('button', { name: /send invitation/i }).click()
+}
+
 const audienceTab = (page: Page, name: string): Locator =>
     page.locator('.mantine-SegmentedControl-label').filter({ hasText: new RegExp(`^${name}$`) })
 
@@ -205,6 +244,64 @@ export const newUserSignupFlowsSuite: Suite = {
                     const inbox = primaryInbox(ctx)
                     await inviteUser(ctx.page, ctx.baseURL, inbox.address, 'reviewer')
                     ctx.state.dpInviteUrl = await nextInviteUrl(inbox, consumedInvites(ctx))
+                }),
+        },
+        {
+            name: 'The invited address is pending, and Re-invite re-sends the SAME invitation',
+            // MUST run after BOTH invites to this address have been captured. Re-invite
+            // delivers ANOTHER email to the same inbox, and a later nextInviteUrl() would
+            // then be waiting on an inbox the app is still catching up with — which is
+            // exactly how this step, placed before the Data Partner invite, made that
+            // invite's email miss its delivery budget. Nothing polls this inbox after
+            // here, so the duplicate is harmless where it now sits.
+            run: ctx =>
+                ctx.step(async () => {
+                    const page = ctx.page
+                    const address = primaryInbox(ctx).address
+                    const dialog = await openInviteDialog(
+                        page,
+                        ctx.baseURL,
+                        ORG_FOR_ROLE.researcher
+                    )
+                    const row = pendingRow(page, address)
+                    await row.waitFor(VISIBLE)
+
+                    // Re-invite must RE-SEND the outstanding invitation, not mint a
+                    // replacement: the URL captured in the step before is what the signup
+                    // step below opens, and a new token would quietly invalidate it. The
+                    // pending id is the evidence, so assert it rather than assuming.
+                    const pendingId = await row.getAttribute('data-pending-id')
+                    expect(pendingId, 'a pending invitation carries no id to compare').toBeTruthy()
+                    await row.click()
+                    await page.getByText(`${address} has been re-invited`).waitFor(VISIBLE)
+                    await expect(row).toBeVisible()
+                    expect(
+                        await row.getAttribute('data-pending-id'),
+                        're-inviting replaced the invitation instead of re-sending it, so the ' +
+                            'link captured earlier is now dead'
+                    ).toBe(pendingId)
+                    await expect(dialog).toBeVisible()
+                }),
+        },
+        {
+            name: 'Inviting an address that is already in the org is refused',
+            run: ctx =>
+                ctx.step(async () => {
+                    const page = ctx.page
+                    const dialog = await openInviteDialog(
+                        page,
+                        ctx.baseURL,
+                        ORG_FOR_ROLE.researcher
+                    )
+                    // The signed-in admin is by definition already a member of the org
+                    // whose team page this is — a self-referential address that needs no
+                    // per-env fixture and cannot drift.
+                    await submitInvite(dialog, ctx.account.email)
+                    await dialog
+                        .getByText('This team member is already in this organization.')
+                        .waitFor(VISIBLE)
+                    // Rejected in place: still the form, no confirmation screen.
+                    await expect(dialog.getByText(/invitation sent successfully/i)).toHaveCount(0)
                 }),
         },
         {
@@ -322,6 +419,27 @@ export const newUserSignupFlowsSuite: Suite = {
                 }),
         },
         {
+            name: 'The accepted invitation has left the pending list; the new one is on it',
+            run: ctx =>
+                ctx.step(async () => {
+                    const page = ctx.page
+                    const dialog = await openInviteDialog(
+                        page,
+                        ctx.baseURL,
+                        ORG_FOR_ROLE.researcher
+                    )
+                    // The second address was invited a moment ago and nobody has acted on
+                    // it — waiting for it is what proves the list has actually loaded, so
+                    // the absence asserted next is a real absence and not an empty render.
+                    await pendingRow(page, mergeInbox(ctx).address).waitFor(VISIBLE)
+                    await expect(
+                        pendingRow(page, primaryInbox(ctx).address),
+                        'an accepted invitation is still listed as pending'
+                    ).toHaveCount(0)
+                    await expect(dialog.getByText(primaryInbox(ctx).address)).toHaveCount(0)
+                }),
+        },
+        {
             name: 'The second invite is accepted through "Login with existing account"',
             run: ctx =>
                 ctx.step(async () => {
@@ -400,6 +518,38 @@ export const newUserSignupFlowsSuite: Suite = {
                     // accounts later is not supported", so the address is expected to land
                     // here. When that is fixed, flip this to a toBeVisible().
                     await expect(account.getByText(mergeInbox(ctx).address)).toHaveCount(0)
+                }),
+        },
+        {
+            name: 'Neither used invitation link can be followed a second time',
+            run: ctx =>
+                ctx.step(async () => {
+                    const page = ctx.page
+                    await page.evaluate(async () => {
+                        const clerk = (
+                            window as unknown as { Clerk?: { signOut?: () => Promise<void> } }
+                        ).Clerk
+                        if (clerk?.signOut) await clerk.signOut()
+                    })
+                    // Both acceptance paths are checked, because they consume an invitation
+                    // by different routes: the Research Lab link was spent by creating an
+                    // account, the second by signing in to an existing one. A link that
+                    // still worked after being used would let anyone holding a forwarded
+                    // invite email join the org.
+                    for (const url of [
+                        ctx.state.rlInviteUrl as string,
+                        ctx.state.mergeInviteUrl as string,
+                    ]) {
+                        await page.goto(url, { waitUntil: 'domcontentloaded' })
+                        await page.getByText('Invite not found').waitFor(VISIBLE)
+                        await expect(
+                            page.getByText(
+                                'The invitation link you followed is invalid or has already been used.'
+                            )
+                        ).toBeVisible()
+                        // Bounced to sign-in rather than left on a dead invitation page.
+                        await expect(page.getByLabel('Email')).toBeVisible()
+                    }
                 }),
         },
         {
