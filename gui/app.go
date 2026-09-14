@@ -438,11 +438,21 @@ var authoringAllowedTools = []string{
 
 // validationAllowedTools is the scoped pre-approval set for the Validation session.
 // Claude drives the shared browser (chrome-devtools MCP), reads the ticket + posts
-// findings (jira-atlassian MCP), finds the PR (gh), and uses qar helpers (login,
-// mail-inbox/mail-wait/totp for signup flows). Same file/shell surface as authoring.
+// findings (jira-atlassian MCP), reads any linked design (figma MCP), finds the PR
+// (gh), and uses qar helpers (login, mail-inbox/mail-wait/totp for signup flows).
+// Same file/shell surface as authoring.
+//
+// The figma server is user-level rather than per-session (it is not in the
+// --mcp-config we write), but --allowedTools is matched by tool NAME, so listing the
+// prefix here pre-approves it just the same. Its tools are read-only in practice for
+// qa-validate — the skill uses get_screenshot/get_variable_defs/get_metadata — and
+// the prefix covers the whole server, so a WRITE tool (use_figma, create_new_file)
+// would also be pre-approved. That is acceptable only because the skill never calls
+// one; if that changes, list the read tools individually instead.
 var validationAllowedTools = []string{
 	"mcp__chrome-devtools",
 	"mcp__jira-atlassian",
+	"mcp__plugin_figma_figma",
 	"Bash(gh:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
@@ -1601,7 +1611,7 @@ func (a *App) IsInDrift(cwd string) (bool, error) {
 //
 // cwd is unused — the repo is always repoDir(). It is there for parity with the
 // Sync/Rekey/IsInDrift bindings beside it, which take and ignore it the same way, so
-// the frontend passes '' rather than a path it would have to invent.
+// the frontend passes an empty string rather than a path it would have to invent.
 func (a *App) CommitsBehind(cwd string) int {
 	dir := repoDir()
 	// Compare against freshly-fetched refs; a stale origin/* would under-report.

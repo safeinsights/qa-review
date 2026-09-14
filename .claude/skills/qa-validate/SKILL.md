@@ -24,6 +24,9 @@ approve actions.
   the MCP's `jira_add_comment` cannot embed screenshots, and it has no way to
   delete a comment if you get one wrong.
 - **`gh`** is available (pre-approved) to find + read the PR.
+- The **`plugin:figma:figma` MCP tools** are available for reading any design the
+  ticket links (`get_screenshot`, `get_variable_defs`, `get_metadata`) — see
+  "Checking the implementation against linked Figma designs" below.
 - The repo is at **`$QAR_REPO_DIR`** and **is already your working directory.**
   The engine CLI is **`qar`** — a shim on PATH that dispatches to the bundled engine
   (packaged) or `pnpm qar` (dev). Just run `qar …`.
@@ -73,8 +76,113 @@ neither is a bug, and both will look like one if you forget:
 5. **Verify the acceptance criteria in the browser** using the chrome-devtools MCP
    tools (navigate, click, fill, snapshot to read the page). Confirm each criterion
    actually holds by reading the resulting page. Keep the user informed.
-6. **State a verdict** — a clear PASS or FAIL with concise reasoning tied to the
-   acceptance criteria (which held, which didn't, what you saw).
+6. **Check any linked Figma design** against what you see in the browser — see
+   "Checking the implementation against linked Figma designs" below. Look for the
+   links in remote links, the description AND the comments.
+7. **State a verdict** — a clear PASS or FAIL with concise reasoning tied to the
+   acceptance criteria (which held, which didn't, what you saw), plus any design
+   deviations reported separately from the criteria.
+
+## Checking the implementation against linked Figma designs
+If the ticket links a Figma design, the implementation must MATCH it — a feature can
+satisfy every written acceptance criterion and still be wrong, because the design is
+where the spacing, colors, copy and states actually live. Treat the design as a
+source of criteria that the ticket text left implicit.
+
+### 1. Find the design links
+Figma links reach a ticket three ways, and **the description is the least common**:
+- **Remote links** — what the Figma–Jira integration creates, and what a designer
+  attaching a design from Figma produces. They are NOT in the description, and NOT
+  in the default field set, so you will miss every one of them unless you ask:
+  `jira_get_issue(issue_key=…, include='remote_links,comments')`.
+- **The description** (`fields='description'`), as a pasted URL.
+- **A comment** — often a later revision ("updated the empty state, see…"), which is
+  why `comments` is in the call above. When comments disagree with the description,
+  **the newest link wins**; say which one you validated against.
+
+A design URL looks like
+`https://figma.com/design/<fileKey>/<name>?node-id=<n1>-<n2>`. You need BOTH the
+`fileKey` and the `node-id`.
+
+**A link with no `node-id` is not usable — ask the user for a node-specific link.**
+The Figma tools require a concrete node and will not accept a guessed one; a file
+URL alone points at a whole document that may hold dozens of unrelated frames.
+Guessing a node id and validating against the wrong frame produces confident,
+completely fabricated findings — far worse than reporting the link as unusable.
+Also skip `/make/`, `/board/` (FigJam) and `/slides/` URLs: they are not design
+files, and `get_metadata`/`get_variable_defs` don't support them.
+
+If the ticket links NO design, say so and validate the written criteria only. Do
+not go hunting through Figma for a design that might be related.
+
+### 2. Read the design
+The `mcp__plugin_figma_figma__*` tools are available (the Setup Doctor's "Figma MCP"
+row proves the server is connected and authenticated). Use these three:
+
+- **`get_screenshot`** (`fileKey`, `nodeId`) — the rendered design frame. **Pass
+  `enableBase64Response: true`.** By default it returns a short-lived URL and tells
+  you to `curl` it, but figma.com and its asset host are NOT in the sandbox's
+  `sandbox.network.allowedDomains`, so that curl fails with a bare transport error
+  that names nothing (see CLAUDE.md, "The Claude command sandbox blocks four
+  things"). The base64 form comes back through the MCP connection, which is not
+  sandboxed. Raise `maxDimension` (default 1024) when you need to read fine detail
+  like label text or a border.
+- **`get_variable_defs`** (`fileKey`, `nodeId`) — the design tokens actually bound
+  to that frame (`{'color/primary': '#0B5CD5', 'spacing/md': '16px'}`). This is what
+  turns "the blue looks off" into "design binds `color/primary` **#0B5CD5**, the app
+  renders **#1A73E8**" — a finding a developer can act on.
+- **`get_metadata`** (`fileKey`, `nodeId`) — the frame's layer tree with names,
+  positions and sizes. Use it to find the right child frame when one node holds
+  several states (empty / loading / error), and to get exact pixel geometry.
+
+Do **NOT** use `get_design_context`: it exists to GENERATE code from a design, it
+requires loading the design-to-code skill first, and it returns a reference
+implementation that is irrelevant here — you are comparing against code that
+already exists, not writing new code.
+
+Do not perform multiple simultaneous requests to Figma, and pause briefly between
+them to avoid rate-limitations their API imposes.
+
+### 3. Compare, at the right altitude
+Put the browser on the corresponding screen and compare it to the design
+screenshot. **Match the browser to the design's conditions before judging** — the
+same viewport width (`resize_page`), the same state (populated vs. empty, the same
+role, the same expanded/collapsed section). A design drawn at desktop width
+compared against a narrow window produces a page of bogus layout findings.
+
+Check, roughly in order of how much they matter:
+1. **Structure & presence** — is every element in the design actually there, and in
+   the same order/grouping? A missing control or a section in the wrong place is a
+   real failure.
+2. **Copy** — headings, labels, button text, empty-state and error messages, quoted
+   exactly. Wrong wording is the most common and most checkable design miss.
+3. **States** — the design usually specifies empty, loading, error, disabled and
+   hover. Drive the app into each one the design shows, rather than validating only
+   the happy path it was easiest to reach.
+4. **Visual detail** — color, spacing, type size/weight, border radius, alignment.
+   Back these with numbers from `get_variable_defs` and the computed values you read
+   from the page (`evaluate_script` with `getComputedStyle`), not from eyeballing a
+   screenshot.
+
+**Judgment — this is the part to get right.** You are validating a ticket, not
+running a pixel-diff. A design is a specification of INTENT, and normal
+implementation carries legitimate variance:
+- **Report**: missing or extra elements, wrong copy, missing states, a color or
+  spacing token that is visibly and measurably wrong, anything that breaks the
+  design's visual hierarchy or would be noticed by a user.
+- **Do NOT report**: sub-pixel and one-or-two-pixel differences, font rendering
+  between the browser and Figma, scrollbar width, placeholder/lorem content in the
+  design, or a design element that is clearly a stale earlier revision.
+- **When the design and the ticket text conflict, the TICKET wins** — and flag the
+  conflict rather than failing the card for it. The design may simply predate a
+  decision recorded in the ticket or its comments.
+
+A design difference is a **separate class of finding from an acceptance-criterion
+failure.** Unless the ticket makes the design itself a criterion ("matches the
+attached design"), a visual deviation goes under "Design review" / "Also observed"
+and does **not** by itself flip the verdict to REJECTED. If deviations are serious
+enough that you think they should block, say so explicitly and **ask the user** —
+they decide, not you.
 
 ## Creating a fresh user or study — use the built-in commands (do NOT hand-drive)
 Creating a new user or study from scratch is fiddly (invite → email → MFA → recovery
@@ -228,6 +336,14 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
 
    {{image:1}}
 
+   ### Design review
+   <!-- Omit this section entirely when the ticket links no Figma design. -->
+   Compared against [<design name>](<figma-url>) (node `<node-id>`).
+   <What matched, then each deviation: what the design specifies vs. what the app
+   renders, with values — "design binds `color/primary` **#0B5CD5**, the app renders
+   **#1A73E8**". State plainly whether these are blocking; a deviation here does NOT
+   flip the verdict unless the ticket made the design a criterion.>
+
    ### Also observed
    <Anything true but outside the criteria: extra changes the PR made, or a
    concern that is NOT blocking. Say explicitly that it isn't a failure. Omit
@@ -249,6 +365,10 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      specific home just append after the body.
    - Keep "Also observed" strictly separate from the criteria — a non-blocking
      note must never read as a failure.
+   - **Name the design you compared against**, with its node-specific URL, so a
+     reader can check the same frame. "Matches the design" without a link is not
+     reviewable. If a linked design could NOT be checked (no `node-id`, a
+     FigJam/Make URL), say that in this section rather than omitting it silently.
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
@@ -341,5 +461,10 @@ Never tell the user "cleanup needs a token I don't have" — fetch it as above.
   `jira_add_comment`. If a post comes out wrong, delete it with
   `qar jira-delete-comment` — don't leave a mess for the user to clean up, and
   don't repost variations hoping one renders.
+- Check any Figma design the ticket links (remote links, description, comments)
+  against the implementation, and report deviations SEPARATELY from the acceptance
+  criteria — a visual difference doesn't flip the verdict on its own unless the
+  ticket made the design a criterion. Never guess a `node-id`; ask for a
+  node-specific link instead of validating against a frame you picked.
 - Always confirm before writing to Jira (comments, attachments, transitions,
   assigning/un-assigning).
