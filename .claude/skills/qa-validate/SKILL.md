@@ -140,6 +140,9 @@ requires loading the design-to-code skill first, and it returns a reference
 implementation that is irrelevant here — you are comparing against code that
 already exists, not writing new code.
 
+Do not perform multiple simultaneous requests to Figma, and pause briefly between
+them to avoid rate-limitations their API imposes.
+
 ### 3. Compare, at the right altitude
 Put the browser on the corresponding screen and compare it to the design
 screenshot. **Match the browser to the design's conditions before judging** — the
