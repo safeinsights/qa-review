@@ -6,5 +6,7 @@ Before testing, confirm the code referenced in the Jira card is present on insta
  
  When approved, log in via `qar session-login --role <role>`, then drive the browser via the opened chrome-devtools MCP to verify the acceptance criteria. 
 
+If the ticket links a Figma design (check remote links and comments, not just the description), compare the implementation against it and report any deviations separately from the acceptance criteria.
+
 Give a clear PASS/FAIL verdict, noting any issues or errors are first on the new Jira comment.
 
