@@ -227,7 +227,16 @@ export async function submitProposal(page: Page): Promise<void> {
     const submitConfirm = page.getByRole('dialog', { name: 'Submit your proposal?' })
     await clickUntil(page.locator('#submit-proposal'), submitConfirm)
     await submitConfirm.getByRole('button', { name: /Submit proposal/i }).click()
-    await page.getByText(/successfully submitted/i).waitFor({ state: 'visible' })
+    // OTTER-699 routed every study banner through the shared StatusAlert and deleted the
+    // old "successfully submitted" wording this used to wait on, so the wait hung for its
+    // full timeout on a study that HAD been created — the failure looked like a broken
+    // submit. Anchor on the banner's testid instead of its copy, and match the title on
+    // the part that survives resubmission ("Proposal v2.0 resubmitted to ..."), so a
+    // later copy edit cannot silently reintroduce this.
+    await page
+        .getByTestId('status-alert')
+        .filter({ hasText: /Proposal\b.*submitted to/i })
+        .waitFor({ state: 'visible' })
 }
 
 // End-to-end convenience: start → capture id → fill → submit. Returns the study id
