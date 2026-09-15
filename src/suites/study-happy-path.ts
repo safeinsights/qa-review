@@ -1,7 +1,7 @@
-import { copyFile, mkdtemp, readFile, stat } from 'node:fs/promises'
+import { copyFile, mkdtemp, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { clickUntil } from '../engine/flows/interactions'
 import {
@@ -84,25 +84,6 @@ const RESULTS_KEY_COPY = /(results|security) key/i
 // selector timeout rather than a missing file.
 const MAIN_FILE = 'main.r'
 
-// Round 1 uploads its script under a DELIBERATELY distinct name rather than
-// `main.r`, and the distinctness is the point of the test.
-//
-// The IDE step leaves the workspace's own `main.R` in the study's file table. A
-// round-1 upload named `main.r` does not replace that row — the two differ in
-// extension case — so the table ends up holding two near-identical entry points
-// and the "elect a main file" star becomes ambiguous. That is what broke this
-// step: the star locator matched both, since getByRole name matching is
-// case-insensitive by default.
-//
-// Renaming the upload fixes that, but the reason to prefer it over just making
-// the locator exact is that it exercises the case that actually matters. With no
-// uploaded file called `main.r` at all, NOTHING is the entry point by name, so
-// the star click is the only thing that can elect one — the suite proves the
-// selection UI works instead of coincidentally agreeing with a filename. The
-// fixture is uploaded under this name at setInputFiles time (the repo copy keeps
-// its own name), so no checked-in file has to be renamed.
-const UPLOADED_MAIN_FILE = 'MyOwnCodeFile.R'
-
 // The entry-point script that already exists in the researcher's IDE workspace,
 // which the "Run main.r in the IDE" step opens and sources. It arrives in the
 // study's file table as a side effect of that run (with no "Last updated" time,
@@ -111,6 +92,43 @@ const UPLOADED_MAIN_FILE = 'MyOwnCodeFile.R'
 // Cased exactly as the workspace holds it: it is a DIFFERENT file from `main.r`,
 // not a spelling of it, which is the whole reason the two collided.
 const IDE_MAIN_FILE = 'main.R'
+
+// Deliberately insecure scripts, uploaded with round 2 purely so the CodeBuild
+// scanners have something to find. They are NEVER starred and never the entry
+// point — they exist to be scanned, not run — so they ride along by path under
+// their own names.
+//
+// One per language because the two scanners divide the work by file type: Trivy's
+// secret rules are language-agnostic and match the planted credentials in both,
+// while SonarQube picks its analyzer from the extension, so the code defects in
+// the .py are only reachable through a .py. The two files plant DIFFERENT fake
+// credentials so neither can be dismissed as a duplicate of the other.
+const VULNERABLE_FILES = ['vulnerable.r', 'vulnerable.py']
+
+// How long to wait for the CodeBuild scanners to report. The app polls the scan
+// result for 10 minutes before giving up (SCAN_TIMEOUT_MS in the review page), so
+// waiting less than that would call a scan dead while the page is still asking.
+// The AI summary is generated on request and lands sooner, but it is waited for in
+// the same step, so one budget covers both.
+const SCAN_TIMEOUT_MS = 10 * 60_000
+const SCAN_POLL_INTERVAL_MS = 5_000
+
+// The word the AI summary must contain. The round-2 submission includes
+// VULNERABLE_FILES purely so there is something to describe as insecure, so a
+// summary that never says it is either describing the wrong submission or was
+// generated before those files were attached.
+const SUMMARY_INSECURE_COPY = /insecure/i
+
+// Both scanners report their unresolvable/failing outcomes under this one label
+// ("Needs review" for SonarQube FAILED and INDETERMINATE, and for Trivy
+// INDETERMINATE). Round 2 ships deliberately vulnerable scripts, so a clean
+// "No vulnerabilities found"/"Passed" pair means the scanners did not see them.
+const SCAN_NEEDS_REVIEW_COPY = /needs review/i
+
+// The scan log's own text must name what it flagged. Both VULNERABLE_FILES plant
+// hardcoded credentials, so the log that scanned them mentions secrets; a log
+// without the word is a log for some other code.
+const SCAN_LOG_SECRETS_COPY = /secrets/i
 
 // The files the enclave returns, named exactly as the outputs table lists them.
 // The round-2 script (multi-query-main.r) uploads five result files plus the
@@ -490,15 +508,14 @@ export const studyHappyPathSuite: Suite = {
                 }),
         },
         {
-            name: 'Upload the study code (round 1)',
+            name: 'Confirm the IDE wrote the study code (round 1)',
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.locator('input[type="file"]').setInputFiles(await fixtureFiles())
+                    // Round 1 submits what the IDE RUN produced, unchanged — that is the
+                    // happy path a researcher actually walks, and uploading a custom script
+                    // here would skip straight to what round 2 exists to cover.
                     await ctx.page
-                        .getByRole('cell', { name: UPLOADED_MAIN_FILE, exact: true })
-                        .waitFor({ state: 'visible' })
-                    await ctx.page
-                        .getByRole('cell', { name: 'code.r', exact: true })
+                        .getByRole('cell', { name: IDE_MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
                 }),
         },
@@ -508,25 +525,10 @@ export const studyHappyPathSuite: Suite = {
                 ctx.step(async () => {
                     // Submitting requires an explicitly chosen main file. Every row's star
                     // starts aria-pressed="false" and "Submit code" stays disabled behind
-                    // "Select a main file to submit" until one is pressed. Round 1 uploads
-                    // its script as UPLOADED_MAIN_FILE precisely so no filename can imply
-                    // the answer — pressing this star is the ONLY way the study gets an
-                    // entry point, which is the behavior under test.
-                    //
-                    await electMainFile(ctx, UPLOADED_MAIN_FILE)
-                    // Remove the IDE workspace's stray `main.R` and prove the table really
-                    // dropped it. The row is the assertion target rather than the button:
-                    // a delete that only greys the control out, or one that needs a confirm
-                    // we did not click, would still leave the row attached and fail here.
-                    const strayCell = ctx.page.getByRole('cell', {
-                        name: IDE_MAIN_FILE,
-                        exact: true,
-                    })
-                    await expect(strayCell).toBeVisible()
-                    await ctx.page
-                        .getByRole('button', { name: `Remove ${IDE_MAIN_FILE}`, exact: true })
-                        .click()
-                    await expect(strayCell).toHaveCount(0)
+                    // "Select a main file to submit" until one is pressed — the enclave does
+                    // NOT infer an entry point from the name `main.R`, so pressing this star
+                    // is the only thing that elects one.
+                    await electMainFile(ctx, IDE_MAIN_FILE)
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
@@ -564,7 +566,7 @@ export const studyHappyPathSuite: Suite = {
             run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
-            name: 'Resubmit the study code (round 2 / re-run)',
+            name: 'Resubmit custom study code, including vulnerable scripts (round 2 / re-run)',
             run: ctx =>
                 ctx.step(async () => {
                     await ctx.page.goto(
@@ -582,11 +584,35 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .getByRole('cell', { name: MAIN_FILE, exact: true })
                         .waitFor({ state: 'visible' })
-                    // The resubmit form opens with round 1's choice still starred
-                    // (UPLOADED_MAIN_FILE), and adding a file does not move the star. Left
-                    // alone, the enclave re-runs round 1's script — the outputs table then
-                    // shows its lone `results.csv` and the decrypt step times out looking
-                    // for the multi-query files. Round 2 has to elect its own script.
+                    for (const name of VULNERABLE_FILES) {
+                        await ctx.page
+                            .getByRole('cell', { name, exact: true })
+                            .waitFor({ state: 'visible' })
+                    }
+                    // Round 1's entry point is still in the table, and round 2 supersedes
+                    // it. Remove it and prove the table really dropped it — the row is the
+                    // assertion target rather than the button, since a delete that only
+                    // greys the control out, or one that needs a confirm we did not click,
+                    // would still leave the row attached and pass a button-only check.
+                    //
+                    // It also has to go before the star: `main.R` and `main.r` differ only
+                    // in extension case, and getByRole name matching is case-insensitive,
+                    // so leaving it makes the election below match two rows and die on
+                    // strict mode.
+                    const strayCell = ctx.page.getByRole('cell', {
+                        name: IDE_MAIN_FILE,
+                        exact: true,
+                    })
+                    await expect(strayCell).toBeVisible()
+                    await ctx.page
+                        .getByRole('button', { name: `Remove ${IDE_MAIN_FILE}`, exact: true })
+                        .click()
+                    await expect(strayCell).toHaveCount(0)
+                    // The resubmit form opens with round 1's choice still starred, and
+                    // adding a file does not move the star. Left alone, the enclave re-runs
+                    // round 1's script — the outputs table then shows its lone `results.csv`
+                    // and the decrypt step times out looking for the multi-query files.
+                    // Round 2 has to elect its own script.
                     await electMainFile(ctx, MAIN_FILE)
                     await ctx.page
                         .getByLabel(/Resubmission Note/i)
@@ -613,6 +639,69 @@ export const studyHappyPathSuite: Suite = {
         {
             name: 'Switch to the reviewer account',
             run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
+        },
+        {
+            name: 'Reviewer opens the submitted code',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeReview(ctx, id(ctx))
+                    await openSubmittedCode(ctx)
+                }),
+        },
+        {
+            name: 'Wait for the AI summary and security scans to finish',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeReview(ctx, id(ctx))
+                    await openSubmittedCode(ctx)
+                    await waitForCodeAnalysis(ctx)
+                }),
+        },
+        {
+            name: 'The AI summary describes the insecure code',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeReview(ctx, id(ctx))
+                    await openSubmittedCode(ctx)
+                    await waitForCodeAnalysis(ctx)
+                    // Read the body rather than the whole `ai-summary` box: the box also
+                    // holds the heading and the expand toggle, so matching on it could
+                    // pass on chrome that is present whether or not a summary generated.
+                    await expect(ctx.page.getByTestId('ai-summary-body')).toContainText(
+                        SUMMARY_INSECURE_COPY
+                    )
+                }),
+        },
+        {
+            name: 'The security scans flag the code for review',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeReview(ctx, id(ctx))
+                    await openSubmittedCode(ctx)
+                    await waitForCodeAnalysis(ctx)
+                    // Asserted on the whole log box, not one scanner row: the two tools
+                    // reach "Needs review" through different outcomes (a failing
+                    // SonarQube gate, an indeterminate Trivy result), and which one
+                    // flags the vulnerable scripts is not the behaviour under test.
+                    await expect(ctx.page.getByTestId('security-scan-log')).toContainText(
+                        SCAN_NEEDS_REVIEW_COPY
+                    )
+                }),
+        },
+        {
+            name: 'The security scan log names the secrets it found',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeReview(ctx, id(ctx))
+                    await openSubmittedCode(ctx)
+                    await waitForCodeAnalysis(ctx)
+                    const log = await viewScanLog(ctx)
+                    if (!SCAN_LOG_SECRETS_COPY.test(log)) {
+                        throw new Error(
+                            `The security scan log never mentions secrets. Log text:\n${log.slice(0, 500)}`
+                        )
+                    }
+                }),
         },
         {
             name: 'Reviewer approves the code',
@@ -825,29 +914,6 @@ function fixtureDir(): string {
     return path.join(repoDir(), 'src', 'suites', 'fixtures', 'study-happy-path')
 }
 
-// Round 1's payload. The entry-point script is uploaded under
-// UPLOADED_MAIN_FILE rather than its on-disk name, so the study's file table
-// holds NO row called `main.r` and the main-file star is the only thing that can
-// elect an entry point (see UPLOADED_MAIN_FILE). Passing it as an in-memory
-// payload renames it at upload time, leaving the checked-in fixture untouched —
-// a temp-dir copy (round 2's approach) would work too, but there is nothing to
-// clean up this way. `code.r` has no such constraint and uploads by path.
-async function fixtureFiles() {
-    const dir = fixtureDir()
-    return [
-        {
-            name: UPLOADED_MAIN_FILE,
-            mimeType: 'text/plain',
-            buffer: await readFile(path.join(dir, MAIN_FILE)),
-        },
-        {
-            name: 'code.r',
-            mimeType: 'text/plain',
-            buffer: await readFile(path.join(dir, 'code.r')),
-        },
-    ]
-}
-
 // Press a file's main-file star and wait until the table reports it as elected.
 // Both code forms (round 1's upload page and round 2's resubmit page) render the
 // same table, and neither infers the entry point from a filename — the star is
@@ -876,14 +942,17 @@ async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
 // exercises a materially different job than round 1's single-query main.r.
 //
 // The entry point is whichever file is STARRED, not whichever is called `main.r`
-// — the resubmit step elects this one after uploading it. Staging it as MAIN_FILE
-// just keeps the row name distinct from round 1's UPLOADED_MAIN_FILE so the two
-// stars can't be confused; the fixture stays checked in under its own name so the
-// two scripts can coexist in the repo.
+// — the resubmit step elects this one after uploading it. It is staged under
+// MAIN_FILE because the enclave sources the entry point by that name; the fixture
+// stays checked in under its own name so the two scripts can coexist in the repo.
+//
+// VULNERABLE_FILES ride along unmodified to give the CodeBuild scanners a payload
+// with findings in it. They need neither the rename nor the temp copy: those exist
+// only to disambiguate the STAR, and neither file is ever a candidate for it.
 async function resubmitFiles(): Promise<string[]> {
     const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), MAIN_FILE)
     await copyFile(path.join(fixtureDir(), 'multi-query-main.r'), staged)
-    return [staged]
+    return [staged, ...VULNERABLE_FILES.map(f => path.join(fixtureDir(), f))]
 }
 
 // Put the review page into the decrypted state, entering the reviewer's results
@@ -1030,6 +1099,135 @@ async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     // The assertion either shape has to satisfy, and the error a genuine failure
     // surfaces. The gate does not render the editor, so this cannot pass on the gate.
     await section.waitFor({ state: 'visible' })
+}
+
+// Open the collapsible that holds the submitted files, the AI summary and the scan
+// log. Everything the three assertion steps below read lives inside it, and it is
+// collapsed on load, so this has to happen before any of them.
+//
+// The control is a toggle, so it is only clicked when the panel is actually closed:
+// on a step retry the panel is often already open, and an unconditional click would
+// close it and fail the very assertions it exists to enable.
+//
+// Openness is read from the toggle's `aria-expanded`, NOT from whether the panel's
+// content is visible. Mantine collapses the panel with a wrapper that is
+// `height:0; overflow:hidden` (plus `opacity:0`, `aria-hidden` and `inert`) while
+// leaving the content laid out inside it — so every descendant still reports a
+// non-zero box and Playwright calls it VISIBLE when the panel is shut. Checking
+// content visibility therefore always short-circuits this helper on the first call,
+// leaving the section inert. Text reads still succeed through the clip, so the two
+// assertion steps pass and only the scan-log CLICK fails, with a misleading
+// "<div class=…Stack-root> intercepts pointer events" — hit-testing skips the
+// zero-height wrapper and lands on the page-level Stack behind it.
+// The app swaps the control out rather than flipping it in place: open renders
+// `study-code-toggle-collapse` ("Hide full study code") and REMOVES
+// `study-code-toggle`. So the EXPAND control's absence is the open signal, and
+// waiting on the expand toggle's own attribute after clicking would race its removal.
+//
+// The collapse control cannot serve as that signal, even though it only appears
+// when open: it renders INSIDE the collapsed wrapper, so it is subject to exactly
+// the clip described above and reports `visible` while the panel is shut. Reading
+// it is the same mistake as reading any other descendant, one level further in —
+// it short-circuits the helper on the first call and leaves the section inert,
+// which is the failure this comment was written about. Verified on a frozen run:
+// with the panel closed, `study-code-toggle` had `aria-expanded="false"` while
+// `study-code-toggle-collapse` was present, 20px tall and inside `[inert]`.
+async function openSubmittedCode(ctx: RunContext): Promise<void> {
+    const section = ctx.page.getByTestId('submitted-code-section')
+    await section.waitFor({ state: 'visible' })
+    const closed = ctx.page.getByTestId('study-code-toggle')
+    if ((await closed.count()) === 0) return
+    await closed.click()
+    // The expand control is removed on open, so its detachment — not the appearance
+    // of anything inside the panel — is what proves the collapse actually ran.
+    await closed.waitFor({ state: 'detached' })
+}
+
+// Wait for BOTH the AI summary and the two scanner rows to reach a terminal state.
+//
+// Neither can be waited on with a plain visible-assertion: the summary renders its
+// pending and error states inside the same `ai-summary` box, and each scanner row
+// renders "Scan in progress…" inside the same row testid it later reports into. So
+// the signal is the pending COPY going away, not an element appearing.
+//
+// Polled rather than raced on a single locator because the app fetches both on
+// intervals; this reads the rendered state the reviewer would see on each tick.
+async function waitForCodeAnalysis(ctx: RunContext): Promise<void> {
+    const deadline = Date.now() + SCAN_TIMEOUT_MS
+    const summaryBody = ctx.page.getByTestId('ai-summary-body')
+    const trivy = ctx.page.getByTestId('security-scan-trivy')
+    const sonarqube = ctx.page.getByTestId('security-scan-sonarqube')
+    const settled = async (row: Locator) => {
+        const text = (await row.innerText().catch(() => '')) ?? ''
+        return text.trim() !== '' && !/scan in progress/i.test(text)
+    }
+    while (Date.now() < deadline) {
+        // The app gives up on its own clock and says so in place of a result. That is
+        // a real environment failure, not something more waiting can fix, so surface
+        // it immediately rather than burning the rest of the budget.
+        if (
+            await ctx.page
+                .getByTestId('security-scan-timeout')
+                .isVisible()
+                .catch(() => false)
+        ) {
+            throw new Error(
+                'The security scan reported no result: the app timed out waiting for it.'
+            )
+        }
+        const summaryReady = await summaryBody.isVisible().catch(() => false)
+        if (summaryReady && (await settled(trivy)) && (await settled(sonarqube))) return
+        await ctx.page.waitForTimeout(SCAN_POLL_INTERVAL_MS)
+    }
+    throw new Error(
+        `The AI summary and security scans did not both finish within ${SCAN_TIMEOUT_MS / 60_000} minutes.`
+    )
+}
+
+// Read the scan log's own text through the reviewer's View link. The modal renders
+// the same text shape as the outputs-table previews, but it is reached from the scan
+// row rather than a file row, and it paints a loader first while the log is fetched.
+async function viewScanLog(ctx: RunContext): Promise<string> {
+    // The View/Download pair renders only once the scan has produced a log FILE, which
+    // is a separate condition from the two status rows settling: the app's own poll
+    // notes that a log parsing to unknown statuses still reports a logFile. So the
+    // link can still be missing at the moment `waitForCodeAnalysis` returns, and
+    // clicking without waiting would fail on a link that was simply not there yet.
+    const view = ctx.page.getByTestId('security-scan-log-view')
+    await view.waitFor({ state: 'visible' })
+    // `visible` is not enough to know the link is clickable — see openSubmittedCode:
+    // inside the collapsed panel it reports visible but sits in an `inert`,
+    // zero-height wrapper that swallows the click for the whole 30s timeout and
+    // blames an unrelated Stack. Assert the real precondition instead, so a panel
+    // that failed to open fails here with a message that names the cause.
+    if (await view.evaluate(el => el.closest('[inert]') !== null)) {
+        throw new Error(
+            'The scan log link is inside a collapsed (inert) panel: the submitted-code ' +
+                'section did not open, so the click could never land.'
+        )
+    }
+    await view.click()
+    const dialog = ctx.page.getByRole('dialog')
+    await dialog.waitFor({ state: 'visible' })
+    // The modal paints a loader while it fetches the log, so wait that out before
+    // reading — an empty read here is the loading frame, not an empty log.
+    await dialog.getByTestId('file-preview-loading').waitFor({ state: 'hidden' })
+    // Deliberately NOT locator('pre'): the shared viewer picks its markup by sniffing
+    // the file, and `security-scan-log.txt` maps to plaintext, which renders as a
+    // Mantine <Code block> (a <code>, no <pre>). A log that ever parsed as JSON log
+    // lines would render as a <table> instead. Reading the dialog's own text covers
+    // every shape, and the assertion is on words in the log, not on its markup.
+    const text = (await dialog.innerText())?.trim() ?? ''
+    // Same close treatment as viewOutputFile: the Mantine CloseButton is icon-only
+    // and has no accessible name, so target the class and fall back to Escape.
+    const closeButton = dialog.locator('.mantine-Modal-close')
+    if (await closeButton.count()) {
+        await closeButton.first().click()
+    } else {
+        await ctx.page.keyboard.press('Escape')
+    }
+    await dialog.waitFor({ state: 'hidden' })
+    return text
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {

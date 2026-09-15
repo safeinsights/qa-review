@@ -211,3 +211,22 @@ export async function deleteComment(
     if (response.status === 404) return
     await assertOk(response, `Deleting comment ${commentId}`)
 }
+
+// Descriptions take the same ADF the comment path builds, so markdown formatting
+// survives here too. No media segments: an inline image needs an attachment upload,
+// which belongs to the comment flow.
+export async function setDescriptionAdf(
+    config: JiraConfig,
+    issueKey: string,
+    adf: Record<string, unknown>
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}`, {
+        method: 'PUT',
+        headers: {
+            Authorization: authHeader(config),
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fields: { description: adf } }),
+    })
+    await assertOk(response, `Setting description of ${issueKey}`)
+}

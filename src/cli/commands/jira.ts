@@ -6,6 +6,7 @@ import {
     deleteComment,
     jiraConfig,
     resolveMediaId,
+    setDescriptionAdf,
     uploadAttachment,
 } from '@/engine/jira'
 import type { Vars } from '@/engine/settings'
@@ -95,4 +96,24 @@ export async function jiraDeleteCommentCommand(
         await deleteComment(config, issue, id)
         process.stdout.write(`${JSON.stringify({ id, deleted: true })}\n`)
     }
+}
+
+// `qar jira-description --issue <KEY> --body-file <path.md>` — replace an issue's
+// description with real ADF, so markdown formatting survives instead of being
+// stored verbatim the way the MCP path does.
+export async function jiraDescriptionCommand(
+    opts: Record<string, string>,
+    vars: Vars
+): Promise<void> {
+    const issue = opts.issue ?? ''
+    if (!issue) throw new Error('jira-description requires --issue <KEY>')
+    const bodyFile = opts['body-file'] ?? ''
+    if (!bodyFile && !opts.body) {
+        throw new Error('jira-description requires --body-file <path> (or --body <text>)')
+    }
+    const body = bodyFile ? fs.readFileSync(bodyFile, 'utf8') : (opts.body ?? '')
+
+    const config = jiraConfig(vars)
+    await setDescriptionAdf(config, issue, buildCommentAdf([{ type: 'text', text: body }]))
+    process.stdout.write(`${JSON.stringify({ issue, url: `${config.baseUrl}/browse/${issue}` })}\n`)
 }
