@@ -108,9 +108,30 @@ const UPLOADED_MAIN_FILE = 'MyOwnCodeFile.R'
 // study's file table as a side effect of that run (with no "Last updated" time,
 // unlike the uploads), so round 1 deletes it before submitting — both to keep the
 // submitted study to the files it meant to send, and to cover the delete control.
-// Cased exactly as the workspace holds it: it is a DIFFERENT file from `main.r`,
-// not a spelling of it, which is the whole reason the two collided.
-const IDE_MAIN_FILE = 'main.R'
+//
+// Its CASING is set by the Coder template, and the templates disagree: qa and
+// staging stage it as `main.R`, production as `main.r`. Neither is more correct,
+// so the suite MATCHES on this pattern and then reads the real name off the
+// Explorer (`ctx.state.ideMainFile`) rather than hardcoding one spelling — an
+// `exact: true` locator for the other casing times out 30s with the file plainly
+// visible in the tree, which is exactly how the first production run failed.
+const IDE_MAIN_FILE_PATTERN = /^main\.r$/i
+
+// The workspace entry point's name AS THIS ENV SPELLS IT, captured by the IDE step.
+// The file-table row and its Remove button are matched exactly, so they have to use
+// the observed name. No default on purpose: the casing is per-env and unknowable in
+// advance, so a guess reintroduces the 30s timeout on a plainly visible file that
+// this whole pattern exists to prevent — and does it several steps later, where it
+// reads as a dead selector rather than as a step that never ran.
+function ideMainFile(ctx: RunContext): string {
+    const captured = ctx.state.ideMainFile
+    if (typeof captured !== 'string' || !captured) {
+        throw new Error(
+            "ideMainFile is unset — the IDE step captures this env's casing and must run before this step"
+        )
+    }
+    return captured
+}
 
 // The files the enclave returns, named exactly as the outputs table lists them.
 // The round-2 script (multi-query-main.r) uploads five result files plus the
@@ -435,9 +456,27 @@ export const studyHappyPathSuite: Suite = {
             //     count, e.g. 345).
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page
-                        .getByRole('treeitem', { name: IDE_MAIN_FILE, exact: true })
-                        .click()
+                    // Anchored regex rather than `exact: true`: it pins the whole
+                    // label (so no `main.r.bak` can sneak in) while tolerating the
+                    // per-env casing the Coder template chooses.
+                    const workspaceMain = ctx.page.getByRole('treeitem', {
+                        name: IDE_MAIN_FILE_PATTERN,
+                    })
+                    await workspaceMain.waitFor({ state: 'visible' })
+                    // Record the casing this env actually uses — round 1's delete
+                    // matches the file-table row EXACTLY and would otherwise repeat
+                    // this step's failure a few steps later. Re-matched against the
+                    // pattern because the label is the Explorer's, not ours: a
+                    // decorated or missing one has to fail here, where the cause is
+                    // on screen, rather than resurface as a dead selector later.
+                    const observedName = (await workspaceMain.getAttribute('aria-label'))?.trim()
+                    if (!observedName || !IDE_MAIN_FILE_PATTERN.test(observedName)) {
+                        throw new Error(
+                            `Explorer entry point has an unusable aria-label (${observedName ?? 'absent'}); expected a bare ${IDE_MAIN_FILE_PATTERN} filename`
+                        )
+                    }
+                    ctx.state.ideMainFile = observedName
+                    await workspaceMain.click()
                     // Deliberately NOT exact, unlike every file-table locator in this
                     // suite. A single click opens the file in code-server's PREVIEW mode,
                     // which decorates the tab's aria-label: the accessible name is
@@ -451,7 +490,7 @@ export const studyHappyPathSuite: Suite = {
                     // Here the Explorer treeitem stays exact (its label really is bare
                     // `main.R`) while the tab must stay loose. Don't unify them.
                     await ctx.page
-                        .getByRole('tab', { name: IDE_MAIN_FILE })
+                        .getByRole('tab', { name: ideMainFile(ctx) })
                         .waitFor({ state: 'visible' })
                     await ctx.page.getByRole('button', { name: /Run Source/i }).click()
                     // Sourcing spins up (or reuses) the R Interactive terminal; require it.
@@ -514,17 +553,23 @@ export const studyHappyPathSuite: Suite = {
                     // entry point, which is the behavior under test.
                     //
                     await electMainFile(ctx, UPLOADED_MAIN_FILE)
-                    // Remove the IDE workspace's stray `main.R` and prove the table really
-                    // dropped it. The row is the assertion target rather than the button:
-                    // a delete that only greys the control out, or one that needs a confirm
-                    // we did not click, would still leave the row attached and fail here.
+                    // Remove the IDE workspace's stray entry point and prove the table
+                    // really dropped it. The row is the assertion target rather than the
+                    // button: a delete that only greys the control out, or one that needs
+                    // a confirm we did not click, would still leave the row attached and
+                    // fail here.
+                    //
+                    // Named from what the IDE step actually saw, and kept `exact` on
+                    // purpose: getByRole name matching is substring and case-insensitive,
+                    // so a loose match here would also hit round 2's `main.r`.
+                    const strayFile = ideMainFile(ctx)
                     const strayCell = ctx.page.getByRole('cell', {
-                        name: IDE_MAIN_FILE,
+                        name: strayFile,
                         exact: true,
                     })
                     await expect(strayCell).toBeVisible()
                     await ctx.page
-                        .getByRole('button', { name: `Remove ${IDE_MAIN_FILE}`, exact: true })
+                        .getByRole('button', { name: `Remove ${strayFile}`, exact: true })
                         .click()
                     await expect(strayCell).toHaveCount(0)
                     // The fixed AppShell footer intercepts pointer events on the button.
