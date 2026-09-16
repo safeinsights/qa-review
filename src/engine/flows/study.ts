@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker'
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { loginAs } from '../auth'
 import type { EnvConfig } from '../types'
 import { clickUntil } from './interactions'
@@ -217,7 +217,17 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
     await page.getByRole('option').first().click()
 }
 
-// Submit the proposal and confirm the success banner.
+// Mantine's notification tray, as the toast-messages suite documents it: every toast
+// in management-app is an @mantine/notifications notification, so these two class
+// names address any of them. Scoped locators, not bare text: the submit toast's title
+// ("Proposal submitted") is a PREFIX of the destination banner's copy ("Proposal
+// submitted to <Org> • <date>"), so a page-wide text match would resolve to both and
+// fail strict mode the moment the banner renders under the still-open toast.
+const TOAST = '.mantine-Notification-root'
+const TOAST_TITLE = '.mantine-Notification-title'
+
+// Submit the proposal, then assert BOTH halves of the app's confirmation: the toast
+// the submitting tab raises, and the banner on the /submitted page it routes to.
 export async function submitProposal(page: Page): Promise<void> {
     // The page trigger and the modal's confirm button carry the SAME accessible name,
     // "Submit proposal". So the trigger is addressed by id — the id OTTER-691 gave it
@@ -227,7 +237,19 @@ export async function submitProposal(page: Page): Promise<void> {
     const submitConfirm = page.getByRole('dialog', { name: 'Submit your proposal?' })
     await clickUntil(page.locator('#submit-proposal'), submitConfirm)
     await submitConfirm.getByRole('button', { name: /Submit proposal/i }).click()
-    await page.getByText(/successfully submitted/i).waitFor({ state: 'visible' })
+    // Success raises a green toast titled "Proposal submitted" with an EMPTY message
+    // body, so the title is the only thing there is to assert — don't add a body check.
+    // waitFor, not expect, for the appearance: the toast is gated on the submit mutation
+    // resolving. It outlives the router.push to /submitted (the tray lives in the app
+    // shell), so asserting it before the banner is safe rather than racy.
+    const toast = page.locator(TOAST).filter({ hasText: 'Proposal submitted' }).first()
+    await toast.waitFor({ state: 'visible' })
+    await expect(toast.locator(TOAST_TITLE)).toHaveText('Proposal submitted')
+    // Then the destination banner. This used to wait for /successfully submitted/i,
+    // which the app no longer renders anywhere — so the step failed 30s AFTER the
+    // proposal had in fact been submitted and the page had landed on /submitted. The
+    // org name and date vary per run, so match only the copy that doesn't.
+    await page.getByText(/Proposal submitted to /i).waitFor({ state: 'visible' })
 }
 
 // End-to-end convenience: start → capture id → fill → submit. Returns the study id
