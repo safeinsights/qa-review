@@ -117,18 +117,20 @@ const UPLOADED_MAIN_FILE = 'MyOwnCodeFile.R'
 // visible in the tree, which is exactly how the first production run failed.
 const IDE_MAIN_FILE_PATTERN = /^main\.r$/i
 
-// Fallback for the name above, used only if the Explorer label can't be read.
-// Still cased as qa/staging hold it: whatever the case, this is a DIFFERENT file
-// from the round-2 upload `main.r`, not a spelling of it — which is the whole
-// reason the two collided in the file table.
-const IDE_MAIN_FILE = 'main.R'
-
-// The workspace entry point's name AS THIS ENV SPELLS IT, captured by the IDE
-// step. The file-table row and its Remove button are matched exactly, so they
-// have to use the observed name, not a guess.
+// The workspace entry point's name AS THIS ENV SPELLS IT, captured by the IDE step.
+// The file-table row and its Remove button are matched exactly, so they have to use
+// the observed name. No default on purpose: the casing is per-env and unknowable in
+// advance, so a guess reintroduces the 30s timeout on a plainly visible file that
+// this whole pattern exists to prevent — and does it several steps later, where it
+// reads as a dead selector rather than as a step that never ran.
 function ideMainFile(ctx: RunContext): string {
     const captured = ctx.state.ideMainFile
-    return typeof captured === 'string' && captured ? captured : IDE_MAIN_FILE
+    if (typeof captured !== 'string' || !captured) {
+        throw new Error(
+            "ideMainFile is unset — the IDE step captures this env's casing and must run before this step"
+        )
+    }
+    return captured
 }
 
 // The files the enclave returns, named exactly as the outputs table lists them.
@@ -463,9 +465,17 @@ export const studyHappyPathSuite: Suite = {
                     await workspaceMain.waitFor({ state: 'visible' })
                     // Record the casing this env actually uses — round 1's delete
                     // matches the file-table row EXACTLY and would otherwise repeat
-                    // this step's failure a few steps later.
-                    ctx.state.ideMainFile =
-                        (await workspaceMain.getAttribute('aria-label')) ?? IDE_MAIN_FILE
+                    // this step's failure a few steps later. Re-matched against the
+                    // pattern because the label is the Explorer's, not ours: a
+                    // decorated or missing one has to fail here, where the cause is
+                    // on screen, rather than resurface as a dead selector later.
+                    const observedName = (await workspaceMain.getAttribute('aria-label'))?.trim()
+                    if (!observedName || !IDE_MAIN_FILE_PATTERN.test(observedName)) {
+                        throw new Error(
+                            `Explorer entry point has an unusable aria-label (${observedName ?? 'absent'}); expected a bare ${IDE_MAIN_FILE_PATTERN} filename`
+                        )
+                    }
+                    ctx.state.ideMainFile = observedName
                     await workspaceMain.click()
                     // Deliberately NOT exact, unlike every file-table locator in this
                     // suite. A single click opens the file in code-server's PREVIEW mode,
