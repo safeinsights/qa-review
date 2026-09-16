@@ -175,9 +175,9 @@ function requireResultsKey(ctx: RunContext): string {
     return key
 }
 
-// Short settle after isReactHydrated before clicking the "Proceed to step 3"
-// next/link button: the App Router route entry for the /agreements segment wires
-// up just after initial hydration, and a click in that gap no-ops silently.
+// Short settle after isReactHydrated before clicking the "Next step" next/link
+// button: the App Router route entry for the destination segment wires up just
+// after initial hydration, and a click in that gap no-ops silently.
 const PROCEED_NAV_SETTLE_MS = 500
 
 // Shared per-run state threaded between steps via ctx.state. `study` is the
@@ -275,9 +275,17 @@ export const studyHappyPathSuite: Suite = {
                         .getByTestId('review-decision-section')
                         .getByRole('radio', { name: /^Approve$/i })
                         .check()
-                    await ctx.page.getByRole('button', { name: /^Submit review$/i }).click()
-                    await confirmDialog(ctx, /^Yes, submit review$/i)
-                    await ctx.page.getByText(/Approved on/).waitFor({ state: 'visible' })
+                    // The decision UI is one "Submit decision" button plus a confirm modal
+                    // whose wording is keyed to the selected decision, so the confirm label
+                    // ("Approve proposal") is what distinguishes a real approval from a
+                    // revision request or a decline.
+                    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
+                    await confirmDialog(ctx, /^Approve proposal$/i)
+                    // Submitting re-renders this page with the reviewer's decision banner in
+                    // place of the decision form. Its title is "Proposal approved by
+                    // <reviewer> • <date>", so there is no "Approved on <date>" stamp left to
+                    // wait for.
+                    await ctx.page.getByText(/Proposal approved/i).waitFor({ state: 'visible' })
                 }),
         },
         // ---- Researcher: route to code upload, launch IDE, upload + submit ----
@@ -296,11 +304,11 @@ export const studyHappyPathSuite: Suite = {
                         }
                     )
                     // Advance step-by-step, waiting for a distinctive element on each
-                    // destination page: clicking "Proceed to step 3" lands on the agreements
+                    // destination page: clicking the forward control lands on the agreements
                     // page, whose own "Proceed to Step 4" button is the arrival signal;
                     // clicking that lands on /code, signalled by "Upload your files".
                     //
-                    // The "Proceed to step 3" anchor is server-rendered, so it is visible
+                    // The forward anchor is server-rendered, so it is visible
                     // (and click-actionable) before the SPA finishes hydrating — a click that
                     // lands in that window is swallowed by the not-yet-mounted router and the
                     // page stays on /submitted. Wait for the app's hydration flag before the
@@ -314,20 +322,25 @@ export const studyHappyPathSuite: Suite = {
                         undefined,
                         { timeout: 5_000 }
                     )
-                    // "Proceed to step 3" is a Mantine <Button component={next/link}>: its
+                    // The forward control is a Mantine <Button component={next/link}>: its
                     // onClick preventDefaults the native anchor navigation and relies on the
                     // App Router's router.push. isReactHydrated flips true at initial
-                    // hydration, but the client route entry for the /agreements segment wires
+                    // hydration, but the client route entry for the destination segment wires
                     // up slightly later — a click in that gap is consumed while router.push
                     // no-ops, so the page silently stays on /submitted (no error). There's no
                     // exposed "route ready" signal to await, so settle briefly after
                     // hydration before the single click.
-                    const proceedToStep3 = ctx.page.getByRole('link', {
-                        name: /Proceed to step 3/i,
+                    //
+                    // The label was "Proceed to step 3" and is now the generic "Next step",
+                    // pointing straight at the code step — consistent with the OTTER-727 gate
+                    // removal noted below. ANCHORED because the control sits beside a
+                    // "Previous step" link that an unanchored /step/i would also match.
+                    const proceedForward = ctx.page.getByRole('link', {
+                        name: /^Next step$/i,
                     })
-                    await proceedToStep3.waitFor({ state: 'visible' })
+                    await proceedForward.waitFor({ state: 'visible' })
                     await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
-                    await proceedToStep3.click()
+                    await proceedForward.click()
                     // OTTER-727 (management-app #975, merged 2026-08-31) HID the
                     // agreements step this used to lead to: /submitted's Proceed button
                     // now computes the code step directly, and /agreements/researcher
@@ -341,9 +354,9 @@ export const studyHappyPathSuite: Suite = {
                     // management-app's own navigateToCodeUpload helper did. Same approach
                     // openCodeReview() uses for the reviewer-side gate.
                     //
-                    // Note the button still reads "Proceed to step 3" while landing on a
-                    // page headed "STEP 4" — a known label/numbering gap deferred to
-                    // OTTER-673, NOT a bug to re-report.
+                    // The OTTER-673 label/numbering gap this used to warn about (a button
+                    // reading "Proceed to step 3" landing on a page headed "STEP 4") is moot
+                    // now that the control reads "Next step".
                     const proceedToStep4 = ctx.page.getByRole('button', {
                         name: /Proceed to Step 4/i,
                     })
@@ -576,9 +589,15 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
                     await ctx.page.getByRole('button', { name: 'Yes, submit study code' }).click()
-                    // Code submission redirects to CodePostSubmissionView; wait on its banner.
+                    // Submission no longer lands on CodePostSubmissionView and its
+                    // `code-under-review-banner` test id; it redirects to /view, whose generic
+                    // `status-alert` carries the "Code submitted to <org>" wording. Filtered on
+                    // that wording rather than taken bare, because the same test id is the
+                    // page's status slot in every state — an unfiltered match would go green on
+                    // a page that reports something else entirely.
                     await ctx.page
-                        .getByTestId('code-under-review-banner')
+                        .getByTestId('status-alert')
+                        .filter({ hasText: /code submitted/i })
                         .waitFor({ state: 'visible' })
                     await expectToastVisible(ctx.page, {
                         title: 'Study Code Submitted',
@@ -600,7 +619,7 @@ export const studyHappyPathSuite: Suite = {
                     await setCodeCriteria(ctx, 'no')
                     await ctx.page.getByTestId('code-review-decision-needs-clarification').click()
                     await typeCodeFeedback(ctx, content(ctx).changeRequestFeedback)
-                    await submitCodeReview(ctx, /Change requested on/)
+                    await submitCodeReview(ctx, /^Request revision$/i, /Revision requested/i)
                 }),
         },
         // ---- Researcher: resubmit code (round 2 == the re-run) ----
@@ -638,10 +657,20 @@ export const studyHappyPathSuite: Suite = {
                         .fill(content(ctx).resubmissionNote)
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-                    await ctx.page.getByRole('button', { name: /^Resubmit study code$/i }).click()
+                    // Both labels were renamed: the trigger "Resubmit study code" is now
+                    // "Resubmit code for review", and the confirm "Yes, resubmit study code"
+                    // is now plain "Resubmit code". Both regexes are ANCHORED because the
+                    // trigger stays in the DOM behind the open modal and the confirm's name is
+                    // a PREFIX of it — an unanchored /Resubmit code/i matches both and dies as
+                    // a strict mode violation.
                     await ctx.page
-                        .getByRole('button', { name: /^Yes, resubmit study code$/i })
+                        .getByRole('button', { name: /^Resubmit code for review$/i })
                         .click()
+                    // Scoped to the dialog via confirmDialog rather than a bare page-level
+                    // click, matching every other confirm in this suite: it retries the click
+                    // until the modal actually closes, which is what a confirm landing before
+                    // its handler is wired needs.
+                    await confirmDialog(ctx, /^Resubmit code$/i)
                     // Resubmit lands on the study view; the "Edit study code" heading
                     // is gone once submitted, so wait for that heading to detach as the
                     // signal the resubmit navigated away from the edit form.
@@ -667,7 +696,7 @@ export const studyHappyPathSuite: Suite = {
                     await setCodeCriteria(ctx, 'yes')
                     await ctx.page.getByTestId('code-review-decision-approve').click()
                     await typeCodeFeedback(ctx, content(ctx).codeApprovalFeedback)
-                    await submitCodeReview(ctx, /Approved on/)
+                    await submitCodeReview(ctx, /^Approve code$/i, /Code approved/i)
                 }),
         },
         // ---- qa runs the job; wait for results, then decrypt + approve ----
@@ -1093,9 +1122,16 @@ async function typeCodeFeedback(ctx: RunContext, text: string): Promise<void> {
     await ctx.page.keyboard.type(text)
 }
 
-async function submitCodeReview(ctx: RunContext, doneRegex: RegExp): Promise<void> {
+// The code decision shares the proposal decision's shape: one submit button, then a
+// confirm modal whose title/button are keyed to the decision. So the confirm label is
+// per-call rather than fixed — it is what separates an approval from a revision request.
+async function submitCodeReview(
+    ctx: RunContext,
+    confirmName: RegExp,
+    doneRegex: RegExp
+): Promise<void> {
     await ctx.page.getByTestId('code-review-submit').click()
-    await confirmDialog(ctx, /^Yes, submit review$/i)
+    await confirmDialog(ctx, confirmName)
     await ctx.page.getByText(doneRegex).waitFor({ state: 'visible' })
 }
 
