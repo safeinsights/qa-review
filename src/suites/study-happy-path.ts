@@ -808,8 +808,9 @@ export const studyHappyPathSuite: Suite = {
         {
             name: 'Switch to the admin account for cleanup authority',
             // End as admin so guaranteed teardown cleanup runs with delete
-            // authority: the /api/qa DELETE endpoints require isSiAdmin, which the
-            // researcher and reviewer accounts lack (a reviewer-session cleanup 401s).
+            // authority: the /api/qa DELETE endpoints require SI admin, or admin of
+            // both the study's enclave and its lab. The researcher and reviewer
+            // accounts are neither (a reviewer-session cleanup 401s).
             run: ctx => ctx.step(() => ctx.loginAs('admin')),
         },
         {

@@ -12,9 +12,12 @@ export interface CleanupResult {
 // Tracks the ids a run creates and deletes them via the management-app QA
 // endpoints. Authorization is a Clerk SESSION JWT (obtained in the page via
 // Clerk.session.getToken()) sent as `Authorization: Bearer <jwt>` — the endpoints
-// verify it with verifyToken() and require isSiAdmin. (A cookie does NOT work:
-// requireQaAdmin only reads the Bearer header.) Studies are deleted before users
-// because a study's owner FK references the user.
+// verify it with verifyToken(), then require the caller to be an SI admin OR an
+// admin of every org the request targets (a study's enclave AND its lab; for a user,
+// every org that account touches). Our shared admin account is an SI admin, so it
+// passes unconditionally. (A cookie does NOT work: the auth step only reads the
+// Bearer header.) Studies are deleted before users because a study's owner FK
+// references the user.
 export class CleanupClient {
     private studies: string[] = []
     private users: string[] = []
