@@ -325,11 +325,11 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
-## The Claude command sandbox blocks four things QA sessions need
+## The Claude command sandbox blocks five things QA sessions need
 
 Claude Code runs Bash in a sandbox that confines both **network egress** and
 **filesystem writes**. That sandbox is what a validation session actually trips over,
-and all four failures look like broken tooling rather than a permissions boundary —
+and all five failures look like broken tooling rather than a permissions boundary —
 so each one gets retried, guessed at, or reported as a bug in `qar`:
 
 - **`qar jira-comment` → `fetch failed`.** `openstax.atlassian.net` was not on the
@@ -363,6 +363,19 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   settings.dat: Operation not permitted`. It launches its OWN Playwright Chrome (it
   needs an admin token, so it does not reuse the session browser), and that browser
   writes outside the sandbox's writable set.
+- **`qar sync` → `Skipped sync — your branch has diverged (unpushed commits)`, with
+  NOTHING to push.** The sandbox denies writes under `.claude/` (`skills`, `hooks`,
+  `settings.json`) so a session cannot rewrite its own instructions. A pull that
+  must update a skill file therefore writes every PERMITTED file, then dies on that
+  one with `error: unable to unlink old '<path>': Operation not permitted` — and
+  aborts **HALF-APPLIED**: HEAD on the old commit while the index and worktree hold
+  the new one. `git log -1` and `git status` disagree, and the stranded files look
+  like edits you made. Recover as in the `git checkout` case below, then **sync from
+  the QA Runner Sync button**, which runs git from the native Wails process, OUTSIDE
+  the sandbox, and so is the only path that reliably updates `.claude/`.
+  `isConfigFailure`/`gitConfigFailureRE` now classify this as a FAILURE carrying
+  git's real stderr; it used to fall through to "diverged", which is why the advice
+  was to push a branch that had nothing on it.
 
 `.claude/settings.json` carries the config. Two things to know about it:
 

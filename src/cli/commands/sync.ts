@@ -28,6 +28,37 @@ function isConfigFailure(message: string): boolean {
     )
 }
 
+// A pull whose worktree write the OS refused — in practice the Claude sandbox,
+// which denies `.claude/skills` (and `.claude/hooks`, `settings.json`) so a
+// session cannot rewrite its own instructions. git writes every PERMITTED file
+// first and only then reaches the denied one, so it aborts HALF-APPLIED: HEAD
+// still on the old commit while the index and worktree hold the new one.
+//
+// This must not read as divergence. The message matches no isConfigFailure
+// pattern and no genuine non-fast-forward, so it used to fall through to
+// `skipped-diverged` — telling the user to push or open a PR for a branch with
+// nothing to push, while the half-applied worktree went unnamed and read as
+// edits they had made themselves.
+//
+// Matching the write VERB and not the errno alone is deliberate: `Permission
+// denied` also ends `git@github.com: Permission denied (publickey)`, an auth
+// failure with an entirely different fix.
+const blockedWriteRE =
+    /(unable to (unlink|create|write|rename|checkout)|cannot (create directory|stat))[^\n]*(operation not permitted|permission denied)/i
+
+function isBlockedWriteFailure(message: string): boolean {
+    return blockedWriteRE.test(message)
+}
+
+// Appended to git's stderr, which names the file but neither the cause nor the
+// recovery. The half-applied worktree is the expensive part — it is invisible
+// unless the user is told to look for it.
+const blockedWriteHint = [
+    'A file write was refused by the OS. Under the Claude sandbox `.claude/` is not writable,',
+    'so the pull may have applied PARTWAY — check `git status`.',
+    'Sync from the QA Runner Sync button, which runs outside the sandbox, or re-run with the sandbox off.',
+].join(' ')
+
 function gitIn(cwd: string): GitRunner {
     return async args => (await execFileAsync('git', args, { cwd })).stdout
 }
@@ -52,6 +83,9 @@ export async function syncRepo(_repoDir: string, git: GitRunner): Promise<SyncRe
         await git(['-c', 'pull.rebase=false', 'pull', '--ff-only'])
     } catch (e) {
         const detail = gitErrorText(e)
+        if (isBlockedWriteFailure(detail)) {
+            return { status: 'failed', drift: false, detail: `${detail}\n\n${blockedWriteHint}` }
+        }
         return {
             status: isConfigFailure(detail) ? 'failed' : 'skipped-diverged',
             drift: false,

@@ -1355,8 +1355,23 @@ func (a *App) Sync(cwd string) (string, error) {
 var gitConfigFailureRE = regexp.MustCompile(
 	`(?i)cannot rebase onto multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
 
+// gitBlockedWriteRE matches a pull whose worktree write the OS refused. git
+// writes every PERMITTED file first and only then reaches the denied one, so it
+// aborts HALF-APPLIED: HEAD on the old commit while the index and worktree hold
+// the new one. Resetting cannot fix that either, so it is reported as a failure
+// rather than as divergence.
+//
+// Mirrors isBlockedWriteFailure in src/cli/commands/sync.ts. The GUI itself runs
+// OUTSIDE the Claude sandbox and so cannot hit this, but the two classifiers are
+// a documented pair and must not drift.
+//
+// The write VERB is matched, not the errno alone: `Permission denied` also ends
+// `git@github.com: Permission denied (publickey)`, an unrelated auth failure.
+var gitBlockedWriteRE = regexp.MustCompile(
+	`(?i)(unable to (unlink|create|write|rename|checkout)|cannot (create directory|stat))[^\n]*(operation not permitted|permission denied)`)
+
 func isGitConfigFailure(out string) bool {
-	return gitConfigFailureRE.MatchString(out)
+	return gitConfigFailureRE.MatchString(out) || gitBlockedWriteRE.MatchString(out)
 }
 
 // keyringFiles are the tracked config files that determine keyring access
