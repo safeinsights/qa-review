@@ -19,9 +19,17 @@ export interface SyncResult {
 // A pull can fail for reasons that resetting the working copy cannot fix: a
 // stale/missing upstream ref, no tracking branch, or rebase config git refuses to
 // act on. Only a true non-fast-forward is "diverged" — the case a reset resolves.
+//
+// `cannot fast-forward to multiple branches` is the MERGE-path twin of the rebase
+// message beside it: `pull --ff-only` hands `merge --ff-only` every FETCH_HEAD entry
+// marked for merge, and dies when there is more than one. Same condition, different
+// wording, so matching only the rebase spelling left it falling through to
+// `skipped-diverged` — "push or open a PR" on a branch level with origin, while the
+// Reset button that banner offers just re-ran the same failure.
 function isConfigFailure(message: string): boolean {
     return (
         /cannot rebase onto multiple branches/i.test(message) ||
+        /cannot fast-forward to multiple branches/i.test(message) ||
         /no such ref was fetched/i.test(message) ||
         /no tracking information/i.test(message) ||
         /couldn't find remote ref/i.test(message)

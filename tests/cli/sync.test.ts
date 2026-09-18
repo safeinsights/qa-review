@@ -55,6 +55,7 @@ describe('sync', () => {
     // button that reruns the same failure and never clears its own banner.
     it.each([
         ['fatal: Cannot rebase onto multiple branches.'],
+        ['fatal: Cannot fast-forward to multiple branches.'],
         [
             "Your configuration specifies to merge with the ref 'refs/heads/gone'\nfrom the remote, but no such ref was fetched.",
         ],

@@ -1352,8 +1352,15 @@ func (a *App) Sync(cwd string) (string, error) {
 // gitConfigFailureRE matches pull failures that resetting the working copy cannot
 // fix: a stale/missing upstream ref, no tracking branch, or rebase config git
 // refuses to act on. Mirrors isConfigFailure in src/cli/commands/sync.ts.
+//
+// "cannot fast-forward to multiple branches" is the MERGE-path twin of the rebase
+// message beside it: `pull --ff-only` hands `merge --ff-only` every FETCH_HEAD entry
+// marked for merge and dies when there is more than one. Same condition, different
+// wording, so matching only the rebase spelling left it falling through to
+// "skipped-diverged" — the banner offers a Reset that re-runs the same failure and
+// never clears itself, which is exactly how it was observed.
 var gitConfigFailureRE = regexp.MustCompile(
-	`(?i)cannot rebase onto multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
+	`(?i)cannot rebase onto multiple branches|cannot fast-forward to multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
 
 // gitBlockedWriteRE matches a pull whose worktree write the OS refused. git
 // writes every PERMITTED file first and only then reaches the denied one, so it
