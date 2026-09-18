@@ -9,6 +9,12 @@ packages: []
 # the patched 6.x is inside its supported range, not a forced override.
 overrides:
     vite: '^6.4.3'
+    # postcss (via vite) resolves nanoid to 3.3.16, which is unpatched for
+    # GHSA-2v37-7h3g-55p8 (a custom generator loops forever when size is 0).
+    # postcss declares "^3.3.16", so the patched 3.3.19 is inside its supported
+    # range — `pnpm update nanoid --depth Infinity` simply refuses to move a
+    # transitive resolution, which is what makes the override necessary.
+    nanoid: '^3.3.19'
 
 # pnpm 11 refuses to run a dependency's postinstall unless it is approved here,
 # and a bare `pnpm install` FAILS on unapproved ones (ERR_PNPM_IGNORED_BUILDS)
