@@ -9,6 +9,10 @@ import "testing"
 func TestIsGitConfigFailure(t *testing.T) {
 	configFailures := []string{
 		"fatal: Cannot rebase onto multiple branches.",
+		// The merge-path twin of the line above, seen four times in
+		// diagnostics.log. It fell through to "diverged" on a branch level with
+		// origin, which is the banner this test exists to prevent.
+		"fatal: Cannot fast-forward to multiple branches.",
 		"Your configuration specifies to merge with the ref 'refs/heads/fix/empty-access-branch'\nfrom the remote, but no such ref was fetched.",
 		"There is no tracking information for the current branch.",
 		"fatal: couldn't find remote ref refs/heads/gone",

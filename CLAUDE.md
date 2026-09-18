@@ -235,6 +235,14 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   asked for **only** when a sync was skipped. It returns **0 rather than a guess**
   whenever the count is unknowable (offline, no upstream) — a staleness warning that
   fires on every offline launch teaches people to ignore the one that matters.
+  **"Diverged" is the catch-all**, so a pull that fails for any unrecognised reason
+  is reported as divergence. `fatal: Cannot fast-forward to multiple branches` —
+  `merge --ff-only` handed more than one for-merge `FETCH_HEAD` entry, the merge-path
+  twin of the `Cannot rebase onto multiple branches` the `-c pull.rebase=false` above
+  avoids — read that way four times before it was matched. Before believing the
+  banner, check `git status -sb` and `rev-list --left-right --count HEAD...@{u}`: a
+  branch level with origin never diverged, and `diagnostics.log` carries git's real
+  message under `[git] FAIL`.
 - **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
   `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
   key**, not by row, so a user with duplicate entries (`addMember` dedupes on name
@@ -325,11 +333,11 @@ process GROUP inline. Don't "simplify" that back to relying on the deferred kill
 Secrets never reach it: `redactArgs()` masks `--value`/`--password`/`--token`
 before any engine label is logged or embedded in an issue.
 
-## The Claude command sandbox blocks four things QA sessions need
+## The Claude command sandbox blocks five things QA sessions need
 
 Claude Code runs Bash in a sandbox that confines both **network egress** and
 **filesystem writes**. That sandbox is what a validation session actually trips over,
-and all four failures look like broken tooling rather than a permissions boundary —
+and all five failures look like broken tooling rather than a permissions boundary —
 so each one gets retried, guessed at, or reported as a bug in `qar`:
 
 - **`qar jira-comment` → `fetch failed`.** `openstax.atlassian.net` was not on the
@@ -363,6 +371,19 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   settings.dat: Operation not permitted`. It launches its OWN Playwright Chrome (it
   needs an admin token, so it does not reuse the session browser), and that browser
   writes outside the sandbox's writable set.
+- **`qar sync` → `Skipped sync — your branch has diverged (unpushed commits)`, with
+  NOTHING to push.** The sandbox denies writes under `.claude/` (`skills`, `hooks`,
+  `settings.json`) so a session cannot rewrite its own instructions. A pull that
+  must update a skill file therefore writes every PERMITTED file, then dies on that
+  one with `error: unable to unlink old '<path>': Operation not permitted` — and
+  aborts **HALF-APPLIED**: HEAD on the old commit while the index and worktree hold
+  the new one. `git log -1` and `git status` disagree, and the stranded files look
+  like edits you made. Recover as in the `git checkout` case below, then **sync from
+  the QA Runner Sync button**, which runs git from the native Wails process, OUTSIDE
+  the sandbox, and so is the only path that reliably updates `.claude/`.
+  `isConfigFailure`/`gitConfigFailureRE` now classify this as a FAILURE carrying
+  git's real stderr; it used to fall through to "diverged", which is why the advice
+  was to push a branch that had nothing on it.
 
 `.claude/settings.json` carries the config. Two things to know about it:
 

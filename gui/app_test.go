@@ -1426,3 +1426,32 @@ func TestCommitsBehindQuietWhenUnknown(t *testing.T) {
 		t.Fatalf("CommitsBehind() = %d with no upstream, want 0", got)
 	}
 }
+
+// A pull the sandbox refuses to write aborts HALF-APPLIED and must not be
+// reported as divergence — resetting cannot fix it, and the "diverged" banner
+// sends the user to push a branch with nothing to push. Kept in lockstep with
+// isBlockedWriteFailure in src/cli/commands/sync.ts.
+func TestIsGitConfigFailureBlockedWrite(t *testing.T) {
+	blocked := []string{
+		"error: unable to unlink old '.claude/skills/qa-validate/SKILL.md': Operation not permitted",
+		"error: unable to create file .claude/hooks/pre.sh: Permission denied",
+		"error: cannot stat '.claude/skills/qa-explore/SKILL.md': Permission denied",
+	}
+	for _, m := range blocked {
+		if !isGitConfigFailure(m) {
+			t.Errorf("expected a blocked write to be a failure, not divergence: %q", m)
+		}
+	}
+
+	// `Permission denied` alone also ends an SSH auth failure, which is neither
+	// half-applied nor fixed the same way. The write verb is what separates them.
+	notBlocked := []string{
+		"git@github.com: Permission denied (publickey).",
+		"Not possible to fast-forward, aborting.",
+	}
+	for _, m := range notBlocked {
+		if isGitConfigFailure(m) {
+			t.Errorf("expected %q not to be classified as an unresettable failure", m)
+		}
+	}
+}
