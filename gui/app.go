@@ -1337,10 +1337,11 @@ func (a *App) Sync(cwd string) (string, error) {
 	// branches"). Pinning it keeps --ff-only a genuine fast-forward check.
 	out, err := a.git(dir, "-c", "pull.rebase=false", "pull", "--ff-only")
 	if err != nil {
-		// Only a true non-fast-forward is recoverable by resetting. Reporting a
-		// broken upstream ref or unusable config as "diverged" offers a Reset
-		// button that reruns the same failure and never clears its own banner.
-		if isGitConfigFailure(out) {
+		// Only a true non-fast-forward is recoverable by resetting. Anything else
+		// (broken upstream ref, unusable config, a refused write, a message never
+		// seen before) is a failure carrying git's own stderr; reporting it as
+		// "diverged" offers a Reset button that reruns the same failure forever.
+		if !isGitNonFastForward(out) {
 			return "failed: " + firstLines(out, 2), nil
 		}
 		return "skipped-diverged", nil
@@ -1349,36 +1350,12 @@ func (a *App) Sync(cwd string) (string, error) {
 	return "synced", nil
 }
 
-// gitConfigFailureRE matches pull failures that resetting the working copy cannot
-// fix: a stale/missing upstream ref, no tracking branch, or rebase config git
-// refuses to act on. Mirrors isConfigFailure in src/cli/commands/sync.ts.
-//
-// "cannot fast-forward to multiple branches" is the MERGE-path twin of the rebase
-// message beside it: `pull --ff-only` hands `merge --ff-only` every FETCH_HEAD entry
-// marked for merge and dies when there is more than one. Same condition, different
-// wording, so matching only the rebase spelling left it falling through to
-// "skipped-diverged" — the banner offers a Reset that re-runs the same failure and
-// never clears itself, which is exactly how it was observed.
-var gitConfigFailureRE = regexp.MustCompile(
-	`(?i)cannot rebase onto multiple branches|cannot fast-forward to multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
+// gitNonFastForwardRE matches the one pull failure a reset resolves. git prints a
+// single stable line for it. Mirrors nonFastForwardRE in src/cli/commands/sync.ts.
+var gitNonFastForwardRE = regexp.MustCompile(`(?i)not possible to fast-forward`)
 
-// gitBlockedWriteRE matches a pull whose worktree write the OS refused. git
-// writes every PERMITTED file first and only then reaches the denied one, so it
-// aborts HALF-APPLIED: HEAD on the old commit while the index and worktree hold
-// the new one. Resetting cannot fix that either, so it is reported as a failure
-// rather than as divergence.
-//
-// Mirrors isBlockedWriteFailure in src/cli/commands/sync.ts. The GUI itself runs
-// OUTSIDE the Claude sandbox and so cannot hit this, but the two classifiers are
-// a documented pair and must not drift.
-//
-// The write VERB is matched, not the errno alone: `Permission denied` also ends
-// `git@github.com: Permission denied (publickey)`, an unrelated auth failure.
-var gitBlockedWriteRE = regexp.MustCompile(
-	`(?i)(unable to (unlink|create|write|rename|checkout)|cannot (create directory|stat))[^\n]*(operation not permitted|permission denied)`)
-
-func isGitConfigFailure(out string) bool {
-	return gitConfigFailureRE.MatchString(out) || gitBlockedWriteRE.MatchString(out)
+func isGitNonFastForward(out string) bool {
+	return gitNonFastForwardRE.MatchString(out)
 }
 
 // keyringFiles are the tracked config files that determine keyring access

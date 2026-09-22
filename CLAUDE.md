@@ -235,14 +235,13 @@ Onboarding & operations (CLI; the GUI Settings tab shells out to these):
   asked for **only** when a sync was skipped. It returns **0 rather than a guess**
   whenever the count is unknowable (offline, no upstream) — a staleness warning that
   fires on every offline launch teaches people to ignore the one that matters.
-  **"Diverged" is the catch-all**, so a pull that fails for any unrecognised reason
-  is reported as divergence. `fatal: Cannot fast-forward to multiple branches` —
-  `merge --ff-only` handed more than one for-merge `FETCH_HEAD` entry, the merge-path
-  twin of the `Cannot rebase onto multiple branches` the `-c pull.rebase=false` above
-  avoids — read that way four times before it was matched. Before believing the
-  banner, check `git status -sb` and `rev-list --left-right --count HEAD...@{u}`: a
-  branch level with origin never diverged, and `diagnostics.log` carries git's real
-  message under `[git] FAIL`.
+  **"Diverged" is reported only for git's own `Not possible to fast-forward`**; every
+  other pull failure (stale upstream ref, no tracking branch, `Cannot fast-forward to
+  multiple branches`, a refused write, anything new) is a **failure carrying git's
+  stderr**. "Diverged" used to be the catch-all, which sent people to push a branch
+  level with origin. If the banner still looks wrong, `git status -sb` and
+  `rev-list --left-right --count HEAD...@{u}` settle it, and `diagnostics.log` carries
+  git's real message under `[git] FAIL`.
 - **Revocation**: `scripts/revoke-access.sh "<name>"` — removes them from
   `keyring.json`, rekeys to the survivors, and opens a PR. It removes by **public
   key**, not by row, so a user with duplicate entries (`addMember` dedupes on name
@@ -381,9 +380,9 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   like edits you made. Recover as in the `git checkout` case below, then **sync from
   the QA Runner Sync button**, which runs git from the native Wails process, OUTSIDE
   the sandbox, and so is the only path that reliably updates `.claude/`.
-  `isConfigFailure`/`gitConfigFailureRE` now classify this as a FAILURE carrying
-  git's real stderr; it used to fall through to "diverged", which is why the advice
-  was to push a branch that had nothing on it.
+  `qar sync` reports this as a FAILURE carrying git's real stderr plus a recovery
+  hint; it used to fall through to "diverged", which is why the advice was to push a
+  branch that had nothing on it.
 
 `.claude/settings.json` carries the config. Two things to know about it:
 

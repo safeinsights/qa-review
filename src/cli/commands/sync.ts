@@ -16,25 +16,12 @@ export interface SyncResult {
     detail?: string
 }
 
-// A pull can fail for reasons that resetting the working copy cannot fix: a
-// stale/missing upstream ref, no tracking branch, or rebase config git refuses to
-// act on. Only a true non-fast-forward is "diverged" — the case a reset resolves.
-//
-// `cannot fast-forward to multiple branches` is the MERGE-path twin of the rebase
-// message beside it: `pull --ff-only` hands `merge --ff-only` every FETCH_HEAD entry
-// marked for merge, and dies when there is more than one. Same condition, different
-// wording, so matching only the rebase spelling left it falling through to
-// `skipped-diverged` — "push or open a PR" on a branch level with origin, while the
-// Reset button that banner offers just re-ran the same failure.
-function isConfigFailure(message: string): boolean {
-    return (
-        /cannot rebase onto multiple branches/i.test(message) ||
-        /cannot fast-forward to multiple branches/i.test(message) ||
-        /no such ref was fetched/i.test(message) ||
-        /no tracking information/i.test(message) ||
-        /couldn't find remote ref/i.test(message)
-    )
-}
+// Only a genuine non-fast-forward is "diverged" — the one case a reset resolves.
+// git prints a single stable line for it. Every other pull failure (stale upstream
+// ref, no tracking branch, unusable rebase config, anything new) reports as
+// `failed` carrying git's own stderr, so an unrecognised message can never be
+// misread as "push or open a PR".
+const nonFastForwardRE = /not possible to fast-forward/i
 
 // A pull whose worktree write the OS refused — in practice the Claude sandbox,
 // which denies `.claude/skills` (and `.claude/hooks`, `settings.json`) so a
@@ -42,11 +29,8 @@ function isConfigFailure(message: string): boolean {
 // first and only then reaches the denied one, so it aborts HALF-APPLIED: HEAD
 // still on the old commit while the index and worktree hold the new one.
 //
-// This must not read as divergence. The message matches no isConfigFailure
-// pattern and no genuine non-fast-forward, so it used to fall through to
-// `skipped-diverged` — telling the user to push or open a PR for a branch with
-// nothing to push, while the half-applied worktree went unnamed and read as
-// edits they had made themselves.
+// It is matched separately only to append the recovery hint below: the
+// half-applied worktree is invisible unless the user is told to look for it.
 //
 // Matching the write VERB and not the errno alone is deliberate: `Permission
 // denied` also ends `git@github.com: Permission denied (publickey)`, an auth
@@ -95,7 +79,7 @@ export async function syncRepo(_repoDir: string, git: GitRunner): Promise<SyncRe
             return { status: 'failed', drift: false, detail: `${detail}\n\n${blockedWriteHint}` }
         }
         return {
-            status: isConfigFailure(detail) ? 'failed' : 'skipped-diverged',
+            status: nonFastForwardRE.test(detail) ? 'skipped-diverged' : 'failed',
             drift: false,
             detail,
         }

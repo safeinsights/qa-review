@@ -50,9 +50,10 @@ describe('sync', () => {
         expect(r.status).toBe('synced')
     })
 
-    // Divergence is recoverable by resetting; a broken upstream ref or unusable
-    // git config is NOT, and offering "Reset to clean & sync" for it produces a
-    // button that reruns the same failure and never clears its own banner.
+    // Only a genuine non-fast-forward is divergence, because it is the one case a
+    // reset resolves. Everything else, including a message never seen before,
+    // reports as failed with git's own text, or the banner offers a Reset that
+    // reruns the same failure and never clears itself.
     it.each([
         ['fatal: Cannot rebase onto multiple branches.'],
         ['fatal: Cannot fast-forward to multiple branches.'],
@@ -60,7 +61,8 @@ describe('sync', () => {
             "Your configuration specifies to merge with the ref 'refs/heads/gone'\nfrom the remote, but no such ref was fetched.",
         ],
         ['There is no tracking information for the current branch.'],
-    ])('reports a config failure, not divergence, for: %s', async message => {
+        ['fatal: some message git has not printed before'],
+    ])('reports any failure other than non-fast-forward as failed, for: %s', async message => {
         const git = fakeGit({
             'status --porcelain': '',
             '-c pull.rebase=false pull --ff-only': new Error(message),
