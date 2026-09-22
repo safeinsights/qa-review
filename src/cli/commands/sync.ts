@@ -16,17 +16,40 @@ export interface SyncResult {
     detail?: string
 }
 
-// A pull can fail for reasons that resetting the working copy cannot fix: a
-// stale/missing upstream ref, no tracking branch, or rebase config git refuses to
-// act on. Only a true non-fast-forward is "diverged" — the case a reset resolves.
-function isConfigFailure(message: string): boolean {
-    return (
-        /cannot rebase onto multiple branches/i.test(message) ||
-        /no such ref was fetched/i.test(message) ||
-        /no tracking information/i.test(message) ||
-        /couldn't find remote ref/i.test(message)
-    )
+// Only a genuine non-fast-forward is "diverged" — the one case a reset resolves.
+// git prints a single stable line for it. Every other pull failure (stale upstream
+// ref, no tracking branch, unusable rebase config, anything new) reports as
+// `failed` carrying git's own stderr, so an unrecognised message can never be
+// misread as "push or open a PR".
+const nonFastForwardRE = /not possible to fast-forward/i
+
+// A pull whose worktree write the OS refused — in practice the Claude sandbox,
+// which denies `.claude/skills` (and `.claude/hooks`, `settings.json`) so a
+// session cannot rewrite its own instructions. git writes every PERMITTED file
+// first and only then reaches the denied one, so it aborts HALF-APPLIED: HEAD
+// still on the old commit while the index and worktree hold the new one.
+//
+// It is matched separately only to append the recovery hint below: the
+// half-applied worktree is invisible unless the user is told to look for it.
+//
+// Matching the write VERB and not the errno alone is deliberate: `Permission
+// denied` also ends `git@github.com: Permission denied (publickey)`, an auth
+// failure with an entirely different fix.
+const blockedWriteRE =
+    /(unable to (unlink|create|write|rename|checkout)|cannot (create directory|stat))[^\n]*(operation not permitted|permission denied)/i
+
+function isBlockedWriteFailure(message: string): boolean {
+    return blockedWriteRE.test(message)
 }
+
+// Appended to git's stderr, which names the file but neither the cause nor the
+// recovery. The half-applied worktree is the expensive part — it is invisible
+// unless the user is told to look for it.
+const blockedWriteHint = [
+    'A file write was refused by the OS. Under the Claude sandbox `.claude/` is not writable,',
+    'so the pull may have applied PARTWAY — check `git status`.',
+    'Sync from the QA Runner Sync button, which runs outside the sandbox, or re-run with the sandbox off.',
+].join(' ')
 
 function gitIn(cwd: string): GitRunner {
     return async args => (await execFileAsync('git', args, { cwd })).stdout
@@ -52,8 +75,11 @@ export async function syncRepo(_repoDir: string, git: GitRunner): Promise<SyncRe
         await git(['-c', 'pull.rebase=false', 'pull', '--ff-only'])
     } catch (e) {
         const detail = gitErrorText(e)
+        if (isBlockedWriteFailure(detail)) {
+            return { status: 'failed', drift: false, detail: `${detail}\n\n${blockedWriteHint}` }
+        }
         return {
-            status: isConfigFailure(detail) ? 'failed' : 'skipped-diverged',
+            status: nonFastForwardRE.test(detail) ? 'skipped-diverged' : 'failed',
             drift: false,
             detail,
         }

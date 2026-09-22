@@ -1337,10 +1337,11 @@ func (a *App) Sync(cwd string) (string, error) {
 	// branches"). Pinning it keeps --ff-only a genuine fast-forward check.
 	out, err := a.git(dir, "-c", "pull.rebase=false", "pull", "--ff-only")
 	if err != nil {
-		// Only a true non-fast-forward is recoverable by resetting. Reporting a
-		// broken upstream ref or unusable config as "diverged" offers a Reset
-		// button that reruns the same failure and never clears its own banner.
-		if isGitConfigFailure(out) {
+		// Only a true non-fast-forward is recoverable by resetting. Anything else
+		// (broken upstream ref, unusable config, a refused write, a message never
+		// seen before) is a failure carrying git's own stderr; reporting it as
+		// "diverged" offers a Reset button that reruns the same failure forever.
+		if !isGitNonFastForward(out) {
 			return "failed: " + firstLines(out, 2), nil
 		}
 		return "skipped-diverged", nil
@@ -1349,14 +1350,12 @@ func (a *App) Sync(cwd string) (string, error) {
 	return "synced", nil
 }
 
-// gitConfigFailureRE matches pull failures that resetting the working copy cannot
-// fix: a stale/missing upstream ref, no tracking branch, or rebase config git
-// refuses to act on. Mirrors isConfigFailure in src/cli/commands/sync.ts.
-var gitConfigFailureRE = regexp.MustCompile(
-	`(?i)cannot rebase onto multiple branches|no such ref was fetched|no tracking information|couldn't find remote ref`)
+// gitNonFastForwardRE matches the one pull failure a reset resolves. git prints a
+// single stable line for it. Mirrors nonFastForwardRE in src/cli/commands/sync.ts.
+var gitNonFastForwardRE = regexp.MustCompile(`(?i)not possible to fast-forward`)
 
-func isGitConfigFailure(out string) bool {
-	return gitConfigFailureRE.MatchString(out)
+func isGitNonFastForward(out string) bool {
+	return gitNonFastForwardRE.MatchString(out)
 }
 
 // keyringFiles are the tracked config files that determine keyring access

@@ -50,16 +50,19 @@ describe('sync', () => {
         expect(r.status).toBe('synced')
     })
 
-    // Divergence is recoverable by resetting; a broken upstream ref or unusable
-    // git config is NOT, and offering "Reset to clean & sync" for it produces a
-    // button that reruns the same failure and never clears its own banner.
+    // Only a genuine non-fast-forward is divergence, because it is the one case a
+    // reset resolves. Everything else, including a message never seen before,
+    // reports as failed with git's own text, or the banner offers a Reset that
+    // reruns the same failure and never clears itself.
     it.each([
         ['fatal: Cannot rebase onto multiple branches.'],
+        ['fatal: Cannot fast-forward to multiple branches.'],
         [
             "Your configuration specifies to merge with the ref 'refs/heads/gone'\nfrom the remote, but no such ref was fetched.",
         ],
         ['There is no tracking information for the current branch.'],
-    ])('reports a config failure, not divergence, for: %s', async message => {
+        ['fatal: some message git has not printed before'],
+    ])('reports any failure other than non-fast-forward as failed, for: %s', async message => {
         const git = fakeGit({
             'status --porcelain': '',
             '-c pull.rebase=false pull --ff-only': new Error(message),
@@ -76,5 +79,53 @@ describe('sync', () => {
         })
         const r = await syncRepo('/repo', git)
         expect(r.detail).toContain('Not possible to fast-forward')
+    })
+
+    // The Claude sandbox denies `.claude/skills`, so a pull that must rewrite a
+    // skill file aborts half-applied. That message matches no config-failure
+    // pattern and no genuine non-fast-forward, so it used to be reported as
+    // divergence — sending the user to push a branch with nothing to push.
+    it.each([
+        [
+            "error: unable to unlink old '.claude/skills/qa-validate/SKILL.md': Operation not permitted",
+        ],
+        ['error: unable to create file .claude/hooks/pre.sh: Permission denied'],
+        ["error: cannot stat '.claude/skills/qa-explore/SKILL.md': Permission denied"],
+    ])('reports a blocked write as failed, not diverged: %s', async message => {
+        const git = fakeGit({
+            'status --porcelain': '',
+            '-c pull.rebase=false pull --ff-only': new Error(message),
+        })
+        const r = await syncRepo('/repo', git)
+        expect(r.status).toBe('failed')
+        expect(r.detail).toContain(message)
+    })
+
+    // git's own stderr names the file but neither the cause nor the recovery,
+    // and the half-applied worktree is invisible unless the user is told to look.
+    it('tells the user a blocked write may have applied partway', async () => {
+        const git = fakeGit({
+            'status --porcelain': '',
+            '-c pull.rebase=false pull --ff-only': new Error(
+                "error: unable to unlink old '.claude/skills/qa-validate/SKILL.md': Operation not permitted"
+            ),
+        })
+        const r = await syncRepo('/repo', git)
+        expect(r.detail).toContain('PARTWAY')
+        expect(r.detail).toContain('git status')
+    })
+
+    // `Permission denied` alone is not enough to mean a blocked write: it also
+    // ends an SSH auth failure, which is not half-applied and has a different
+    // fix. Matching the write verb is what keeps the two apart.
+    it('does not treat an SSH auth failure as a blocked write', async () => {
+        const git = fakeGit({
+            'status --porcelain': '',
+            '-c pull.rebase=false pull --ff-only': new Error(
+                'git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.'
+            ),
+        })
+        const r = await syncRepo('/repo', git)
+        expect(r.detail).not.toContain('PARTWAY')
     })
 })
