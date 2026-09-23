@@ -303,11 +303,6 @@ export const studyHappyPathSuite: Suite = {
                             waitUntil: 'domcontentloaded',
                         }
                     )
-                    // Advance step-by-step, waiting for a distinctive element on each
-                    // destination page: clicking the forward control lands on the agreements
-                    // page, whose own "Proceed to Step 4" button is the arrival signal;
-                    // clicking that lands on /code, signalled by the Launch IDE button.
-                    //
                     // The forward anchor is server-rendered, so it is visible
                     // (and click-actionable) before the SPA finishes hydrating — a click that
                     // lands in that window is swallowed by the not-yet-mounted router and the
@@ -331,54 +326,25 @@ export const studyHappyPathSuite: Suite = {
                     // exposed "route ready" signal to await, so settle briefly after
                     // hydration before the single click.
                     //
-                    // The label was "Proceed to step 3" and is now the generic "Next step",
-                    // pointing straight at the code step — consistent with the OTTER-727 gate
-                    // removal noted below. ANCHORED because the control sits beside a
-                    // "Previous step" link that an unanchored /step/i would also match.
+                    // "Next step" leads straight to the code step: the researcher agreements
+                    // page it once passed through (OTTER-727) is gone. ANCHORED because the
+                    // control sits beside a "Previous step" link that an unanchored /step/i
+                    // would also match.
                     const proceedForward = ctx.page.getByRole('link', {
                         name: /^Next step$/i,
                     })
                     await proceedForward.waitFor({ state: 'visible' })
                     await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
                     await proceedForward.click()
-                    // OTTER-727 (management-app #975, merged 2026-08-31) HID the
-                    // agreements step this used to lead to: /submitted's Proceed button
-                    // now computes the code step directly, and /agreements/researcher
-                    // redirects rather than rendering. Waiting unconditionally for the
-                    // gate's "Proceed to Step 4" therefore failed this step 30s AFTER it
-                    // had already arrived at /code.
-                    //
-                    // The gate is kept in the codebase as intentionally unreachable, and
-                    // that card notes restoring it is re-adding ONE rule entry — so this
-                    // stays tolerant of both shapes rather than dropping the hop the way
-                    // management-app's own navigateToCodeUpload helper did. Same approach
-                    // openCodeReview() uses for the reviewer-side gate.
-                    //
-                    // The OTTER-673 label/numbering gap this used to warn about (a button
-                    // reading "Proceed to step 3" landing on a page headed "STEP 4") is moot
-                    // now that the control reads "Next step".
-                    const proceedToStep4 = ctx.page.getByRole('button', {
-                        name: /Proceed to Step 4/i,
-                    })
                     // Arrival at /code is signalled by the Launch IDE button, not the old
                     // "Upload your files" empty state: a new study is now seeded with a
                     // Main.R template, so /code opens straight onto the "Code files" table
                     // and that empty-state text never renders. The button is the one marker
                     // present in every /code shape, which is also why the next step gates on it.
-                    const launchIde = ctx.page
+                    await ctx.page
                         .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
                         .first()
-                    await Promise.race([
-                        proceedToStep4.waitFor({ state: 'visible' }).catch(() => {}),
-                        launchIde.waitFor({ state: 'visible' }).catch(() => {}),
-                    ])
-                    // Checked AFTER the race rather than instead of it: a gate that is on
-                    // screen still has to be clicked, even when the race was won by the
-                    // other locator.
-                    if (await proceedToStep4.isVisible().catch(() => false)) {
-                        await proceedToStep4.click()
-                    }
-                    await launchIde.waitFor({ state: 'visible' })
+                        .waitFor({ state: 'visible' })
                 }),
         },
         {
@@ -1078,41 +1044,11 @@ async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void
     await dialog.waitFor({ state: 'hidden', timeout: 10_000 })
 }
 
-// Reach the code-review editor. When the reviewer hasn't acked the agreements, an
-// agreements gate (STEP 2A/2B/2C) renders first and its "Proceed to Step 3" button
-// advances to the code-review editor.
-//
-// OTTER-727 hid this gate too, not just the researcher one above: REVIEWER_SCREEN_RULES
-// dropped its `reviewer-agreements` entry, so /review renders the editor directly and
-// the screen is retained only as unreachable. Kept tolerant of both shapes for the same
-// reason as the researcher step — restoring the gate is re-adding ONE rule entry — so
-// this cannot become that bug in reverse when it comes back.
-//
-// The four-round poll this replaces existed to absorb slow gate hydration. With no gate
-// left to hydrate it only bought repeated re-navigation on the way to a failure, which
-// is the retry masking the suite rules forbid; one race over the two shapes is the
-// whole decision.
+// /review renders the code-review editor directly: the reviewer agreements page it once
+// passed through (OTTER-727) is gone.
 async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
-    const section = ctx.page.getByTestId('code-review-section')
-    const proceed = ctx.page.getByRole('button', { name: /Proceed to Step 3/i })
     await gotoReview(ctx, studyId)
-    // Either the editor renders directly, or the agreements gate does — wait for
-    // whichever appears first before deciding.
-    await Promise.race([
-        section.waitFor({ state: 'visible' }).catch(() => {}),
-        proceed.waitFor({ state: 'visible' }).catch(() => {}),
-    ])
-    // Checked AFTER the race rather than instead of it: a gate that is on screen still
-    // has to be clicked, even when the race was won by the other locator.
-    if (
-        !(await section.isVisible().catch(() => false)) &&
-        (await proceed.isVisible().catch(() => false))
-    ) {
-        await proceed.click()
-    }
-    // The assertion either shape has to satisfy, and the error a genuine failure
-    // surfaces. The gate does not render the editor, so this cannot pass on the gate.
-    await section.waitFor({ state: 'visible' })
+    await ctx.page.getByTestId('code-review-section').waitFor({ state: 'visible' })
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
