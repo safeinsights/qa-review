@@ -306,7 +306,7 @@ export const studyHappyPathSuite: Suite = {
                     // Advance step-by-step, waiting for a distinctive element on each
                     // destination page: clicking the forward control lands on the agreements
                     // page, whose own "Proceed to Step 4" button is the arrival signal;
-                    // clicking that lands on /code, signalled by "Upload your files".
+                    // clicking that lands on /code, signalled by the Launch IDE button.
                     //
                     // The forward anchor is server-rendered, so it is visible
                     // (and click-actionable) before the SPA finishes hydrating — a click that
@@ -360,10 +360,17 @@ export const studyHappyPathSuite: Suite = {
                     const proceedToStep4 = ctx.page.getByRole('button', {
                         name: /Proceed to Step 4/i,
                     })
-                    const uploadFiles = ctx.page.getByText('Upload your files')
+                    // Arrival at /code is signalled by the Launch IDE button, not the old
+                    // "Upload your files" empty state: a new study is now seeded with a
+                    // Main.R template, so /code opens straight onto the "Code files" table
+                    // and that empty-state text never renders. The button is the one marker
+                    // present in every /code shape, which is also why the next step gates on it.
+                    const launchIde = ctx.page
+                        .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
+                        .first()
                     await Promise.race([
                         proceedToStep4.waitFor({ state: 'visible' }).catch(() => {}),
-                        uploadFiles.waitFor({ state: 'visible' }).catch(() => {}),
+                        launchIde.waitFor({ state: 'visible' }).catch(() => {}),
                     ])
                     // Checked AFTER the race rather than instead of it: a gate that is on
                     // screen still has to be clicked, even when the race was won by the
@@ -371,7 +378,7 @@ export const studyHappyPathSuite: Suite = {
                     if (await proceedToStep4.isVisible().catch(() => false)) {
                         await proceedToStep4.click()
                     }
-                    await uploadFiles.waitFor({ state: 'visible' })
+                    await launchIde.waitFor({ state: 'visible' })
                 }),
         },
         {
@@ -533,11 +540,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/code`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    // Files already exist (uploaded via the IDE run), so the page renders the
-                    // "Review files" management view rather than the empty-state "Upload your
-                    // files" prompt. The "Study code" heading anchors both states.
+                    // The page heading was renamed ("Study code" → "Submit code") and the file
+                    // table varies with what the IDE seeded, so anchor on the Launch IDE button —
+                    // the one control present in every /code shape.
                     await ctx.page
-                        .getByRole('heading', { name: 'Study code' })
+                        .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
+                        .first()
                         .waitFor({ state: 'visible' })
                 }),
         },
