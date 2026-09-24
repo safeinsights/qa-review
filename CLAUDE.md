@@ -734,6 +734,16 @@ Three constraints follow, each of which will break the packaged app if forgotten
 - The suite needs a **CDP port**, which `--headed` does not provide (`run-headed.ts`
   launches without one). `requireCdpPort` fails naming `--screencast`; the GUI always
   passes it.
+- **`qar sync` does NOT install dependencies** — it is a `git pull` and nothing else,
+  and that is correct: in the packaged app `node_modules` is a symlink INTO the signed
+  `.app`, so an install there would write into the bundle. This suite is the first one
+  to need a dependency the app does not already ship, so it is also the first that a
+  sync alone cannot make runnable. A synced clone can therefore hold the suite while
+  the `.app` running it predates `lighthouse`; the fix is a new build, NOT an install.
+  A dev checkout just needs `pnpm install`. `loadLighthouse()` turns Node's
+  `Cannot find package 'lighthouse'` into a message naming both cases — the package
+  name alone would repeat the stale-clone class of failure that named neither the app
+  nor the staleness. **A future suite that adds a dependency inherits all of this.**
 
 **Report-only by design.** A step fails only when the audit itself fails — never
 because a score is low. Two back-to-back runs against the same QA build scored

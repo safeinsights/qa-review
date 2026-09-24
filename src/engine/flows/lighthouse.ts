@@ -93,6 +93,29 @@ function requireCdpPort(ctx: RunContext): number {
     return ctx.cdpPort
 }
 
+// `qar sync` is a git pull and nothing else — it deliberately runs no install,
+// because in the packaged app node_modules is a symlink INTO the signed .app and an
+// install there would write into the bundle. So a synced clone can hold this suite
+// while the app that has to run it predates the dependency.
+//
+// Node's own error ("Cannot find package 'lighthouse'") names the package but not
+// that cause, and this repo has already paid for one stale-clone failure whose
+// message named neither the app nor the staleness. So say it here.
+async function loadLighthouse() {
+    try {
+        const mod = await import('lighthouse')
+        return mod.default
+    } catch (cause) {
+        if ((cause as NodeJS.ErrnoException)?.code !== 'ERR_MODULE_NOT_FOUND') throw cause
+        throw new Error(
+            'The lighthouse package is not installed, so this suite cannot run. ' +
+                'In the packaged app, syncing does NOT install dependencies — update to a ' +
+                'build that ships lighthouse. In a dev checkout, run `pnpm install`.',
+            { cause }
+        )
+    }
+}
+
 // Audit one route and write its HTML + JSON reports into the run bundle.
 //
 // Navigating with Playwright FIRST matters: it proves the authenticated session can
@@ -106,7 +129,7 @@ export async function auditRoute(ctx: RunContext, route: string): Promise<Scores
 
     // Dynamic so the (large) module loads only for this suite, and so every other
     // suite keeps working if the packaged app is missing the staged tree.
-    const { default: lighthouse } = await import('lighthouse')
+    const lighthouse = await loadLighthouse()
     const result = await lighthouse(
         url,
         {
