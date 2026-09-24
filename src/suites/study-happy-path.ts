@@ -50,12 +50,7 @@ import type { RunContext, Suite } from './types'
 
 const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
-const CODE_CRITERIA_KEYS = [
-    'proposalAlignment',
-    'agreementCompliance',
-    'securityChecks',
-    'privacyProtection',
-]
+const CODE_CRITERIA_KEYS = ['proposalAlignment', 'agreementCompliance', 'privacyProtection']
 
 // How long to wait for the external enclave runner to produce results before
 // giving up. The run happens outside the app (an editor service polls for
@@ -303,11 +298,6 @@ export const studyHappyPathSuite: Suite = {
                             waitUntil: 'domcontentloaded',
                         }
                     )
-                    // Advance step-by-step, waiting for a distinctive element on each
-                    // destination page: clicking the forward control lands on the agreements
-                    // page, whose own "Proceed to Step 4" button is the arrival signal;
-                    // clicking that lands on /code, signalled by "Upload your files".
-                    //
                     // The forward anchor is server-rendered, so it is visible
                     // (and click-actionable) before the SPA finishes hydrating — a click that
                     // lands in that window is swallowed by the not-yet-mounted router and the
@@ -331,60 +321,37 @@ export const studyHappyPathSuite: Suite = {
                     // exposed "route ready" signal to await, so settle briefly after
                     // hydration before the single click.
                     //
-                    // The label was "Proceed to step 3" and is now the generic "Next step",
-                    // pointing straight at the code step — consistent with the OTTER-727 gate
-                    // removal noted below. ANCHORED because the control sits beside a
-                    // "Previous step" link that an unanchored /step/i would also match.
+                    // "Next step" leads straight to the code step: the researcher agreements
+                    // page it once passed through (OTTER-727) is gone. ANCHORED because the
+                    // control sits beside a "Previous step" link that an unanchored /step/i
+                    // would also match.
                     const proceedForward = ctx.page.getByRole('link', {
                         name: /^Next step$/i,
                     })
                     await proceedForward.waitFor({ state: 'visible' })
                     await ctx.page.waitForTimeout(PROCEED_NAV_SETTLE_MS)
                     await proceedForward.click()
-                    // OTTER-727 (management-app #975, merged 2026-08-31) HID the
-                    // agreements step this used to lead to: /submitted's Proceed button
-                    // now computes the code step directly, and /agreements/researcher
-                    // redirects rather than rendering. Waiting unconditionally for the
-                    // gate's "Proceed to Step 4" therefore failed this step 30s AFTER it
-                    // had already arrived at /code.
-                    //
-                    // The gate is kept in the codebase as intentionally unreachable, and
-                    // that card notes restoring it is re-adding ONE rule entry — so this
-                    // stays tolerant of both shapes rather than dropping the hop the way
-                    // management-app's own navigateToCodeUpload helper did. Same approach
-                    // openCodeReview() uses for the reviewer-side gate.
-                    //
-                    // The OTTER-673 label/numbering gap this used to warn about (a button
-                    // reading "Proceed to step 3" landing on a page headed "STEP 4") is moot
-                    // now that the control reads "Next step".
-                    const proceedToStep4 = ctx.page.getByRole('button', {
-                        name: /Proceed to Step 4/i,
-                    })
-                    const uploadFiles = ctx.page.getByText('Upload your files')
-                    await Promise.race([
-                        proceedToStep4.waitFor({ state: 'visible' }).catch(() => {}),
-                        uploadFiles.waitFor({ state: 'visible' }).catch(() => {}),
-                    ])
-                    // Checked AFTER the race rather than instead of it: a gate that is on
-                    // screen still has to be clicked, even when the race was won by the
-                    // other locator.
-                    if (await proceedToStep4.isVisible().catch(() => false)) {
-                        await proceedToStep4.click()
-                    }
-                    await uploadFiles.waitFor({ state: 'visible' })
+                    // Arrival at /code is signalled by the Launch IDE button, not the old
+                    // "Upload your files" empty state: a new study is now seeded with a
+                    // Main.R template, so /code opens straight onto the "Code files" table
+                    // and that empty-state text never renders. The button is the one marker
+                    // present in every /code shape, which is also why the next step gates on it.
+                    await ctx.page
+                        .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
+                        .first()
+                        .waitFor({ state: 'visible' })
                 }),
         },
         {
             name: 'Launch the IDE',
-            // Click "Edit files in IDE" and require the external Coder IDE to open and
-            // load the code-server workspace. The button is an anchor that normally
-            // opens Coder in a NEW TAB (target=_blank). Under CDP-attached Chrome that
-            // new tab does not reliably surface as a `page` event on ctx.page's context,
-            // so waiting for one hangs. Instead we CTRL/CMD-CLICK (Shift here), which
-            // suppresses target=_blank and forces the navigation to happen in the SAME
-            // tab (ctx.page). The button must be present, the workspace must provision
-            // and navigate here, its "Continue to launch IDE" OIDC re-auth + Clerk
-            // sign-in must complete, and the code-server workbench must actually render.
+            // Click "Launch IDE" and require the external Coder IDE to open and load the
+            // code-server workspace. The button normally opens Coder in a NEW TAB. Under
+            // CDP-attached Chrome that new tab does not reliably surface as a `page`
+            // event on ctx.page's context, so waiting for one hangs. Instead window.open
+            // is rebound to navigate the SAME tab (ctx.page). The button must be present,
+            // the workspace must provision and navigate here, its "Continue to launch IDE"
+            // OIDC re-auth + Clerk sign-in must complete, and the code-server workbench
+            // must actually render.
             // Any of these failing FAILS the step — the IDE launch is part of the
             // researcher lifecycle we assert, not a best-effort nicety.
             run: ctx =>
@@ -409,13 +376,22 @@ export const studyHappyPathSuite: Suite = {
                         )
                     }
                     await btn.waitFor({ state: 'visible' })
-                    // On a cold workspace the app provisions the whole code-server
-                    // environment FIRST ("Launching IDE" + a progress bar) and only then
-                    // navigates. Ctrl/Cmd-click keeps that navigation in THIS tab. We
-                    // don't wait on a Coder URL — the destination markers below (the
-                    // "Continue to launch IDE" control or the workbench) are the real
-                    // proof of arrival, and provisioning can take minutes.
-                    await btn.click({ modifiers: ['Shift'] })
+                    // "Launch IDE" is a <button> that calls window.open, not a
+                    // target=_blank anchor, so a modifier-click can't keep it in this tab
+                    // — Coder opened in a second tab and this page sat on /code until the
+                    // deadline. Rebind window.open to navigate THIS tab instead, covering
+                    // both window.open(url) and the open-blank-then-assign-location
+                    // pattern (the returned window is this one, so the later assignment
+                    // navigates here too). On a cold workspace the app provisions the
+                    // code-server environment first, so the navigation can take minutes;
+                    // the destination markers below are the arrival gate, not a URL.
+                    await ctx.page.evaluate(() => {
+                        window.open = (url?: string | URL) => {
+                            if (url) window.location.assign(String(url))
+                            return window
+                        }
+                    })
+                    await btn.click()
                     // Coder's OIDC uses prompt=login, so launching lands on Coder's
                     // "session expired / Continue to launch IDE" page — a LINK (not a
                     // button) to the OIDC callback — even though the app session is live.
@@ -533,11 +509,12 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${id(ctx)}/code`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    // Files already exist (uploaded via the IDE run), so the page renders the
-                    // "Review files" management view rather than the empty-state "Upload your
-                    // files" prompt. The "Study code" heading anchors both states.
+                    // The page heading was renamed ("Study code" → "Submit code") and the file
+                    // table varies with what the IDE seeded, so anchor on the Launch IDE button —
+                    // the one control present in every /code shape.
                     await ctx.page
-                        .getByRole('heading', { name: 'Study code' })
+                        .getByRole('button', { name: /Launch IDE|Edit files in IDE/i })
+                        .first()
                         .waitFor({ state: 'visible' })
                 }),
         },
@@ -546,12 +523,8 @@ export const studyHappyPathSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     await ctx.page.locator('input[type="file"]').setInputFiles(await fixtureFiles())
-                    await ctx.page
-                        .getByRole('cell', { name: UPLOADED_MAIN_FILE, exact: true })
-                        .waitFor({ state: 'visible' })
-                    await ctx.page
-                        .getByRole('cell', { name: 'code.r', exact: true })
-                        .waitFor({ state: 'visible' })
+                    await fileRow(ctx, UPLOADED_MAIN_FILE).waitFor({ state: 'visible' })
+                    await fileRow(ctx, 'code.r').waitFor({ state: 'visible' })
                 }),
         },
         {
@@ -576,19 +549,30 @@ export const studyHappyPathSuite: Suite = {
                     // purpose: getByRole name matching is substring and case-insensitive,
                     // so a loose match here would also hit round 2's `main.r`.
                     const strayFile = ideMainFile(ctx)
-                    const strayCell = ctx.page.getByRole('cell', {
-                        name: strayFile,
-                        exact: true,
-                    })
-                    await expect(strayCell).toBeVisible()
+                    // Its Delete control is disabled while it is the main file, which the
+                    // workspace template makes it by default — so this must come AFTER
+                    // electMainFile above, or the click lands on a disabled button.
+                    const strayRow = fileRow(ctx, strayFile)
+                    await expect(strayRow).toBeVisible()
                     await ctx.page
-                        .getByRole('button', { name: `Remove ${strayFile}`, exact: true })
+                        .getByRole('button', { name: `Delete ${strayFile}`, exact: true })
                         .click()
-                    await expect(strayCell).toHaveCount(0)
+                    // Delete is now gated behind a "Delete file" confirm modal; scope to the
+                    // dialog because the row's own trash control shares the accessible name.
+                    await ctx.page
+                        .getByRole('dialog', { name: 'Delete file' })
+                        .getByRole('button', { name: 'Delete file', exact: true })
+                        .click()
+                    await expect(strayRow).toHaveCount(0)
                     // The fixed AppShell footer intercepts pointer events on the button.
                     await ctx.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
-                    await ctx.page.getByRole('button', { name: 'Yes, submit study code' }).click()
+                    // Scoped to the dialog: the page's own "Submit code for review" button
+                    // also matches a bare "Submit code" name.
+                    await ctx.page
+                        .getByRole('dialog', { name: 'Submit code for review?' })
+                        .getByRole('button', { name: 'Submit code', exact: true })
+                        .click()
                     // Submission no longer lands on CodePostSubmissionView and its
                     // `code-under-review-banner` test id; it redirects to /view, whose generic
                     // `status-alert` carries the "Code submitted to <org>" wording. Filtered on
@@ -599,11 +583,9 @@ export const studyHappyPathSuite: Suite = {
                         .getByTestId('status-alert')
                         .filter({ hasText: /code submitted/i })
                         .waitFor({ state: 'visible' })
-                    await expectToastVisible(ctx.page, {
-                        title: 'Study Code Submitted',
-                        message:
-                            'Your code has been successfully submitted to the Data Partner. Check your dashboard for status updates.',
-                    })
+                    // SHRMP-305 (management-app #1062) cut this toast to a bare title: the
+                    // status-alert above now carries the "shared with <org>" explanation.
+                    await expectToastVisible(ctx.page, { title: 'Code submitted.' })
                 }),
         },
         // ---- Reviewer: request code changes (round 1) ----
@@ -643,9 +625,7 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page
                         .locator('input[type="file"]')
                         .setInputFiles(await resubmitFiles())
-                    await ctx.page
-                        .getByRole('cell', { name: MAIN_FILE, exact: true })
-                        .waitFor({ state: 'visible' })
+                    await fileRow(ctx, MAIN_FILE).waitFor({ state: 'visible' })
                     // The resubmit form opens with round 1's choice still starred
                     // (UPLOADED_MAIN_FILE), and adding a file does not move the star. Left
                     // alone, the enclave re-runs round 1's script — the outputs table then
@@ -928,8 +908,12 @@ async function fixtureFiles() {
 // same table, and neither infers the entry point from a filename — the star is
 // the only thing that sets it.
 //
-// The star's accessible name FLIPS on selection — "Set X as main file" becomes
-// "X is the main file" — so the two names are the control and the target.
+// The stars are a radio group (role="radio", `checked` on the elected file), not
+// buttons — a `button` role matches nothing, and clickUntil then never clicks
+// because the control is absent. The star's accessible name also FLIPS on
+// selection — "Set X as main file" becomes "X is the main file" — so the two
+// names are the control and the target; the target also requires `checked`, so
+// the assertion is on the selection state and not just the label.
 // Targeting the Submit button instead would not work: it is always attached
 // (merely rendered disabled), so clickUntil would count it as arrived and never
 // press the star. Keying on the selected name also makes a retry idempotent,
@@ -941,9 +925,22 @@ async function fixtureFiles() {
 // die on strict mode.
 async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
     await clickUntil(
-        ctx.page.getByRole('button', { name: `Set ${fileName} as main file`, exact: true }),
-        ctx.page.getByRole('button', { name: `${fileName} is the main file`, exact: true })
+        ctx.page.getByRole('radio', { name: `Set ${fileName} as main file`, exact: true }),
+        ctx.page.getByRole('radio', {
+            name: `${fileName} is the main file`,
+            exact: true,
+            checked: true,
+        })
     )
+}
+
+// A file's row in the code-file table, keyed on the "View <file>" button that
+// wraps its name. That button's aria-label is what the cell's accessible name is
+// computed from, so a cell matched `exact` on the bare filename never matches and
+// times out with the file plainly in the table. `exact` for the same reason as
+// electMainFile: the table can hold `main.R` and `main.r` at once.
+function fileRow(ctx: RunContext, fileName: string) {
+    return ctx.page.getByRole('button', { name: `View ${fileName}`, exact: true })
 }
 
 // The round-2 resubmission uploads a DIFFERENT script — the multi-query one, which
@@ -1070,41 +1067,11 @@ async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void
     await dialog.waitFor({ state: 'hidden', timeout: 10_000 })
 }
 
-// Reach the code-review editor. When the reviewer hasn't acked the agreements, an
-// agreements gate (STEP 2A/2B/2C) renders first and its "Proceed to Step 3" button
-// advances to the code-review editor.
-//
-// OTTER-727 hid this gate too, not just the researcher one above: REVIEWER_SCREEN_RULES
-// dropped its `reviewer-agreements` entry, so /review renders the editor directly and
-// the screen is retained only as unreachable. Kept tolerant of both shapes for the same
-// reason as the researcher step — restoring the gate is re-adding ONE rule entry — so
-// this cannot become that bug in reverse when it comes back.
-//
-// The four-round poll this replaces existed to absorb slow gate hydration. With no gate
-// left to hydrate it only bought repeated re-navigation on the way to a failure, which
-// is the retry masking the suite rules forbid; one race over the two shapes is the
-// whole decision.
+// /review renders the code-review editor directly: the reviewer agreements page it once
+// passed through (OTTER-727) is gone.
 async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
-    const section = ctx.page.getByTestId('code-review-section')
-    const proceed = ctx.page.getByRole('button', { name: /Proceed to Step 3/i })
     await gotoReview(ctx, studyId)
-    // Either the editor renders directly, or the agreements gate does — wait for
-    // whichever appears first before deciding.
-    await Promise.race([
-        section.waitFor({ state: 'visible' }).catch(() => {}),
-        proceed.waitFor({ state: 'visible' }).catch(() => {}),
-    ])
-    // Checked AFTER the race rather than instead of it: a gate that is on screen still
-    // has to be clicked, even when the race was won by the other locator.
-    if (
-        !(await section.isVisible().catch(() => false)) &&
-        (await proceed.isVisible().catch(() => false))
-    ) {
-        await proceed.click()
-    }
-    // The assertion either shape has to satisfy, and the error a genuine failure
-    // surfaces. The gate does not render the editor, so this cannot pass on the gate.
-    await section.waitFor({ state: 'visible' })
+    await ctx.page.getByTestId('code-review-section').waitFor({ state: 'visible' })
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
