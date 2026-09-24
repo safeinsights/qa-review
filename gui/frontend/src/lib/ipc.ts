@@ -143,6 +143,8 @@ interface WailsApp {
     ReadVideo(bundleDir: string): Promise<string>
     SaveScreenshotAs(bundleDir: string, rel: string, suite: string): Promise<string>
     SaveTrace(bundleDir: string, suite: string): Promise<string>
+    ListLighthouseRuns(): Promise<string>
+    SaveLighthouseReport(bundleDir: string, stem: string): Promise<string>
     ZipBundle(bundleDir: string, suite: string): Promise<string>
     ReadSettings(cwd: string): Promise<SettingsView>
     RevealSecret(cwd: string, key: string): Promise<string>
@@ -505,6 +507,28 @@ export async function saveScreenshotAs(
     suite: string
 ): Promise<string> {
     return app().SaveScreenshotAs(bundleDir, rel, suite)
+}
+
+// One past run's Lighthouse scores, as ListLighthouseRuns returns them.
+export type LighthouseRun = {
+    bundle: string
+    // The bundle directory's timestamp, e.g. "2026-09-23_141030".
+    stamp: string
+    env: string
+    // Category id -> score (0-100), averaged over the run's audited routes.
+    overall: Record<string, number>
+}
+
+// Every past run that recorded Lighthouse scores, oldest first. Runs that are not
+// Lighthouse runs are simply absent.
+export async function listLighthouseRuns(): Promise<LighthouseRun[]> {
+    return JSON.parse(await app().ListLighthouseRuns())
+}
+
+// Prompt to save one route's Lighthouse HTML report; returns the saved path
+// ('' if cancelled).
+export async function saveLighthouseReport(bundleDir: string, stem: string): Promise<string> {
+    return app().SaveLighthouseReport(bundleDir, stem)
 }
 
 // Prompt to save just the bundle's trace.zip (replays at trace.playwright.dev),

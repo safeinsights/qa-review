@@ -435,6 +435,15 @@ export async function runEngine(
             const lines = consoleBuf.splice(0)
             return lines.length ? lines : undefined
         }
+        // Numbers a step attached via ctx.recordMetrics(), folded into that step's
+        // event when it resolves. Undefined when the step recorded none, matching
+        // how currentUrl()/drainConsole() stay optional.
+        let pendingMetrics: Record<string, number> | undefined
+        const drainMetrics = (): Record<string, number> | undefined => {
+            const m = pendingMetrics
+            pendingMetrics = undefined
+            return m
+        }
         // Tracks the currently signed-in role so ctx.account stays correct across
         // mid-run loginAs() switches. Starts as the role the run logged in with.
         let currentRole = req.role
@@ -481,6 +490,8 @@ export async function runEngine(
                 return guardedPageFor(attemptGeneration)
             },
             baseURL: env.baseURL,
+            cdpPort: handle.cdpPort,
+            bundleDir: recorder.bundleDir,
             tag,
             // Getter so it reflects the LATEST loginAs() switch, not the role at
             // ctx-construction time.
@@ -499,6 +510,9 @@ export async function runEngine(
                     },
                 }
             },
+            recordMetrics(metrics: Record<string, number>) {
+                pendingMetrics = { ...pendingMetrics, ...metrics }
+            },
             async step<T>(a: string | (() => Promise<T>), b?: () => Promise<T>): Promise<T> {
                 // Overloaded: step(action) records under the enclosing step's name;
                 // step(name, action) uses the explicit name.
@@ -506,6 +520,9 @@ export async function runEngine(
                 const action: () => Promise<T> =
                     typeof a === 'function' ? a : (b as () => Promise<T>)
                 recorder.step(name, 'running')
+                // Metrics belong to THIS step only, so a value recorded by a previous
+                // step can't leak onto the next one's row.
+                pendingMetrics = undefined
                 try {
                     const out = await withStepDeadline(name, stepTimeoutMs, action, abandonAttempt)
                     const screenshot = await captureScreenshot(name)
@@ -513,15 +530,20 @@ export async function runEngine(
                         screenshot,
                         url: currentUrl(),
                         console: drainConsole(),
+                        metrics: drainMetrics(),
                     })
                     return out
                 } catch (cause) {
                     const screenshot = await captureScreenshot(name)
+                    // Metrics recorded before the throw are kept: a step that audited
+                    // three of four categories and then failed is more debuggable with
+                    // the three it got than with none.
                     recorder.step(name, 'failed', {
                         error: (cause as Error).message,
                         screenshot,
                         url: currentUrl(),
                         console: drainConsole(),
+                        metrics: drainMetrics(),
                     })
                     throw cause
                 }

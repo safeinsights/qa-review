@@ -8,6 +8,16 @@ export interface RunContext {
     // driving a browser the retry has since taken over. Nothing to opt into.
     page: Page
     baseURL: string
+    // The run browser's CDP remote-debugging port. Lighthouse (and anything else
+    // that speaks CDP rather than Playwright) attaches by port number, so this is
+    // how a suite audits the SAME already-authenticated browser the steps drive.
+    // Optional because the headed path (engine/run-headed.ts) launches without a
+    // debugging port — a suite that needs it must say so with a clear error.
+    readonly cdpPort?: number
+    // This run's result bundle on disk (the dir holding screenshots/, trace.zip,
+    // video.webm). A suite writes its own artifacts here — e.g. the lighthouse
+    // suite's HTML reports — so they land beside the rest of the run's evidence.
+    readonly bundleDir: string
     // Unique-per-run suffix for any titles the suite creates (human-readable +
     // collision-free), mirroring management-app's uniqueTitle pattern.
     tag: string
@@ -18,6 +28,11 @@ export interface RunContext {
     // that differs from the step's `name`.
     step<T>(action: () => Promise<T>): Promise<T>
     step<T>(name: string, action: () => Promise<T>): Promise<T>
+    // Attach numeric results to the ENCLOSING ctx.step()'s event, so they ride
+    // along with its screenshot/url/console and show next to its row in the GUI.
+    // Call it from inside the step body; the engine folds the values into the
+    // 'passed'/'failed' event it records when the body resolves.
+    recordMetrics(metrics: Record<string, number>): void
     // Register ids for guaranteed id-based cleanup (Task 5).
     trackStudy(id: string): void
     trackUser(id: string): void

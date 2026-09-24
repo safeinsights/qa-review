@@ -5,6 +5,7 @@ import { ExploratoryTab } from './components/ExploratoryTab'
 import { HelpDrawer } from './components/HelpDrawer'
 import { KeyringAccessGate } from './components/KeyringAccessGate'
 import { Logo } from './components/Logo'
+import { PerformanceTab } from './components/PerformanceTab'
 import { ReportIssueButton } from './components/ReportIssueButton'
 import { SettingsTab } from './components/SettingsTab'
 import { SetupGate } from './components/SetupGate'
@@ -93,6 +94,7 @@ export function App() {
                             <Tabs.Tab value="validation">Validation</Tabs.Tab>
                             <Tabs.Tab value="suites">Testing</Tabs.Tab>
                             <Tabs.Tab value="exploratory">Author</Tabs.Tab>
+                            <Tabs.Tab value="performance">Performance</Tabs.Tab>
                             <Tabs.Tab value="settings">Settings</Tabs.Tab>
                         </Tabs.List>
 
@@ -110,6 +112,9 @@ export function App() {
                         </Tabs.Panel>
                         <Tabs.Panel value="validation" pt="lg" keepMounted>
                             <ValidationTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="performance" pt="lg" keepMounted>
+                            <PerformanceTab />
                         </Tabs.Panel>
                         <Tabs.Panel value="settings" pt="lg" keepMounted>
                             <SettingsTab />
