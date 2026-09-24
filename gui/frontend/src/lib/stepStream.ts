@@ -8,6 +8,9 @@ export type StepEnvelope = {
     screenshot?: string
     url?: string
     console?: ConsoleLine[]
+    // Numbers the step attached via ctx.recordMetrics (Lighthouse category scores
+    // today). Mirrors StepEvent.metrics in src/engine/types.ts.
+    metrics?: Record<string, number>
     // Epoch ms when this event was emitted (engine's StepEvent.at). On a 'running'
     // event this is the step's start; on a resolved event it's the finish.
     at?: number
@@ -84,6 +87,23 @@ export function stepDuration(step: StepEnvelope): string | null {
     if (secs < 60) return `${secs}s`
     const mins = Math.floor(secs / 60)
     return `${mins}:${String(secs % 60).padStart(2, '0')}`
+}
+
+// Short labels for the metric keys we expect to render, so a row reads
+// "perf 62, a11y 94" rather than repeating Lighthouse's long category ids. An
+// unknown key falls back to its own name — this must never drop a value.
+const METRIC_LABELS: Record<string, string> = {
+    performance: 'perf',
+    accessibility: 'a11y',
+    'best-practices': 'bp',
+    seo: 'seo',
+}
+
+// One-line summary of a step's metrics for its row, or null when it recorded none.
+export function describeMetrics(step: StepEnvelope): string | null {
+    const entries = Object.entries(step.metrics ?? {})
+    if (entries.length === 0) return null
+    return entries.map(([k, v]) => `${METRIC_LABELS[k] ?? k} ${v}`).join('  ')
 }
 
 function parse(line: string): Envelope | null {

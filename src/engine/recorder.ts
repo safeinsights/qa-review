@@ -46,7 +46,13 @@ export class Recorder {
     step(
         name: string,
         status: StepStatus,
-        extra?: { error?: string; screenshot?: string; url?: string; console?: ConsoleLine[] }
+        extra?: {
+            error?: string
+            screenshot?: string
+            url?: string
+            console?: ConsoleLine[]
+            metrics?: Record<string, number>
+        }
     ) {
         const event: StepEvent = { name, status, at: Date.now(), ...extra }
         // Replace the prior 'running' entry for the same step name when it resolves.

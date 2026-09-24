@@ -30,6 +30,10 @@ export interface StepEvent {
     url?: string // the page's top-frame URL when the step resolved
     console?: ConsoleLine[] // console output emitted DURING this step
     error?: string
+    // Numeric results a step wants shown alongside its row (Lighthouse category
+    // scores today). Deliberately an open map rather than a lighthouse-specific
+    // field: the recorder stays ignorant of what any one suite measures.
+    metrics?: Record<string, number>
 }
 
 // Emitted once at run start when --screencast is active, telling the GUI which

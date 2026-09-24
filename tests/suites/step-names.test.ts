@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { lighthouseSuite } from '@/suites/lighthouse'
 import { signinSuite } from '@/suites/signin'
 import { studyHappyPathSuite } from '@/suites/study-happy-path'
 import type { Suite } from '@/suites/types'
@@ -27,8 +28,18 @@ describe('built-in suite step names', () => {
         expect(n.filter(x => x === 'Switch back to the researcher account')).toHaveLength(3)
     })
 
+    it('lighthouse', () => {
+        expect(names(lighthouseSuite)).toEqual([
+            'Audit my dashboard',
+            'Audit the org dashboard',
+            'Audit admin settings',
+            'Audit admin team',
+            'Record the overall score',
+        ])
+    })
+
     it('every step has a non-empty name and a run function', () => {
-        for (const s of [signinSuite, studyHappyPathSuite]) {
+        for (const s of [signinSuite, studyHappyPathSuite, lighthouseSuite]) {
             for (const step of s.steps) {
                 expect(step.name.length).toBeGreaterThan(0)
                 expect(typeof step.run).toBe('function')
