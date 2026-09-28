@@ -10,13 +10,12 @@ import {
     fillProposal,
     fitStudyTitle,
     generateStudyContent,
-    openProposalDashboard,
     type StudyContent,
     submitProposal,
 } from '../engine/flows/study'
 import { expectToastVisible } from '../engine/flows/toasts'
 import { repoDir } from '../engine/paths'
-import type { RunContext, Suite } from './types'
+import type { RunContext, Step, Suite } from './types'
 
 // Traces the FULL study lifecycle end-to-end in one continuous run, switching
 // between the researcher and reviewer accounts (via ctx.loginAs) at each gate:
@@ -48,7 +47,6 @@ import type { RunContext, Suite } from './types'
 // env.ts resolves the pair matching the running env (PR previews reuse qa), and
 // ctx.resultsKey hands back whichever belongs to the currently signed-in role.
 
-const RESEARCHER_ORG = 'openstax-lab'
 const REVIEWER_ORG = 'openstax'
 const CODE_CRITERIA_KEYS = ['proposalAlignment', 'agreementCompliance', 'privacyProtection']
 
@@ -185,12 +183,30 @@ function id(ctx: RunContext): string {
     return ctx.state.studyId as string
 }
 
-export const studyHappyPathSuite: Suite = {
-    name: 'study-happy-path',
-    description:
-        'Full study lifecycle: create, upload, IDE, submit, review, resubmit, re-run, approve results',
-    roles: ['researcher'],
-    steps: [
+export interface StudyLifecycleOptions {
+    // The research lab the researcher proposes from. Its Test Lab designation decides
+    // whether the study needs a Study Agreement at all, which is why a variant suite
+    // swaps it rather than the Data Partner.
+    researcherOrg: string
+    // Replaces fillProposal's first-option PI pick. A lab with more than one member
+    // lists them all, and the first can be a real person rather than the QA account.
+    principalInvestigator?: string
+    // Run between the reviewer's proposal approval and the researcher's return to the
+    // study — the one point where a Study Agreement can gate the flow.
+    afterProposalApproval?: Step[]
+    // Run once the researcher has landed on /code, before the IDE launch — where a
+    // published Study Agreement's acknowledgement modal covers the page.
+    onCodeStepReached?: Step[]
+    // Run once the reviewer is signed in for the first code review, before the review
+    // form is touched — the reviewer's copy of that modal covers /review.
+    beforeCodeReview?: Step[]
+}
+
+// The steps as a builder rather than a literal so a variant (a different lab, an
+// agreement gate) reuses every lifecycle step instead of forking ~1200 lines.
+export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
+    const RESEARCHER_ORG = opts.researcherOrg
+    return [
         // ---- Researcher: create + submit the proposal (mirrors create-study) ----
         {
             name: 'Open the researcher org dashboard',
@@ -199,7 +215,7 @@ export const studyHappyPathSuite: Suite = {
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
                 await ctx.step(async () => {
-                    await openProposalDashboard(ctx.page, ctx.baseURL)
+                    await openLabDashboard(ctx, RESEARCHER_ORG)
                 })
             },
         },
@@ -235,6 +251,17 @@ export const studyHappyPathSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     await fillProposal(ctx.page, content(ctx))
+                    if (opts.principalInvestigator) {
+                        await ctx.page
+                            .getByRole('textbox', { name: 'Principal Investigator' })
+                            .click()
+                        await ctx.page
+                            .getByRole('option', { name: opts.principalInvestigator, exact: true })
+                            .click()
+                        await expect(
+                            ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
+                        ).toHaveValue(opts.principalInvestigator)
+                    }
                 }),
         },
         {
@@ -283,6 +310,7 @@ export const studyHappyPathSuite: Suite = {
                     await ctx.page.getByText(/Proposal approved/i).waitFor({ state: 'visible' })
                 }),
         },
+        ...(opts.afterProposalApproval ?? []),
         // ---- Researcher: route to code upload, launch IDE, upload + submit ----
         {
             name: 'Switch back to the researcher account',
@@ -342,6 +370,7 @@ export const studyHappyPathSuite: Suite = {
                         .waitFor({ state: 'visible' })
                 }),
         },
+        ...(opts.onCodeStepReached ?? []),
         {
             name: 'Launch the IDE',
             // Click "Launch IDE" and require the external Coder IDE to open and load the
@@ -593,6 +622,7 @@ export const studyHappyPathSuite: Suite = {
             name: 'Switch to the reviewer account',
             run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
+        ...(opts.beforeCodeReview ?? []),
         {
             name: 'Reviewer requests code changes',
             run: ctx =>
@@ -798,7 +828,7 @@ export const studyHappyPathSuite: Suite = {
                     const keyForm = ctx.page.getByTestId('security-key-form')
                     await keyForm.waitFor({ state: 'visible' })
                     await expect(ctx.page.getByText(/Decrypt to view your outputs/i)).toBeVisible()
-                    await resultsKeyBox(ctx).fill(requireResultsKey(ctx))
+                    await fillResultsKey(ctx)
                     await ctx.page.getByRole('button', { name: /^view$/i }).click()
                     // Unlocked phase. The outputs table is the proof the key actually worked —
                     // the banner alone would flip on any state change.
@@ -834,7 +864,25 @@ export const studyHappyPathSuite: Suite = {
                     await deleteStudyAndVerify(ctx, id(ctx))
                 }),
         },
-    ],
+    ]
+}
+
+export const studyHappyPathSuite: Suite = {
+    name: 'study-happy-path',
+    description:
+        'Full study lifecycle: create, upload, IDE, submit, review, resubmit, re-run, approve results',
+    roles: ['researcher'],
+    steps: studyLifecycleSteps({ researcherOrg: 'openstax-lab' }),
+}
+
+// openProposalDashboard is pinned to openstax-lab, and engine changes don't reach the
+// packaged app, so the per-lab variant of that wait lives here instead.
+async function openLabDashboard(ctx: RunContext, org: string): Promise<void> {
+    await ctx.page.goto(`${ctx.baseURL}/${org}/dashboard`, { waitUntil: 'domcontentloaded' })
+    await ctx.page
+        .getByRole('link', { name: /Propose New Study/i })
+        .first()
+        .waitFor({ state: 'visible' })
 }
 
 // Delete a study through the QA cleanup API using the admin's Clerk session token
@@ -964,6 +1012,21 @@ async function resubmitFiles(): Promise<string[]> {
 // step that assumes the previous one left them on screen dies on any retry that
 // follows a page load, with a locator timeout that names a control the app never
 // had a chance to render.
+// The textarea is server-rendered and controlled, like the code-criteria radios: a fill
+// that lands before hydration is reset to empty, and View then fails with "Enter your
+// security key to decrypt the outputs." instead of decrypting.
+async function fillResultsKey(ctx: RunContext): Promise<void> {
+    const keyBox = resultsKeyBox(ctx)
+    const key = requireResultsKey(ctx)
+    await ctx.page.waitForFunction(
+        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true
+    )
+    await keyBox.fill(key)
+    // Compared by length: a toHaveValue failure would print the private key into the
+    // run log and run-state.json.
+    await expect.poll(async () => (await keyBox.inputValue()).length).toBe(key.length)
+}
+
 async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
     const keyBox = resultsKeyBox(ctx)
     const outputsReady = ctx.page.getByRole('button', { name: RESULTS_FILE, exact: true })
@@ -973,8 +1036,7 @@ async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
         outputsReady.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {}),
     ])
     if (await outputsReady.isVisible().catch(() => false)) return
-    const key = requireResultsKey(ctx)
-    await keyBox.fill(key)
+    await fillResultsKey(ctx)
     // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
     // can't drift onto the per-file buttons in the outputs table below, which don't
     // exist until this click succeeds.
@@ -1072,11 +1134,24 @@ async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void
 async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     await gotoReview(ctx, studyId)
     await ctx.page.getByTestId('code-review-section').waitFor({ state: 'visible' })
+    // The criteria radios are server-rendered and controlled: one checked before
+    // hydration passes Playwright's own checked-after-click test, then React resets it
+    // to the saved (empty) value — and Submit decision silently refuses to open its
+    // confirm with "Select an answer for each criterion". The first radio is the one
+    // that lands in that window.
+    await ctx.page.waitForFunction(
+        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true
+    )
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
     for (const key of CODE_CRITERIA_KEYS) {
         await ctx.page.locator(`input[name="criteria-${key}"][value="${value}"]`).check()
+    }
+    for (const key of CODE_CRITERIA_KEYS) {
+        await expect(
+            ctx.page.locator(`input[name="criteria-${key}"][value="${value}"]`)
+        ).toBeChecked()
     }
 }
 
