@@ -25,7 +25,11 @@ await build({
     // runtime via NODE_PATH — never inline its driver/binaries. The suites the engine
     // imports at runtime aren't entry points here, so their `@playwright/test` /
     // `@faker-js/faker` imports resolve from that same shipped node_modules.
-    external: ['@playwright/test', 'playwright', 'playwright-core'],
+    // Lighthouse is externalized for a different reason than Playwright: it does
+    // computed require() of its audits/gatherers and reads report templates +
+    // locale JSON relative to import.meta.url. esbuild cannot resolve any of that
+    // statically, so an inlined copy builds but throws at audit time.
+    external: ['@playwright/test', 'playwright', 'playwright-core', 'lighthouse'],
     // Bundled CommonJS deps (e.g. ws) call require() for Node built-ins. In an ESM
     // output esbuild stubs require() to throw, so inject a real one via
     // createRequire. import.meta.url path anchoring stays intact.

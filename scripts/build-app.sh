@@ -23,7 +23,10 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 # ---- Config ----------------------------------------------------------------
-NODE_VERSION="${NODE_VERSION:-22.14.0}"          # pinned bundled node (LTS)
+# lighthouse 13 declares engines.node >=22.19, so this pin is a hard floor: an
+# older bundled node makes the lighthouse suite die at import() inside the .app
+# while every dev checkout (on a newer system node) stays green.
+NODE_VERSION="${NODE_VERSION:-22.19.0}"          # pinned bundled node (LTS)
 NODE_ARCH="${NODE_ARCH:-arm64}"                  # darwin-arm64 build
 APP_NAME="qa-runner"                             # wails build output basename + executable
 DISPLAY_NAME="SI QA Review"                      # user-facing name: the .app, .dmg, and volume
@@ -98,11 +101,16 @@ PW_VERSION="$(node -e "console.log(require('@playwright/test/package.json').vers
 # resolvable from this shipped node_modules via NODE_PATH too.
 TSX_VERSION="$(node -e "console.log(require('tsx/package.json').version)")"
 FAKER_VERSION="$(node -e "console.log(require('@faker-js/faker/package.json').version)")"
-echo "    staging @playwright/test@$PW_VERSION + tsx@$TSX_VERSION + @faker-js/faker@$FAKER_VERSION (no browser download)"
+# lighthouse is externalized from the engine bundle (see esbuild.config.mjs), so
+# like Playwright it has to exist as a real tree here or the lighthouse suite
+# cannot import() it. Needs the bundled node >= its engines floor (NODE_VERSION).
+LH_VERSION="$(node -e "console.log(require('lighthouse/package.json').version)")"
+echo "    staging @playwright/test@$PW_VERSION + tsx@$TSX_VERSION + @faker-js/faker@$FAKER_VERSION + lighthouse@$LH_VERSION (no browser download)"
 mkdir -p "$TMP/pw" && cd "$TMP/pw"
 npm init -y >/dev/null 2>&1
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
-    "@playwright/test@$PW_VERSION" "tsx@$TSX_VERSION" "@faker-js/faker@$FAKER_VERSION" >/dev/null 2>&1
+    "@playwright/test@$PW_VERSION" "tsx@$TSX_VERSION" "@faker-js/faker@$FAKER_VERSION" \
+    "lighthouse@$LH_VERSION" >/dev/null 2>&1
 mkdir -p "$STAGE/engine/node_modules"
 cp -R "$TMP/pw/node_modules/." "$STAGE/engine/node_modules/"
 cd "$ROOT"

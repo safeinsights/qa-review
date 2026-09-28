@@ -1,4 +1,4 @@
-import { type StepEnvelope, stepDuration, stepsByIndex } from '../lib/stepStream'
+import { describeMetrics, type StepEnvelope, stepDuration, stepsByIndex } from '../lib/stepStream'
 
 // Render the ordered step list. Rows come from the suite's STATIC step names, so
 // the list appears before a run — click a not-yet-run row to toggle a "pause
@@ -113,6 +113,8 @@ function StepRow({
     const hasShot = !!ev?.screenshot
     // How long the step took, shown once it has completed (see stepDuration).
     const duration = ev ? stepDuration(ev) : null
+    // Numbers the step recorded (Lighthouse scores), null when it recorded none.
+    const metrics = ev ? describeMetrics(ev) : null
     // A step can be paused-before only while it hasn't run yet.
     const canToggle = status !== 'passed' && status !== 'failed'
     return (
@@ -229,6 +231,17 @@ function StepRow({
                     style={{ flex: 'none', fontSize: 11, opacity: 0.7 }}
                 >
                     {duration}
+                </span>
+            ) : null}
+            {/* Scores the step recorded, beside the duration. Kept out of the right
+                slot so it never competes with the 📷/⏸ affordances. */}
+            {metrics ? (
+                <span
+                    className="mono"
+                    title="Scores recorded by this step"
+                    style={{ flex: 'none', fontSize: 11, opacity: 0.85 }}
+                >
+                    {metrics}
                 </span>
             ) : null}
             {/* Right slot: a pending jump wins (it's the most urgent state), then a

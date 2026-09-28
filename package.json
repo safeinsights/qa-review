@@ -29,6 +29,7 @@
         "@clerk/testing": "^1.14.9",
         "@playwright/test": "^1.62.0",
         "age-encryption": "^0.3.0",
+        "lighthouse": "^13.5.0",
         "marklassian": "^1.2.1",
         "ws": "^8.21.1"
     }
