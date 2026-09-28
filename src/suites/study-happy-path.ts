@@ -705,7 +705,10 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await setCodeCriteria(ctx, 'yes')
                     await ctx.page.getByTestId('code-review-decision-approve').click()
                     await typeCodeFeedback(ctx, content(ctx).codeApprovalFeedback)
-                    await submitCodeReview(ctx, /^Approve code$/i, /Code approved/i)
+                    // Anchored to the status line ("Code approved by <name> • <date>"): a
+                    // bare /Code approved/ also hits the reviewer's feedback text, which
+                    // begins "Code approved and ready to run", and fails strict mode.
+                    await submitCodeReview(ctx, /^Approve code$/i, /^Code approved by /i)
                 }),
         },
         // ---- qa runs the job; wait for results, then decrypt + approve ----
