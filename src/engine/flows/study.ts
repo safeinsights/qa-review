@@ -9,7 +9,7 @@ import { clickUntil } from './interactions'
 // flow. Page-driving helpers take a Playwright `page` (+ `baseURL`) rather than a
 // RunContext; suite concerns (ctx.step/state/trackStudy/loginAs) stay in the suite.
 
-export const RESEARCHER_DASH = '/openstax-lab/dashboard'
+export const DEFAULT_RESEARCHER_ORG = 'openstax-lab'
 
 export interface StudyContent {
     title: string
@@ -127,9 +127,15 @@ export async function fillLexical(page: Page, ariaLabel: string, text: string): 
     await page.keyboard.type(text)
 }
 
-// Open the researcher org dashboard; the "Propose New Study" link is visible.
-export async function openProposalDashboard(page: Page, baseURL: string): Promise<void> {
-    await page.goto(`${baseURL}${RESEARCHER_DASH}`, { waitUntil: 'domcontentloaded' })
+// Open a research lab's dashboard; the "Propose New Study" link is visible. The lab
+// decides whether the study meets the Study Agreement gate, so variant suites pass
+// their own.
+export async function openProposalDashboard(
+    page: Page,
+    baseURL: string,
+    org: string = DEFAULT_RESEARCHER_ORG
+): Promise<void> {
+    await page.goto(`${baseURL}/${org}/dashboard`, { waitUntil: 'domcontentloaded' })
     await page
         .getByRole('link', { name: /Propose New Study/i })
         .first()
@@ -160,9 +166,10 @@ export async function startProposal(page: Page, baseURL: string): Promise<void> 
     await beginProposal(page)
 }
 
-// Step 1 (the Set Up page): NAME the study, choose the Data Partner + language, then
-// advance to Step 2 — which CREATES the study record. Returns the study id captured
-// from the proposal-page URL. The caller tracks it for cleanup (ctx.trackStudy).
+// Step 1 (the Set Up page): NAME the study, choose the Data Partner, language and
+// dataset, then advance to Step 2 — which CREATES the study record. Returns the study
+// id captured from the proposal-page URL. The caller tracks it for cleanup
+// (ctx.trackStudy).
 //
 // The title is set HERE, not on Step 2, which is why this takes it as a parameter.
 // OTTER-690 moved the field to Step 1 so that every saved draft has a title from the
@@ -185,6 +192,13 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     const rRadio = page.getByRole('radio', { name: 'R', exact: true })
     await rRadio.waitFor({ state: 'visible' })
     await rRadio.click()
+    // OTTER-803 moved the dataset picker here from Step 2 and made it required, so
+    // without it "Save & continue" never opens the modal. It only renders once a Data
+    // Partner is chosen, so it is picked after the partner.
+    // By label, not by placeholder: OTTER-691 removed the placeholder text from these
+    // fields, so a getByPlaceholder locator can never match.
+    await page.getByLabel('Dataset(s) of interest').click()
+    await page.getByRole('option').first().click()
     // "Save & continue" opens a confirmation modal rather than navigating straight on,
     // so the modal — not a URL — is what says the click landed. clickUntil because the
     // button is server-rendered and clickable before React wires its onClick.
@@ -194,7 +208,7 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     // Confirming creates the study record; its id is in the proposal-page URL. Wait for
     // a field that only Step 2 has, so the page is rendered before the URL is read —
     // the URL changes before the form is there, and reading it first would race.
-    await page.getByLabel('Dataset(s) of interest').waitFor({ state: 'visible' })
+    await page.locator('[aria-label="Research question(s)"]').waitFor({ state: 'visible' })
     const match = page.url().match(/\/study\/([0-9a-f-]+)\/proposal/i)
     if (!match) {
         throw new Error(`Could not find study id in proposal URL: ${page.url()}`)
@@ -202,13 +216,9 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     return match[1]
 }
 
-// Step 2: fill the proposal form (dataset, the three Lexical fields, PI). The title is
-// NOT here — completeSetupAndCaptureId sets it on Step 1.
+// Step 2: fill the proposal form (the three Lexical fields, PI). The title and dataset
+// are NOT here — completeSetupAndCaptureId sets both on Step 1.
 export async function fillProposal(page: Page, content: StudyContent): Promise<void> {
-    // By label, not by placeholder: OTTER-691 removed the placeholder text from every
-    // field on this page, so the old getByPlaceholder locator can never match again.
-    await page.getByLabel('Dataset(s) of interest').click()
-    await page.getByRole('option').first().click()
     await fillLexical(page, 'Research question(s)', content.researchQuestion)
     await fillLexical(page, 'Project summary', content.summary)
     await fillLexical(page, 'Impact', content.impact)
