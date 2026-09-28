@@ -1,4 +1,4 @@
-import { expect, type Locator } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 // Shared browser-interaction primitives: the ones whose failure mode belongs to the
 // app SHELL — hydration, client-rendered controls — rather than to any one flow, and
@@ -81,4 +81,20 @@ export async function checkUntilEnabled(
         }
         await expect(gate).toBeEnabled()
     }).toPass({ timeout: timeoutMs })
+}
+
+// A healthy page hydrates in ~1s, so a flag that has not flipped within a few seconds
+// is a real slow-hydration problem to surface, not one to absorb in the 30s default.
+export const HYDRATION_TIMEOUT_MS = 5_000
+
+// Wait for the app's hydration flag (`window.isReactHydrated`, set by management-app's
+// HydrationMarker). Server-rendered controls are clickable before React wires them: a
+// click in that window is swallowed, and a value typed into a controlled input is reset
+// to the saved value once React takes over.
+export async function waitForHydration(page: Page): Promise<void> {
+    await page.waitForFunction(
+        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true,
+        undefined,
+        { timeout: HYDRATION_TIMEOUT_MS }
+    )
 }

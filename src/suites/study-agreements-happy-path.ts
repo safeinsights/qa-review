@@ -104,11 +104,27 @@ async function acknowledgeStudyAgreement(ctx: RunContext): Promise<void> {
 
 const researcherAcknowledgementSteps: Step[] = [
     {
-        // Runs on the /code page the lifecycle has just routed to.
+        // On /submitted, the first study page the researcher opens after publication: the
+        // modal is mounted in the study layout, so it would otherwise intercept the
+        // lifecycle's "Next step" click on that page.
         name: 'Researcher acknowledges the study agreement',
         run: ctx =>
             ctx.step(async () => {
+                await ctx.page.goto(
+                    `${ctx.baseURL}/${RESEARCHER_ORG}/study/${studyId(ctx)}/submitted`,
+                    { waitUntil: 'domcontentloaded' }
+                )
                 await acknowledgeStudyAgreement(ctx)
+            }),
+    },
+]
+
+const gateClearedSteps: Step[] = [
+    {
+        // Runs on the /code page the lifecycle has just routed to.
+        name: 'Researcher is no longer held at the agreement gate',
+        run: ctx =>
+            ctx.step(async () => {
                 await expect(ctx.page.getByText(AGREEMENT_GATE_COPY)).toHaveCount(0)
             }),
     },
@@ -211,7 +227,8 @@ export const studyAgreementsHappyPathSuite: Suite = {
         researcherOrg: RESEARCHER_ORG,
         principalInvestigator: PRINCIPAL_INVESTIGATOR,
         afterProposalApproval: agreementSteps,
-        onCodeStepReached: researcherAcknowledgementSteps,
+        afterResearcherReturns: researcherAcknowledgementSteps,
+        onCodeStepReached: gateClearedSteps,
         beforeCodeReview: reviewerAcknowledgementSteps,
     }),
 }

@@ -9,7 +9,7 @@ import { clickUntil } from './interactions'
 // flow. Page-driving helpers take a Playwright `page` (+ `baseURL`) rather than a
 // RunContext; suite concerns (ctx.step/state/trackStudy/loginAs) stay in the suite.
 
-export const RESEARCHER_DASH = '/openstax-lab/dashboard'
+export const DEFAULT_RESEARCHER_ORG = 'openstax-lab'
 
 export interface StudyContent {
     title: string
@@ -127,9 +127,15 @@ export async function fillLexical(page: Page, ariaLabel: string, text: string): 
     await page.keyboard.type(text)
 }
 
-// Open the researcher org dashboard; the "Propose New Study" link is visible.
-export async function openProposalDashboard(page: Page, baseURL: string): Promise<void> {
-    await page.goto(`${baseURL}${RESEARCHER_DASH}`, { waitUntil: 'domcontentloaded' })
+// Open a research lab's dashboard; the "Propose New Study" link is visible. The lab
+// decides whether the study meets the Study Agreement gate, so variant suites pass
+// their own.
+export async function openProposalDashboard(
+    page: Page,
+    baseURL: string,
+    org: string = DEFAULT_RESEARCHER_ORG
+): Promise<void> {
+    await page.goto(`${baseURL}/${org}/dashboard`, { waitUntil: 'domcontentloaded' })
     await page
         .getByRole('link', { name: /Propose New Study/i })
         .first()

@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
-import { clickUntil } from '../engine/flows/interactions'
+import { clickUntil, waitForHydration } from '../engine/flows/interactions'
 import {
     beginProposal,
     completeSetupAndCaptureId,
     fillProposal,
     fitStudyTitle,
     generateStudyContent,
+    openProposalDashboard,
     type StudyContent,
     submitProposal,
 } from '../engine/flows/study'
@@ -194,8 +195,12 @@ export interface StudyLifecycleOptions {
     // Run between the reviewer's proposal approval and the researcher's return to the
     // study — the one point where a Study Agreement can gate the flow.
     afterProposalApproval?: Step[]
-    // Run once the researcher has landed on /code, before the IDE launch — where a
-    // published Study Agreement's acknowledgement modal covers the page.
+    // Run once the researcher is signed back in, before any study page is opened. The
+    // app mounts a published Study Agreement's acknowledgement modal in the study
+    // layout, so it covers /submitted — and the "Next step" click there — as much as
+    // /code. It has to be cleared before that click, not after.
+    afterResearcherReturns?: Step[]
+    // Run once the researcher has landed on /code, before the IDE launch.
     onCodeStepReached?: Step[]
     // Run once the reviewer is signed in for the first code review, before the review
     // form is touched — the reviewer's copy of that modal covers /review.
@@ -215,7 +220,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
                 await ctx.step(async () => {
-                    await openLabDashboard(ctx, RESEARCHER_ORG)
+                    await openProposalDashboard(ctx.page, ctx.baseURL, RESEARCHER_ORG)
                 })
             },
         },
@@ -316,6 +321,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Switch back to the researcher account',
             run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
+        ...(opts.afterResearcherReturns ?? []),
         {
             name: 'Route to the code upload page',
             run: ctx =>
@@ -332,14 +338,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     // page stays on /submitted. Wait for the app's hydration flag before the
                     // single click; a click on the hydrated page navigates reliably, so if it
                     // then fails to advance that is a real app bug this step should surface.
-                    // Tight timeout on purpose: a healthy page hydrates in ~1s, so if the
-                    // flag isn't set within a few seconds that is a real slow-hydration
-                    // problem we want surfaced, not absorbed by the 30s default.
-                    await ctx.page.waitForFunction(
-                        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true,
-                        undefined,
-                        { timeout: 5_000 }
-                    )
+                    await waitForHydration(ctx.page)
                     // The forward control is a Mantine <Button component={next/link}>: its
                     // onClick preventDefaults the native anchor navigation and relies on the
                     // App Router's router.push. isReactHydrated flips true at initial
@@ -875,16 +874,6 @@ export const studyHappyPathSuite: Suite = {
     steps: studyLifecycleSteps({ researcherOrg: 'openstax-lab' }),
 }
 
-// openProposalDashboard is pinned to openstax-lab, and engine changes don't reach the
-// packaged app, so the per-lab variant of that wait lives here instead.
-async function openLabDashboard(ctx: RunContext, org: string): Promise<void> {
-    await ctx.page.goto(`${ctx.baseURL}/${org}/dashboard`, { waitUntil: 'domcontentloaded' })
-    await ctx.page
-        .getByRole('link', { name: /Propose New Study/i })
-        .first()
-        .waitFor({ state: 'visible' })
-}
-
 // Delete a study through the QA cleanup API using the admin's Clerk session token
 // (read from the page), assert a 2xx, then confirm a repeat delete reports it gone
 // (404). Throws on anything else so cleanup problems surface as a failed step.
@@ -1018,9 +1007,7 @@ async function resubmitFiles(): Promise<string[]> {
 async function fillResultsKey(ctx: RunContext): Promise<void> {
     const keyBox = resultsKeyBox(ctx)
     const key = requireResultsKey(ctx)
-    await ctx.page.waitForFunction(
-        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true
-    )
+    await waitForHydration(ctx.page)
     await keyBox.fill(key)
     // Compared by length: a toHaveValue failure would print the private key into the
     // run log and run-state.json.
@@ -1139,9 +1126,7 @@ async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     // to the saved (empty) value — and Submit decision silently refuses to open its
     // confirm with "Select an answer for each criterion". The first radio is the one
     // that lands in that window.
-    await ctx.page.waitForFunction(
-        () => (window as { isReactHydrated?: boolean }).isReactHydrated === true
-    )
+    await waitForHydration(ctx.page)
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
