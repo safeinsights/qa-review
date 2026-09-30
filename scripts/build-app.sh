@@ -123,6 +123,13 @@ cd "$GUI"
 # build would otherwise be embedded via `//go:embed all:frontend/dist` if wails did
 # not overwrite every file. Deleting it guarantees the embed reflects THIS build.
 rm -rf "$GUI/frontend/dist"
+# Build with the go.mod `toolchain` pin, not whatever Go is installed. A `toolchain`
+# line only upgrades, so a newer local Go (e.g. 1.27) wins, and the wails CLI's
+# bundled golang.org/x/tools cannot read its export data. Binding generation then
+# dies with `internal error: package "bytes" without types was imported from …`.
+GOTOOLCHAIN="$(awk '$1 == "toolchain" { print $2 }' "$GUI/go.mod")"
+[[ -n "$GOTOOLCHAIN" ]] || { echo "error: no toolchain line in $GUI/go.mod"; exit 1; }
+export GOTOOLCHAIN
 wails build -platform "darwin/$NODE_ARCH" -clean
 # Rename the built bundle to the user-facing display name before staging/signing,
 # so every downstream path ($APP/$RES) — payload copy, codesign, DMG — uses it.
