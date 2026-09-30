@@ -59,7 +59,6 @@ export type StudyStatus = (typeof STUDY_STATUSES)[number]
 export const JOB_STATUSES = [
     'CODE-APPROVED',
     'CODE-CHANGES-REQUESTED',
-    'CODE-REJECTED',
     'CODE-SCANNED',
     'CODE-SUBMITTED',
     'FILES-APPROVED',
