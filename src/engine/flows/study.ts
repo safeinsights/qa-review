@@ -166,10 +166,9 @@ export async function startProposal(page: Page, baseURL: string): Promise<void> 
     await beginProposal(page)
 }
 
-// Step 1 (the Set Up page): NAME the study, choose the Data Partner, language and
-// dataset, then advance to Step 2 — which CREATES the study record. Returns the study
-// id captured from the proposal-page URL. The caller tracks it for cleanup
-// (ctx.trackStudy).
+// Step 1 (the Set Up page): NAME the study, choose the Data Partner + language, then
+// advance to Step 2 — which CREATES the study record. Returns the study id captured
+// from the proposal-page URL. The caller tracks it for cleanup (ctx.trackStudy).
 //
 // The title is set HERE, not on Step 2, which is why this takes it as a parameter.
 // OTTER-690 moved the field to Step 1 so that every saved draft has a title from the
@@ -192,13 +191,6 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     const rRadio = page.getByRole('radio', { name: 'R', exact: true })
     await rRadio.waitFor({ state: 'visible' })
     await rRadio.click()
-    // OTTER-803 moved the dataset picker here from Step 2 and made it required, so
-    // without it "Save & continue" never opens the modal. It only renders once a Data
-    // Partner is chosen, so it is picked after the partner.
-    // By label, not by placeholder: OTTER-691 removed the placeholder text from these
-    // fields, so a getByPlaceholder locator can never match.
-    await page.getByLabel('Dataset(s) of interest').click()
-    await page.getByRole('option').first().click()
     // "Save & continue" opens a confirmation modal rather than navigating straight on,
     // so the modal — not a URL — is what says the click landed. clickUntil because the
     // button is server-rendered and clickable before React wires its onClick.
@@ -216,9 +208,15 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     return match[1]
 }
 
-// Step 2: fill the proposal form (the three Lexical fields, PI). The title and dataset
-// are NOT here — completeSetupAndCaptureId sets both on Step 1.
+// Step 2: fill the proposal form (dataset, the three Lexical fields, PI). The title is
+// NOT here — completeSetupAndCaptureId sets it on Step 1.
 export async function fillProposal(page: Page, content: StudyContent): Promise<void> {
+    // OTTER-803 (#1079) briefly moved the dataset picker to Step 1; management-app #1089
+    // moved it back here, so picking it on Step 1 times out on a label that is gone.
+    // By label, not by placeholder: OTTER-691 removed the placeholder text from every
+    // field on this page, so a getByPlaceholder locator can never match.
+    await page.getByLabel('Dataset(s) of interest').click()
+    await page.getByRole('option').first().click()
     await fillLexical(page, 'Research question(s)', content.researchQuestion)
     await fillLexical(page, 'Project summary', content.summary)
     await fillLexical(page, 'Impact', content.impact)

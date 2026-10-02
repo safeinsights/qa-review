@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import type { EnvConfig, Role } from '@/engine/types'
+import { clickUntil } from './flows/interactions'
 
 export class AuthError extends Error {}
 
@@ -204,23 +205,27 @@ export async function loginAs(
             await page.getByRole('button', { name: /verify code/i }).click()
         }
         const dashboard = dashboardMarker(page)
+        const greeting = page.getByText(/^Hi,/i).first()
 
-        // Success = we've left the sign-in page and an authenticated marker is
-        // present. After verifying the code there is a redirect chain (+ a
-        // re-hydration spinner), so wait for the URL to leave /signin first, then
-        // for the "Hi, <name>" sidebar that every authenticated page shows. This
-        // is more robust than a bare "dashboard" text match that can race the
-        // mid-redirect blank screen.
-        await page.waitForURL(url => !url.pathname.endsWith('/account/signin'), { timeout: 30_000 })
-        await page
-            .getByText(/^Hi,/i)
+        // Success = the "Hi, <name>" sidebar that every authenticated page shows. After
+        // Verify code there is a redirect chain (+ a re-hydration spinner), and it can
+        // end back on /account/signin, which then renders the "already signed in"
+        // interstitial for the account that just signed in. Nothing navigates on from
+        // there, so this used to wait for the URL to leave /signin and time out on a
+        // sign-in that had WORKED, reported as an auth failure. Race the two instead.
+        await greeting
+            .or(alreadySignedInNotice(page))
             .first()
             .waitFor({ state: 'visible', timeout: 30_000 })
-            .catch(async () => {
-                // Fallback: some roles land on a page whose primary signal is the
-                // dashboard heading rather than the greeting.
-                await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
-            })
+            .catch(() => {})
+        if (await alreadySignedInNotice(page).isVisible()) {
+            await continuePastAlreadySignedIn(page, account.email)
+        }
+        await greeting.waitFor({ state: 'visible', timeout: 30_000 }).catch(async () => {
+            // Fallback: some roles land on a page whose primary signal is the
+            // dashboard heading rather than the greeting.
+            await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
+        })
 
         // Assert we are signed in AS the intended account, on the ACTIVE session.
         // loginAs() is used to SWITCH accounts (e.g. researcher -> admin for cleanup
@@ -269,6 +274,31 @@ export async function loginAs(
     // Clerk isn't ready or has no session token, return '' so cleanup simply
     // fails gracefully rather than blocking the run.
     return await getClerkToken(page)
+}
+
+function alreadySignedInNotice(page: Page) {
+    return page.getByText(/already signed in/i).first()
+}
+
+// Step past the "You're already signed in as <x>" interstitial that a successful sign-in
+// can land on. Continue is taken only when it names `email`: any other account is a
+// stale session, and continuing would carry on as the wrong user.
+export async function continuePastAlreadySignedIn(page: Page, email: string): Promise<void> {
+    const shown = (
+        await page
+            .getByText(/signed in as/i)
+            .first()
+            .innerText()
+    ).trim()
+    if (!shown.toLowerCase().includes(email.toLowerCase())) {
+        throw new Error(
+            `the "already signed in" page names another account (${shown}), not ${email}`
+        )
+    }
+    await clickUntil(
+        page.getByRole('button', { name: 'Continue', exact: true }),
+        page.getByText(/^Hi,/i).first()
+    )
 }
 
 // The identity of the ACTIVE Clerk session on the page: the email its user carries,
