@@ -648,8 +648,9 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                             waitUntil: 'domcontentloaded',
                         }
                     )
+                    // Heading renamed "Edit study code" → "Edit code" (Step 3 of the flow).
                     await ctx.page
-                        .getByRole('heading', { name: /Edit study code/i })
+                        .getByRole('heading', { name: /^Edit code$/i })
                         .waitFor({ state: 'visible' })
                     await ctx.page
                         .locator('input[type="file"]')
@@ -680,16 +681,23 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     // until the modal actually closes, which is what a confirm landing before
                     // its handler is wired needs.
                     await confirmDialog(ctx, /^Resubmit code$/i)
-                    // Resubmit lands on the study view; the "Edit study code" heading
+                    // Resubmit lands on the study view; the "Edit code" heading
                     // is gone once submitted, so wait for that heading to detach as the
                     // signal the resubmit navigated away from the edit form.
                     await ctx.page
-                        .getByRole('heading', { name: /Edit study code/i })
+                        .getByRole('heading', { name: /^Edit code$/i })
                         .waitFor({ state: 'hidden' })
-                    await expectToastVisible(ctx.page, {
-                        title: 'Study Code Resubmitted',
-                        message: 'Your updated code has been submitted to the Data Partner.',
-                    })
+                    // Like round 1, resubmit now redirects to /view, whose `status-alert` reads
+                    // "Code v2.0 resubmitted to <org>" — the version proves this is round 2's
+                    // submission rather than round 1's leftover state.
+                    await ctx.page
+                        .getByTestId('status-alert')
+                        .filter({ hasText: /code v2\.0 resubmitted/i })
+                        .waitFor({ state: 'visible' })
+                    // The dedicated "Study Code Resubmitted" toast is gone: resubmit now raises
+                    // the shared CODE_SUBMIT_SUCCESS_TITLE, which has NO trailing period — unlike
+                    // round 1's "Code submitted." — so the two titles are not interchangeable.
+                    await expectToastVisible(ctx.page, { title: 'Code submitted' })
                 }),
         },
         // ---- Reviewer: approve code (round 2) ----
