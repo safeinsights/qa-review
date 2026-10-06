@@ -45,7 +45,6 @@ import type { RunContext, Suite } from './types'
 // TODO(merge-email) naming the expected behaviour so the suite flips to the
 // requirement in one edit.
 
-const RL_ORG = 'Openstax Lab'
 const DP_ORG = 'Openstax'
 
 // Straight apostrophes here, curly ones in the invitation copy — match either rather
@@ -212,6 +211,18 @@ async function submitInvite(dialog: Locator, email: string): Promise<void> {
 
 const audienceTab = (page: Page, name: string): Locator =>
     page.locator('.mantine-SegmentedControl-label').filter({ hasText: new RegExp(`^${name}$`) })
+
+// The org's display name differs per env (the lab is "Openstax Lab" on QA, "OPE-Research
+// Lab" on staging and production), so read it from the sidebar instead of pinning it.
+// The org row and its "Dashboard" sub-link share an href; only the org row's label
+// carries a title, and the title holds the bare name without the R/D type badge.
+async function sidebarOrgName(page: Page, orgSlug: string): Promise<string> {
+    const label = page.locator(`a[href="/${orgSlug}/dashboard"] [title]`)
+    await label.waitFor(VISIBLE)
+    const name = await label.getAttribute('title')
+    expect(name, `the sidebar row for ${orgSlug} carries no name`).toBeTruthy()
+    return name as string
+}
 
 async function gotoMyDashboard(page: Page, baseURL: string): Promise<void> {
     await page.goto(`${originOf(baseURL)}/dashboard`, { waitUntil: 'domcontentloaded' })
@@ -525,7 +536,8 @@ export const newUserSignupFlowsSuite: Suite = {
                     )
                     // The invite is folded into the account that signed in — no new account,
                     // and straight onto the org dashboard rather than back into enrolment.
-                    await page.getByText(`You have been added to ${RL_ORG}.`).waitFor(VISIBLE)
+                    const labName = await sidebarOrgName(page, ORG_FOR_ROLE.researcher)
+                    await page.getByText(`You have been added to ${labName}.`).waitFor(VISIBLE)
                 }),
         },
         {
