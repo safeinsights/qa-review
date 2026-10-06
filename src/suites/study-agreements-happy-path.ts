@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test'
+import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil } from '../engine/flows/interactions'
 import type { StudyContent } from '../engine/flows/study'
 import { studyLifecycleSteps } from './study-happy-path'
@@ -84,23 +85,8 @@ const agreementSteps: Step[] = [
 ]
 
 // Publishing does not by itself unblock either side: each party's first visit to the
-// study afterwards raises a "Study Agreement" modal over the page (it intercepts every
-// click beneath it) that they must acknowledge. Continue stays disabled until the
-// acknowledgement box is ticked — asserted both ways, so a Continue that skipped the
-// acknowledgement would fail here.
-async function acknowledgeStudyAgreement(ctx: RunContext): Promise<void> {
-    const modal = ctx.page.getByRole('dialog', { name: 'Study Agreement' })
-    await modal.waitFor({ state: 'visible' })
-    await expect(modal.getByRole('link', { name: /Study Agreement/i })).toBeVisible()
-    const proceed = modal.getByRole('button', { name: 'Continue', exact: true })
-    await expect(proceed).toBeDisabled()
-    await modal
-        .getByRole('checkbox', { name: /I have read and acknowledge the Study Agreement/i })
-        .check()
-    await expect(proceed).toBeEnabled()
-    await proceed.click()
-    await expect(modal).toBeHidden()
-}
+// study afterwards raises a "Study Agreement" modal that they must acknowledge.
+const STUDY_AGREEMENT = 'Study Agreement'
 
 const researcherAcknowledgementSteps: Step[] = [
     {
@@ -114,7 +100,7 @@ const researcherAcknowledgementSteps: Step[] = [
                     `${ctx.baseURL}/${RESEARCHER_ORG}/study/${studyId(ctx)}/submitted`,
                     { waitUntil: 'domcontentloaded' }
                 )
-                await acknowledgeStudyAgreement(ctx)
+                await acknowledgeAgreement(ctx.page, STUDY_AGREEMENT)
             }),
     },
 ]
@@ -140,7 +126,7 @@ const reviewerAcknowledgementSteps: Step[] = [
                 await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId(ctx)}/review`, {
                     waitUntil: 'domcontentloaded',
                 })
-                await acknowledgeStudyAgreement(ctx)
+                await acknowledgeAgreement(ctx.page, STUDY_AGREEMENT)
             }),
     },
 ]

@@ -29,9 +29,11 @@ export function companionPortAction(
     next: number | null,
     spawned: boolean
 ): CompanionPortAction {
+    // `!spawned` also covers the first port arriving on this screen: nothing is attached
+    // yet, and the spawn effect owns the initial attach. A spawned companion seeing
+    // null -> port is a NEW run after a stop, and must respawn like any other port
+    // change — treating it as a first arrival left the stale session bound to the dead
+    // port, with the "run stopped" banner still up over a live run.
     if (!spawned || prev === next) return 'keep'
-    // A port arriving where there was none (the first run of this screen) is not a
-    // change to react to — the spawn effect handles the initial attach.
-    if (prev === null) return 'keep'
     return next === null ? 'keep-stale' : 'respawn'
 }

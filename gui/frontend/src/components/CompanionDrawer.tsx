@@ -19,13 +19,12 @@ const RESIZE_HANDLE_HEIGHT = 10
 // The "Ask Claude" run companion drawer. A bottom Mantine Drawer that slides up
 // over the run screen, NON-MODAL so the user keeps interacting with the run (click
 // steps, watch the live browser) while Claude is open. Lazily spawns the companion
-// PTY on first open only, attached to the run's CDP port.
+// PTY on open, attached to the run's CDP port, and stops it on close.
 //
 // The `open` state is LIFTED to RunScreen (props `open`/`onClose`) and this drawer
 // is mounted ONCE at RunScreen's top level — NOT inside the live-browser top bar —
-// so it survives the right panel flipping between live / snapshot / recording. Its
-// PTY teardown-on-unmount therefore only fires when the run screen itself unmounts
-// (or a new run starts), never when the browser view flips.
+// so it survives the right panel flipping between live / snapshot / recording, and
+// the browser view flipping never tears the PTY down.
 export function CompanionDrawer({
     cdpPort,
     suite,
@@ -115,7 +114,7 @@ export function CompanionDrawer({
         }
     }, [cdpPort, resetSpawn])
 
-    // Lazy spawn on first open. Surface a spawn failure inline (Go returns an
+    // Lazy spawn on open. Surface a spawn failure inline (Go returns an
     // error on failure — do NOT silently discard the promise).
     //
     // The `spawned` flag is claimed BEFORE the await and released only on failure,
@@ -130,6 +129,12 @@ export function CompanionDrawer({
             setBrowserGone(false)
             startRunCompanion(cdpPort, suite)
                 .then(token => {
+                    // Closed while the spawn was in flight: the close found no token
+                    // to stop, so stop this session now instead of orphaning it.
+                    if (!spawned.current) {
+                        void stopSessionIfOwner(token)
+                        return
+                    }
                     sessionToken.current = token
                 })
                 .catch(e => {
@@ -139,9 +144,17 @@ export function CompanionDrawer({
         }
     }, [open, cdpPort, suite, markSpawned])
 
-    // Tear down the PTY when the run screen goes away / a new run starts (unmount).
-    // Closing the drawer (not unmounting) keeps the PTY alive so reopening resumes.
-    // Token-scoped so a stale unmount doesn't kill the authoring session.
+    // Closing stops the companion, so the next open always starts a fresh one. A
+    // resumed session could be bound to the browser of a run that has since stopped,
+    // and its "run stopped" banner would then sit over a live run.
+    useEffect(() => {
+        if (open || !spawned.current) return
+        if (sessionToken.current) void stopSessionIfOwner(sessionToken.current)
+        resetSpawn()
+    }, [open, resetSpawn])
+
+    // Tear down the PTY when the run screen goes away (unmount). Token-scoped so a
+    // stale unmount doesn't kill the authoring session.
     useEffect(() => {
         return () => {
             if (spawned.current && sessionToken.current)
