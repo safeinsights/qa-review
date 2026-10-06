@@ -26,7 +26,13 @@ describe('companionPortAction', () => {
     })
 
     it('treats the first port arriving as no change', () => {
-        // The lazy-spawn effect owns the initial attach; reacting here would fight it.
-        expect(companionPortAction(null, 9222, true)).toBe('keep')
+        // Nothing is spawned yet; the lazy-spawn effect owns the initial attach.
+        expect(companionPortAction(null, 9222, false)).toBe('keep')
+    })
+
+    it('respawns a stopped run’s companion when a new run starts', () => {
+        // stop (9222 -> null) then start (null -> 9333). Keeping it here left the
+        // session bound to the dead port with the "run stopped" banner still showing.
+        expect(companionPortAction(null, 9333, true)).toBe('respawn')
     })
 })
