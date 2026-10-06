@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil } from '../engine/flows/interactions'
 import {
     completeSignup,
@@ -44,7 +45,7 @@ import type { RunContext, Suite } from './types'
 // TODO(merge-email) naming the expected behaviour so the suite flips to the
 // requirement in one edit.
 
-const RL_ORG = 'OPE-Research Lab'
+const RL_ORG = 'Openstax Lab'
 const DP_ORG = 'Openstax'
 
 // Straight apostrophes here, curly ones in the invitation copy — match either rather
@@ -214,11 +215,15 @@ const audienceTab = (page: Page, name: string): Locator =>
 
 async function gotoMyDashboard(page: Page, baseURL: string): Promise<void> {
     await page.goto(`${originOf(baseURL)}/dashboard`, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('heading', { name: 'My dashboard', level: 1 }).waitFor(VISIBLE)
-    // "My studies" renders only once the studies query settles, so waiting for it is
-    // what makes a following empty-state assertion meaningful rather than a race
-    // against an unpopulated list.
-    await page.getByRole('heading', { name: 'My studies', level: 3 }).waitFor(VISIBLE)
+    // The studies card's "My studies" heading renders only once the studies query
+    // settles, so waiting for it is what makes a following empty-state assertion
+    // meaningful rather than a race against an unpopulated list. It is scoped to the
+    // card and not pinned to a level: builds differ on the page title (some say
+    // "My dashboard", newer ones a second "My studies") and on heading levels.
+    await page
+        .locator('.mantine-Paper-root')
+        .getByRole('heading', { name: 'My studies' })
+        .waitFor(VISIBLE)
 }
 
 export const newUserSignupFlowsSuite: Suite = {
@@ -319,6 +324,15 @@ export const newUserSignupFlowsSuite: Suite = {
                     // the title is worth pinning — it is what tells the admin the submit
                     // was understood as a re-send rather than silently swallowed.
                     await expect(toast.locator(TOAST_TITLE)).toHaveText('Invite resent')
+
+                    // On qa the submit swaps the dialog to its "Invitation sent" screen,
+                    // which does not render the pending list, so go back to the form. Staging
+                    // (an older build, 2026-10-05) leaves the form up after a re-send.
+                    const emailField = dialog.getByRole('textbox', { name: /invite by email/i })
+                    const backToForm = dialog.getByText(/continue to invite people/i)
+                    await expect(emailField.or(backToForm)).toBeVisible()
+                    if (await backToForm.isVisible()) await backToForm.click()
+                    await emailField.waitFor(VISIBLE)
 
                     // Deduplicated, not appended: the address must still hold exactly one
                     // pending row, or the list grows an entry per accidental re-submit and
@@ -439,6 +453,9 @@ export const newUserSignupFlowsSuite: Suite = {
                 ctx.step(async () => {
                     const page = ctx.page
                     await gotoMyDashboard(page, ctx.baseURL)
+                    // Joining the data partner raises its participation agreement over the
+                    // dashboard; the research lab's was ticked on the signup form instead.
+                    await acknowledgeAgreement(page, 'Data Organization Participation Agreement')
                     await expect(page.getByRole('radio', { name: 'Researcher' })).toBeChecked()
                     await expect(page.getByText(RESEARCHER_EMPTY)).toBeVisible()
 
@@ -540,11 +557,14 @@ export const newUserSignupFlowsSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const page = ctx.page
+                    // The account menu is a popover of links and buttons, not an ARIA menu,
+                    // so its entries have no menuitem role.
+                    const settings = page.getByRole('button', { name: 'Settings', exact: true })
                     await clickUntil(
                         page.getByRole('button', { name: /toggle profile menu/i }),
-                        page.getByRole('menuitem', { name: 'Settings' })
+                        settings
                     )
-                    await page.getByRole('menuitem', { name: 'Settings' }).click()
+                    await settings.click()
                     const account = page
                         .getByRole('dialog')
                         .filter({ hasText: /Manage your account info/i })
