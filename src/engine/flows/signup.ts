@@ -136,21 +136,10 @@ export async function completeSignup(
 
     // Enter the authenticator code. enterTotp re-reads the secret from the page on
     // each attempt — the page can re-render/regenerate the secret after first paint.
-    let mfaSecret = await enterTotp(page)
+    const mfaSecret = await enterTotp(page)
 
-    // 4. Clerk may step-up re-prompt with a single verification input. Read the
-    //    (still-current) secret again for this code — if the page regenerated it,
-    //    this later one is the enrolled secret, so it wins.
-    const stepUp = page.getByRole('textbox', { name: /verification code/i })
-    if (await stepUp.isVisible({ timeout: 10_000 }).catch(() => false)) {
-        const secret = await readTotpSecret(page)
-        mfaSecret = secret
-        await stepUp.fill(totp(secret))
-        await page
-            .getByRole('button', { name: /continue/i })
-            .click()
-            .catch(() => {})
-    }
+    // 4. Clerk re-prompts for a code before it releases the recovery codes.
+    await enterStepUpTotp(page, mfaSecret)
 
     // 5. Recovery codes screen ("Go to SafeInsights") opens a "have you stored
     //    them?" confirm dialog with its OWN "Go to SafeInsights". Both buttons match
@@ -386,10 +375,44 @@ export async function enterTotp(page: Page): Promise<string> {
 
         // Rejected (or still on the pin step). Wait for the NEXT time window so we
         // never resubmit the same code, then clear the boxes and retry.
-        const msIntoWindow = Date.now() % 30_000
-        await new Promise(resolve => setTimeout(resolve, 30_000 - msIntoWindow + 500))
+        await waitForNextTotpWindow()
     }
     throw new Error(
         `authenticator MFA: code rejected after multiple attempts (secret=${lastSecret})`
     )
+}
+
+const TOTP_PERIOD_MS = 30_000
+
+// Clerk refuses a TOTP code it has already accepted, so a second code computed in the
+// same 30s window as the first comes back "Incorrect code".
+async function waitForNextTotpWindow(): Promise<void> {
+    const msIntoWindow = Date.now() % TOTP_PERIOD_MS
+    await new Promise(resolve => setTimeout(resolve, TOTP_PERIOD_MS - msIntoWindow + 500))
+}
+
+// Right after enrollment, the recovery-codes fetch is refused until the user
+// re-verifies, so Clerk opens a "Verification required" modal over the setup page.
+// The enrollment code cannot be reused there (see waitForNextTotpWindow). Clerk
+// submits the field itself on the sixth digit, so the attempt_second_factor response
+// is the verdict — clicking Continue as well would submit the same code twice.
+async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
+    const dialog = page.getByRole('dialog').filter({ hasText: /verification required/i })
+    const shown = await dialog
+        .waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false)
+    if (!shown) return
+
+    const codeField = dialog.getByRole('textbox', { name: /enter verification code/i })
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await waitForNextTotpWindow()
+        const verdict = page.waitForResponse(r => r.url().includes('/verify/attempt_second_factor'))
+        await codeField.fill(totp(secret))
+        if ((await verdict).ok()) {
+            await expect(dialog).toBeHidden()
+            return
+        }
+    }
+    throw new Error(`authenticator MFA: step-up code rejected after 3 attempts (secret=${secret})`)
 }
