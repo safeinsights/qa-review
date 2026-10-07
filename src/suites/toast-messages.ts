@@ -13,8 +13,9 @@ import type { RunContext, Suite } from './types'
 
 // Verifies the app's TOAST messages across all three roles. Every toast in
 // management-app is a Mantine notification (@mantine/notifications) — there is no second
-// toast mechanism — and both app shells mount the tray identically: `position="top-right"`,
-// autoClose 8s. So the selectors here apply to all ~95 toast call sites.
+// toast mechanism — and since OTTER-746 one provider in the root layout mounts the tray
+// (`position="top-right"`), with each toast's colour, role and autoClose set by its category
+// (success 4s, info/warning 12s, error never). So the selectors here apply to every call site.
 //
 // The suite starts as admin and switches accounts with ctx.loginAs, ending as the
 // researcher who authored the throwaway draft so teardown cleanup has delete authority.
@@ -22,7 +23,7 @@ import type { RunContext, Suite } from './types'
 // ROLE COVERAGE, and its honest limits:
 //   admin      — the SI-admin legal upload reject, plus the org-admin data source and code
 //                environment triples (add/update/delete each). Those six messages come from
-//                the app's only four `reportSuccess()` call sites: each form's hook raises
+//                four success-toast call sites: each form's hook raises
 //                added-or-updated off one ternary, and each list raises the delete.
 //                Also the org-admin invite trio (resent / re-invited / revoked), which is the
 //                one place here that needs an outside service: see that step for why the
@@ -100,38 +101,46 @@ const DELETE_ENV_CONFIRM =
 const PROBE_ENV_IMAGE = 'harbor.safeinsights.org/openstax/r-base:2025-05-15'
 
 type ExpectedToast = {
-    // A RegExp for the session-expiry warning only: its description holds a live minute
-    // count plus the label of the button embedded in it, so there is no exact string.
-    message: string | RegExp
-    // Omitted for the message-only toasts — the invitation notices raise no title, and
-    // asserting that absence is the point (a title-based selector would miss them).
-    title?: string
+    // Every toast has a title since OTTER-746: `showToast` requires one, and the notices that
+    // used to be message-only (invitations, re-invite, revoke) now carry their text there.
+    title: string
+    // Omitted when the toast has no body. Mantine renders the description element anyway, so
+    // that case is asserted as EMPTY TEXT rather than as an absent node. A RegExp for the
+    // session-expiry warning only: its description holds a live minute count plus the label
+    // of the button embedded in it, so there is no exact string.
+    message?: string | RegExp
     // Mantine palette key, read back from the `--notification-color` custom property
     // Mantine writes inline from the `color` prop. This is what makes a toast read as
     // success or failure, so it is part of the message being verified. Optional because
     // the session-expiry notices in activity-context.tsx pass NO `color`, so there is no
     // custom property on them to match — asserting one would fail on a toast that is
     // behaving exactly as written.
-    color?: 'green' | 'teal' | 'red'
+    color?: 'green' | 'red'
 }
 
-function toastWith(page: Page, message: string | RegExp): Locator {
-    return page.locator(TOAST).filter({ hasText: message })
+// OTTER-746 gave each toast category its own live region: only an error interrupts
+// (`role=alert`), while success/info/warning wait their turn (`role=status`). The
+// session-expiry notices are not category toasts — they set no role, so Mantine falls back
+// to its default `alert` — which is the same case as having no colour here.
+function expectedRole(expected: ExpectedToast): 'alert' | 'status' {
+    return expected.color === undefined || expected.color === 'red' ? 'alert' : 'status'
+}
+
+// Matched on the TITLE ELEMENT, not on `hasText` over the whole notification: with two
+// toasts open, a body that contains another toast's title would make the locator ambiguous.
+function toastWith(page: Page, title: string): Locator {
+    return page.locator(TOAST).filter({ has: page.locator(TOAST_TITLE, { hasText: title }) })
 }
 
 async function expectToast(page: Page, expected: ExpectedToast): Promise<void> {
-    const toast = toastWith(page, expected.message)
+    const toast = toastWith(page, expected.title)
     // waitFor, not expect, for the appearance: a toast can be gated on a server round trip
     // or on hydration, and that needs the action timeout rather than the shorter assertion
     // one. (Timeouts are configured globally, never inline.)
     await toast.waitFor({ state: 'visible' })
-    await expect(toast).toHaveAttribute('role', 'alert')
-    await expect(toast.locator(TOAST_BODY)).toHaveText(expected.message)
-    if (expected.title) {
-        await expect(toast.locator(TOAST_TITLE)).toHaveText(expected.title)
-    } else {
-        await expect(toast.locator(TOAST_TITLE)).toHaveCount(0)
-    }
+    await expect(toast).toHaveAttribute('role', expectedRole(expected))
+    await expect(toast.locator(TOAST_TITLE)).toHaveText(expected.title)
+    await expect(toast.locator(TOAST_BODY)).toHaveText(expected.message ?? '')
     if (expected.color) {
         await expect(toast).toHaveAttribute(
             'style',
@@ -156,11 +165,11 @@ async function expectInvitationNotices(ctx: RunContext): Promise<void> {
     const params = new URLSearchParams({ skip: skipped, decline: declined })
     await ctx.page.goto(`${ctx.baseURL}/dashboard?${params}`, { waitUntil: 'domcontentloaded' })
     await expectToast(ctx.page, {
-        message: `You have opted to skip the invitation to ${skipped}. The invitation can be found in your inbox and is valid for 7 days.`,
+        title: `You have opted to skip the invitation to ${skipped}. The invitation can be found in your inbox and is valid for 7 days.`,
         color: 'green',
     })
     await expectToast(ctx.page, {
-        message: `You've declined ${declined}'s invitation.`,
+        title: `You've declined ${declined}'s invitation.`,
         color: 'green',
     })
     // The app pins ids on these two so it can address them later.
@@ -254,7 +263,7 @@ export const toastMessagesSuite: Suite = {
                     })
                     await expectToast(ctx.page, {
                         title: 'Unsupported file',
-                        message: 'Please upload a single Markdown (.md) file.',
+                        message: 'Please upload a single Markdown (.md) file smaller than 5MB.',
                         color: 'red',
                     })
                     await dismissToasts(ctx.page)
@@ -276,12 +285,12 @@ export const toastMessagesSuite: Suite = {
                         .getByRole('textbox', { name: /^Description/ })
                         .fill('Created by the toast-messages suite; removed by the next step.')
                     await dialog.getByRole('button', { name: 'Save Data Source' }).click()
-                    // reportSuccess(): teal, and a title the caller never passes ('Success'
-                    // is the helper's default).
+                    // The four settings success toasts pass 'Success' as their title
+                    // explicitly; before OTTER-746 it was reportSuccess()'s default.
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Data source added successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(dialog).toBeHidden()
                     await dismissToasts(ctx.page)
@@ -310,7 +319,7 @@ export const toastMessagesSuite: Suite = {
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Data source updated successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(dialog).toBeHidden()
                     await dismissToasts(ctx.page)
@@ -337,7 +346,7 @@ export const toastMessagesSuite: Suite = {
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Data source was deleted successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(ctx.page.getByText(name, { exact: true })).toHaveCount(0)
                     await dismissToasts(ctx.page)
@@ -384,7 +393,7 @@ export const toastMessagesSuite: Suite = {
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Code environment added successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(dialog).toBeHidden()
                     await dismissToasts(ctx.page)
@@ -409,7 +418,7 @@ export const toastMessagesSuite: Suite = {
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Code environment updated successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(dialog).toBeHidden()
                     await dismissToasts(ctx.page)
@@ -429,7 +438,7 @@ export const toastMessagesSuite: Suite = {
                     await expectToast(ctx.page, {
                         title: 'Success',
                         message: 'Code environment was deleted successfully',
-                        color: 'teal',
+                        color: 'green',
                     })
                     await expect(ctx.page.getByText(name, { exact: true })).toHaveCount(0)
                     await dismissToasts(ctx.page)
@@ -472,19 +481,24 @@ export const toastMessagesSuite: Suite = {
                             color: 'green',
                         })
                         await dismissToasts(ctx.page)
+                        // A resend swaps the modal to the success panel too (management-app
+                        // 94e3eaf), so go back to the form to reach the pending list again.
+                        await dialog
+                            .getByRole('button', { name: 'Continue to invite people' })
+                            .click()
                         // Per-email test ids, so these address THIS run's invite even though
                         // the org's other pending invites are listed alongside it. The address
                         // is already lowercase (mail.tm issues it from a lowercase alphabet),
                         // which matters because the action lowercases before storing.
                         await dialog.getByTestId(`re-invite-${inbox.address}`).click()
                         await expectToast(ctx.page, {
-                            message: `${inbox.address} has been re-invited`,
+                            title: `${inbox.address} has been re-invited`,
                             color: 'green',
                         })
                         await dismissToasts(ctx.page)
                         await dialog.getByTestId(`delete-${inbox.address}`).click()
                         await expectToast(ctx.page, {
-                            message: `The invite for ${inbox.address} has been revoked`,
+                            title: `The invite for ${inbox.address} has been revoked`,
                             color: 'green',
                         })
                         // The revoke IS this step's cleanup, so prove the row is gone rather
@@ -608,10 +622,13 @@ export const toastMessagesSuite: Suite = {
                     await ctx.page.goto(`${ctx.baseURL}/dashboard`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    // The signed-in AppShell mounts BOTH the notification tray and the
-                    // ActivityContext that raises these toasts, so its footer is this
-                    // step's readiness signal — not just "some page rendered".
-                    await ctx.page.locator('.mantine-AppShell-footer').waitFor({ state: 'visible' })
+                    // The signed-in AppShell mounts the ActivityContext that raises these
+                    // toasts, so its side nav is this step's readiness signal — not just
+                    // "some page rendered". (Not the footer: since management-app 89150ac the
+                    // in-app footer is a plain <footer>, no longer Mantine's AppShellFooter.)
+                    await ctx.page
+                        .getByRole('navigation', { name: 'Main' })
+                        .waitFor({ state: 'visible' })
                     let restoreFailure: Error | undefined
                     try {
                         // Park the page's Date five minutes short of the eight-hour
