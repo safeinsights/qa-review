@@ -56,3 +56,37 @@ func trimLine(b []byte) []byte {
 	}
 	return out
 }
+
+func TestPromptReady(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"startup banner only", "Claude Code v2\nMCP servers connecting…", false},
+		{"input prompt", "╭───╮\n│ ❯ │\n╰───╯", true},
+		{"prompt with text after it", "❯ Try \"fix lint errors\"", true},
+		{"trust dialog cursor", "Do you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit", false},
+		{"menu cursor then prompt", "❯ 1. Yes\n\n❯ ", true},
+		{"nbsp before menu number", "❯ 1. Yes", false},
+	}
+	for _, c := range cases {
+		if got := promptReady(c.out); got != c.want {
+			t.Errorf("%s: promptReady(%q) = %v, want %v", c.name, c.out, got, c.want)
+		}
+	}
+}
+
+func TestWaitReady(t *testing.T) {
+	if waitReady(nil, 10*time.Millisecond) {
+		t.Error("nil channel (no session) reported ready")
+	}
+	ready := make(chan struct{})
+	if waitReady(ready, 20*time.Millisecond) {
+		t.Error("reported ready before the prompt appeared")
+	}
+	close(ready)
+	if !waitReady(ready, time.Second) {
+		t.Error("closed channel not reported ready")
+	}
+}

@@ -504,10 +504,7 @@ func (a *App) StartAuthoringSession(env, pr, role, instruction string) (string, 
 		a.StopSession()
 		return "", err
 	}
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeAuthoringPrompt(env, pr, role, instruction))
-	}()
+	go a.submitOpeningMessage(composeAuthoringPrompt(env, pr, role, instruction))
 	return token, nil
 }
 
@@ -693,10 +690,7 @@ func (a *App) StartValidationSession(env, pr, jiraCard, instructions string, for
 		return ValidationStart{}, err
 	}
 	a.startVerdictWatch()
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeValidationPrompt(env, pr, jiraCard, instructions))
-	}()
+	go a.submitOpeningMessage(composeValidationPrompt(env, pr, jiraCard, instructions))
 	return ValidationStart{Token: token, JiraCard: jiraCard}, nil
 }
 
@@ -801,10 +795,7 @@ func (a *App) StartRunCompanion(cdpPort int, suite string) (string, error) {
 		a.StopSession()
 		return "", err
 	}
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = a.submitToPty(composeCompanionPrompt(suite))
-	}()
+	go a.submitOpeningMessage(composeCompanionPrompt(suite))
 	return token, nil
 }
 
@@ -820,6 +811,34 @@ func (a *App) WriteToPty(b64 string) error {
 // ResizePty resizes claude's PTY when the terminal pane resizes.
 func (a *App) ResizePty(rows, cols int) error {
 	return a.pty.resize(uint16(rows), uint16(cols))
+}
+
+// ptyReadyTimeout bounds how long the opening message waits for claude's input
+// prompt. Past it the message is sent anyway — a slow start that still loses
+// text is no worse than the fixed delay this replaced, and it gets logged.
+const ptyReadyTimeout = 45 * time.Second
+
+// ptyReadySettle gives claude a beat between drawing the prompt and reading
+// keystrokes.
+const ptyReadySettle = 500 * time.Millisecond
+
+// submitOpeningMessage sends a session's first message once claude can take it.
+// It used to be sent after a fixed 2s, and on a slow start (MCP servers still
+// connecting) claude wasn't listening yet: everything typed before its input
+// prompt appeared was discarded, so the session received only the tail of the
+// message — losing the skill invocation, the Jira card and the env.
+func (a *App) submitOpeningMessage(text string) {
+	ready := a.pty.readyChan()
+	if waitReady(ready, ptyReadyTimeout) {
+		time.Sleep(ptyReadySettle)
+	} else {
+		logDiag("pty", "input prompt not seen after %s; sending the opening message anyway", ptyReadyTimeout)
+	}
+	// The user may have started another session while this one was starting up.
+	if a.pty.readyChan() != ready {
+		return
+	}
+	_ = a.submitToPty(text)
 }
 
 // submitToPty types a line into claude and submits it. Claude's TUI captures a
