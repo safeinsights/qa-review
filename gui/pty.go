@@ -24,6 +24,10 @@ type ptySession struct {
 	// "Report Issue" can attach the full Claude conversation. Reset on each start;
 	// capped so a very long session can't grow unbounded.
 	transcript []byte
+	// ready is closed once claude's input prompt has rendered (see promptReady).
+	// A fresh channel per start, so it also identifies WHICH session a deferred
+	// opening message was meant for.
+	ready chan struct{}
 }
 
 // maxTranscript caps the retained PTY transcript (keep the most recent bytes).
@@ -35,6 +39,24 @@ const ptyFastExit = 10 * time.Second
 
 // ptyTailBytes bounds how much trailing transcript a failed-start log entry keeps.
 const ptyTailBytes = 1500
+
+// promptReady reports whether claude's input prompt has rendered in the
+// (ANSI-stripped) output: a ❯ that is NOT a numbered menu cursor ("❯ 1. Yes"
+// in the trust dialog), since typing the opening message into a menu would
+// pick an option rather than submit it.
+func promptReady(out string) bool {
+	for {
+		i := strings.Index(out, "❯")
+		if i < 0 {
+			return false
+		}
+		out = out[i+len("❯"):]
+		rest := strings.TrimLeft(out, " \u00a0")
+		if rest == "" || rest[0] < '0' || rest[0] > '9' {
+			return true
+		}
+	}
+}
 
 // ptyTail returns the last few non-empty lines of a transcript, flattened to one
 // line, for a log entry. TUI output is mostly redraw noise; the tail is where the
@@ -119,14 +141,24 @@ func (p *ptySession) start(app *App, dir string, env []string, args []string) er
 	p.ptmx = ptmx
 	p.cmd = cmd
 	p.transcript = p.transcript[:0] // fresh transcript for this session
+	ready := make(chan struct{})
+	p.ready = ready
 
 	go func() {
 		buf := make([]byte, 32*1024)
+		seenPrompt := false
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
 				runtime.EventsEmit(app.ctx, "pty-output", base64.StdEncoding.EncodeToString(buf[:n]))
 				p.appendTranscript(buf[:n])
+				// Rescans the whole transcript (not just this chunk) because a
+				// read can split the multi-byte ❯; it stops once found, so only
+				// the short startup output is ever scanned.
+				if !seenPrompt && promptReady(p.transcriptText()) {
+					seenPrompt = true
+					close(ready)
+				}
 			}
 			if err != nil {
 				break
@@ -169,6 +201,27 @@ func (p *ptySession) write(data []byte) error {
 	}
 	_, err := p.ptmx.Write(data)
 	return err
+}
+
+// readyChan returns the current session's ready channel (nil before any start).
+func (p *ptySession) readyChan() chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ready
+}
+
+// waitReady blocks until the session identified by ready shows its input
+// prompt, or timeout elapses. False means the prompt never appeared.
+func waitReady(ready chan struct{}, timeout time.Duration) bool {
+	if ready == nil {
+		return false
+	}
+	select {
+	case <-ready:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func (p *ptySession) resize(rows, cols uint16) error {
