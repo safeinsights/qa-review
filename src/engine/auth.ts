@@ -4,11 +4,12 @@ import { clickUntil } from './flows/interactions'
 
 export class AuthError extends Error {}
 
-// The bare "dashboard" text every authenticated landing page shows — the shared
-// signal for "sign-in went straight through" in submitCredentialsToPin and the
-// fallback success marker in loginAs.
-function dashboardMarker(page: Page) {
-    return page.locator('text=dashboard').first()
+// The "My studies" side-nav link every authenticated page shows — the one shared
+// signal for "signed in". The app has since dropped both markers this used to be
+// (the "Hi, <name>" greeting and the "My dashboard" title, OTTER-617), and each
+// loss surfaced as a sign-in that WORKED being reported as a failure.
+export function signedInMarker(page: Page) {
+    return page.getByRole('link', { name: 'My studies', exact: true }).first()
 }
 
 // Where submitCredentialsToPin landed: at the 6-digit code entry, or signed
@@ -111,7 +112,7 @@ async function submitCredentialsToPin(
     const authenticatorButton = page.getByRole('button', {
         name: /authenticator|authentication app|totp/i,
     })
-    const dashboard = dashboardMarker(page)
+    const dashboard = signedInMarker(page)
     await Promise.race([
         smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
         authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
@@ -204,16 +205,14 @@ export async function loginAs(
             await fillPin(page, account.mfaCode)
             await page.getByRole('button', { name: /verify code/i }).click()
         }
-        const dashboard = dashboardMarker(page)
-        const greeting = page.getByText(/^Hi,/i).first()
+        const signedIn = signedInMarker(page)
 
-        // Success = the "Hi, <name>" sidebar that every authenticated page shows. After
-        // Verify code there is a redirect chain (+ a re-hydration spinner), and it can
-        // end back on /account/signin, which then renders the "already signed in"
+        // After Verify code there is a redirect chain (+ a re-hydration spinner), and it
+        // can end back on /account/signin, which then renders the "already signed in"
         // interstitial for the account that just signed in. Nothing navigates on from
         // there, so this used to wait for the URL to leave /signin and time out on a
         // sign-in that had WORKED, reported as an auth failure. Race the two instead.
-        await greeting
+        await signedIn
             .or(alreadySignedInNotice(page))
             .first()
             .waitFor({ state: 'visible', timeout: 30_000 })
@@ -221,11 +220,7 @@ export async function loginAs(
         if (await alreadySignedInNotice(page).isVisible()) {
             await continuePastAlreadySignedIn(page, account.email)
         }
-        await greeting.waitFor({ state: 'visible', timeout: 30_000 }).catch(async () => {
-            // Fallback: some roles land on a page whose primary signal is the
-            // dashboard heading rather than the greeting.
-            await dashboard.waitFor({ state: 'visible', timeout: 15_000 })
-        })
+        await signedIn.waitFor({ state: 'visible', timeout: 30_000 })
 
         // Assert we are signed in AS the intended account, on the ACTIVE session.
         // loginAs() is used to SWITCH accounts (e.g. researcher -> admin for cleanup
@@ -297,7 +292,7 @@ export async function continuePastAlreadySignedIn(page: Page, email: string): Pr
     }
     await clickUntil(
         page.getByRole('button', { name: 'Continue', exact: true }),
-        page.getByText(/^Hi,/i).first()
+        signedInMarker(page)
     )
 }
 
