@@ -127,7 +127,7 @@ export async function fillLexical(page: Page, ariaLabel: string, text: string): 
     await page.keyboard.type(text)
 }
 
-// Open a research lab's dashboard; the "Propose New Study" link is visible. The lab
+// Open a research lab's dashboard; the "New study" link is visible. The lab
 // decides whether the study meets the Study Agreement gate, so variant suites pass
 // their own.
 export async function openProposalDashboard(
@@ -137,12 +137,12 @@ export async function openProposalDashboard(
 ): Promise<void> {
     await page.goto(`${baseURL}/${org}/dashboard`, { waitUntil: 'domcontentloaded' })
     await page
-        .getByRole('link', { name: /Propose New Study/i })
+        .getByRole('link', { name: /New study/i })
         .first()
         .waitFor({ state: 'visible' })
 }
 
-// Click "Propose New Study" and land on the request page with its org picker READY
+// Click "New study" and land on the request page with its org picker READY
 // TO CLICK — which is a later state than "rendered", and the distinction is the whole
 // point of this helper.
 //
@@ -155,7 +155,7 @@ export async function openProposalDashboard(
 // all clickUntil's job — this flow just names the control and the target.
 export async function beginProposal(page: Page): Promise<void> {
     await clickUntil(
-        page.getByRole('link', { name: /Propose New Study/i }).first(),
+        page.getByRole('link', { name: /New study/i }).first(),
         page.getByTestId('org-select')
     )
 }
