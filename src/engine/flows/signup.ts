@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { loginAs } from '../auth'
+import { loginAs, signedInMarker } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -195,7 +195,7 @@ export async function completeSignup(
     //    The QA cleanup endpoint (DELETE /api/qa/users/{id}) looks up by the DB user
     //    UUID (`user.id`), NOT the Clerk id. The DB id lives in Clerk
     //    publicMetadata.user.id; poll — metadata hydrates a beat after login.
-    await page.locator('text=dashboard').first().waitFor({ state: 'visible', timeout: 30_000 })
+    await signedInMarker(page).waitFor({ state: 'visible', timeout: 30_000 })
     let userId = ''
     for (let attempt = 0; attempt < 10 && !userId; attempt++) {
         userId = await page.evaluate(() => {
@@ -231,7 +231,7 @@ export async function completeSignup(
     // runs against this page, and an unhydrated dashboard would swallow its first
     // click (CLAUDE.md — wait on page elements, not URLs).
     await page.goto(`${origin}/dashboard`, { waitUntil: 'domcontentloaded' })
-    await page.locator('text=dashboard').first().waitFor({ state: 'visible' })
+    await signedInMarker(page).waitFor({ state: 'visible' })
 
     return { userId, mfaSecret }
 }

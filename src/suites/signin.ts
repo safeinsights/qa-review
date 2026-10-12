@@ -1,3 +1,4 @@
+import { signedInMarker } from '../engine/auth'
 import type { Suite } from './types'
 
 // Smallest meaningful suite: confirms an authenticated session reaches the
@@ -12,7 +13,7 @@ export const signinSuite: Suite = {
             // Login already happened in the engine; just verify the landing state.
             run: ctx =>
                 ctx.step(async () => {
-                    await ctx.page.locator('text=dashboard').first().waitFor({ state: 'visible' })
+                    await signedInMarker(ctx.page).waitFor({ state: 'visible' })
                 }),
         },
     ],
