@@ -1,7 +1,7 @@
 import { copyFile, mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { clickUntil, waitForHydration } from '../engine/flows/interactions'
 import {
@@ -126,6 +126,29 @@ function ideMainFile(ctx: RunContext): string {
     }
     return captured
 }
+
+// Uploaded with round 2 only to give Semgrep something to find; never starred, never
+// run. One per language because Semgrep picks its R and Python rules by extension.
+const VULNERABLE_FILES = ['vulnerable.r', 'vulnerable.py']
+
+// Kept under the 5-minute step deadline so a lost scan fails with a message that names
+// it. The scan starts at submission, so most of its run is over before the reviewer
+// signs in.
+const CODE_ANALYSIS_TIMEOUT_MS = 4 * 60_000
+const CODE_ANALYSIS_POLL_INTERVAL_MS = 5_000
+
+// multi-query-main.r has an ERROR finding of its own (its results POST trips
+// privacy-r-network-call), so "Failed" alone does not prove Semgrep saw
+// VULNERABLE_FILES. The per-file secret findings in the details do.
+const SCAN_FAILED_COPY = /Semgrep: Failed/
+
+// The planted credentials are what the summary should call out; the round-2 script
+// alone gives it no reason to use any of these words.
+const SUMMARY_INSECURE_COPY = /insecure|vulnerab|credential|secret/i
+
+// A gating finding in the scan details reads `<path>:<line>  ERROR  <rule id>`.
+const scanSecretFinding = (file: string) =>
+    new RegExp(`${file.replaceAll('.', '\\.')}:\\d+\\s+ERROR\\s+secret-`)
 
 // The files the enclave returns, named exactly as the outputs table lists them.
 // The round-2 script (multi-query-main.r) uploads five result files plus the
@@ -273,14 +296,16 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Submit the initial request',
             run: ctx =>
                 ctx.step(async () => {
-                    await submitProposal(ctx.page)
-                    // Asserted AFTER submitProposal's own arrival wait, on purpose: the toast
-                    // is raised before use-submit-proposal router.push()es, and the comment at
-                    // that call site claims it survives the push because the Notifications
-                    // provider lives in the persistent app shell. Checking it here is what
-                    // verifies that claim rather than assuming it. This notice carries an
-                    // EMPTY message, so the title is the whole assertion.
-                    await expectToastVisible(ctx.page, { title: 'Proposal submitted' })
+                    // Watched DURING the submit, not after the arrival wait. The toast is
+                    // raised before use-submit-proposal router.push()es and auto-closes after
+                    // 4s, while the push's RSC fetch alone took 3.5s on QA — so a check that
+                    // starts once the submitted page renders can open after the toast has
+                    // already closed. This notice carries an EMPTY message, so the title is
+                    // the whole assertion.
+                    await Promise.all([
+                        expectToastVisible(ctx.page, { title: 'Proposal submitted' }),
+                        submitProposal(ctx.page),
+                    ])
                 }),
         },
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
@@ -639,7 +664,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             run: ctx => ctx.step(() => ctx.loginAs('researcher')),
         },
         {
-            name: 'Resubmit the study code (round 2 / re-run)',
+            name: 'Resubmit the study code with vulnerable scripts (round 2 / re-run)',
             run: ctx =>
                 ctx.step(async () => {
                     await ctx.page.goto(
@@ -655,7 +680,9 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await ctx.page
                         .locator('input[type="file"]')
                         .setInputFiles(await resubmitFiles())
-                    await fileRow(ctx, MAIN_FILE).waitFor({ state: 'visible' })
+                    for (const name of [MAIN_FILE, ...VULNERABLE_FILES]) {
+                        await fileRow(ctx, name).waitFor({ state: 'visible' })
+                    }
                     // The resubmit form opens with round 1's choice still starred
                     // (UPLOADED_MAIN_FILE), and adding a file does not move the star. Left
                     // alone, the enclave re-runs round 1's script — the outputs table then
@@ -704,6 +731,40 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
         {
             name: 'Switch to the reviewer account',
             run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
+        },
+        // Each check reopens the analysis so a retry does not depend on an earlier step.
+        {
+            name: 'Wait for the security scan and AI summary',
+            run: ctx => ctx.step(() => openCodeAnalysis(ctx)),
+        },
+        {
+            name: 'The Semgrep scan fails the code',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeAnalysis(ctx)
+                    await expect(scanStatus(ctx)).toContainText(SCAN_FAILED_COPY)
+                }),
+        },
+        {
+            name: 'The scan details name the secrets in both vulnerable files',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeAnalysis(ctx)
+                    const details = await expandScanDetails(ctx)
+                    for (const file of VULNERABLE_FILES) {
+                        await expect(details).toContainText(scanSecretFinding(file))
+                    }
+                }),
+        },
+        {
+            name: 'The AI summary describes the insecure code',
+            run: ctx =>
+                ctx.step(async () => {
+                    await openCodeAnalysis(ctx)
+                    await expect(ctx.page.getByTestId('ai-summary-body')).toContainText(
+                        SUMMARY_INSECURE_COPY
+                    )
+                }),
         },
         {
             name: 'Reviewer approves the code',
@@ -999,11 +1060,12 @@ function fileRow(ctx: RunContext, fileName: string) {
 // — the resubmit step elects this one after uploading it. Staging it as MAIN_FILE
 // just keeps the row name distinct from round 1's UPLOADED_MAIN_FILE so the two
 // stars can't be confused; the fixture stays checked in under its own name so the
-// two scripts can coexist in the repo.
+// two scripts can coexist in the repo. VULNERABLE_FILES are never starred, so they
+// go up under their own names.
 async function resubmitFiles(): Promise<string[]> {
     const staged = path.join(await mkdtemp(path.join(tmpdir(), 'qar-resubmit-')), MAIN_FILE)
     await copyFile(path.join(fixtureDir(), 'multi-query-main.r'), staged)
-    return [staged]
+    return [staged, ...VULNERABLE_FILES.map(f => path.join(fixtureDir(), f))]
 }
 
 // Put the review page into the decrypted state, entering the reviewer's results
@@ -1138,6 +1200,66 @@ async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     // confirm with "Select an answer for each criterion". The first radio is the one
     // that lands in that window.
     await waitForHydration(ctx.page)
+}
+
+// Open the review page's submitted code and wait until the scan and summary settle.
+async function openCodeAnalysis(ctx: RunContext): Promise<void> {
+    await openCodeReview(ctx, id(ctx))
+    await openSubmittedCode(ctx)
+    await waitForCodeAnalysis(ctx)
+}
+
+// A resubmission's review page opens with the submission details collapsed. Mantine
+// keeps the collapsed content mounted and laid out behind a zero-height clip, so
+// Playwright calls it visible: openness has to come from the toggle, which the app
+// removes once the panel opens.
+async function openSubmittedCode(ctx: RunContext): Promise<void> {
+    await ctx.page.getByTestId('submitted-code-section').waitFor({ state: 'visible' })
+    const expand = ctx.page.getByTestId('study-code-toggle')
+    if ((await expand.count()) === 0) return
+    await expand.click()
+    await expand.waitFor({ state: 'detached' })
+}
+
+// The Semgrep verdict line; it is a `status` in every state, pending included.
+function scanStatus(ctx: RunContext): Locator {
+    return ctx.page.getByTestId('security-scan-results').getByRole('status')
+}
+
+// Both panels render their pending state in the same place as their result, so the
+// signal is the pending state going away. The page polls the analysis itself.
+async function waitForCodeAnalysis(ctx: RunContext): Promise<void> {
+    const deadline = Date.now() + CODE_ANALYSIS_TIMEOUT_MS
+    const summaryBody = ctx.page.getByTestId('ai-summary-body')
+    const summaryError = ctx.page.getByTestId('ai-summary-error')
+    const scanSettled = async () => {
+        const text = await scanStatus(ctx)
+            .innerText()
+            .catch(() => '')
+        return text.trim() !== '' && !/security scan pending/i.test(text)
+    }
+    while (Date.now() < deadline) {
+        if (await summaryError.isVisible()) {
+            throw new Error(`The AI summary failed to generate for study ${id(ctx)}`)
+        }
+        if ((await summaryBody.isVisible()) && (await scanSettled())) return
+        await ctx.page.waitForTimeout(CODE_ANALYSIS_POLL_INTERVAL_MS)
+    }
+    throw new Error(
+        `The security scan and AI summary did not both finish within ${CODE_ANALYSIS_TIMEOUT_MS / 60_000}min on study ${id(ctx)}`
+    )
+}
+
+// Expand the scan details the way a reviewer does and return the body. Clicked only
+// when collapsed, so a retry on an already-open box does not close it.
+async function expandScanDetails(ctx: RunContext): Promise<Locator> {
+    const toggle = ctx.page.getByTestId('scan-details-toggle')
+    await toggle.waitFor({ state: 'visible' })
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+        await toggle.click()
+        await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    }
+    return ctx.page.getByTestId('scan-details-body')
 }
 
 async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {

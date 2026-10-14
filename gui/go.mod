@@ -9,7 +9,7 @@ go 1.25.0
 // encoding/asn1, net/textproto and crypto/x509 — all fixed by 1.26.6. Bump this
 // when `govulncheck ./...` reports a stdlib finding; it is the one place that
 // changes the Go used by CI, `make dmg`, and local builds alike.
-toolchain go1.26.6
+toolchain go1.26.9
 
 require (
 	filippo.io/age v1.3.1
