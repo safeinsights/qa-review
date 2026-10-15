@@ -3,6 +3,7 @@ import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
+import { followupAdviceCommand } from '@/cli/commands/followup-advice'
 import { getSecretCommand } from '@/cli/commands/get-secret'
 import { inviteCommand } from '@/cli/commands/invite'
 import {
@@ -113,6 +114,8 @@ async function main() {
             return jiraDeleteCommentCommand(opts, await loadSettings())
         case 'verdict-posted':
             return verdictPostedCommand(opts)
+        case 'followup-advice':
+            return followupAdviceCommand(opts)
         default:
             console.error(unknownCommandMessage(subcommand))
             process.exit(1)

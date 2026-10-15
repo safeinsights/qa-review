@@ -224,6 +224,14 @@ export const COMMANDS = [
         summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',
         details: 'Call right after posting a verdict comment + transition to Jira.',
     },
+    {
+        name: 'followup-advice',
+        usage: 'qar followup-advice --input <path.json>',
+        summary: 'Recommend how to route validation FAILs: send back, one card, or multiple cards.',
+        details:
+            'Input is {"fails":[{"id","severity":"blocker|major|minor","area"}]}. Any blocker → ' +
+            'send-back; ≤3 FAILs or one area → one-card; otherwise multiple-cards.',
+    },
 ] as const satisfies readonly CommandHelp[]
 
 export function commandNames(): string[] {
