@@ -246,7 +246,7 @@ export async function listAttachments(
     return (body.fields?.attachment ?? []).map(a => ({
         id: String(a.id),
         filename: a.filename,
-        mimeType: a.mimeType,
+        mimeType: a.mimeType ?? '',
         size: a.size,
     }))
 }

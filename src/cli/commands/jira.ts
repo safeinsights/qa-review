@@ -103,6 +103,16 @@ export async function jiraDeleteCommentCommand(
 
 const MAX_TEXT_ATTACHMENT_BYTES = 2 * 1024 * 1024
 
+// Jira allows many attachments with one filename, so the id keeps saved paths unique.
+// A name that basename reduces to '', '.' or '..' would resolve to a directory.
+function savedName(attachment: { id: string; filename: string }): string {
+    const name = path.basename(attachment.filename)
+    if (name === '' || name === '.' || name === '..') {
+        return `${attachment.id}${path.extname(attachment.filename)}`
+    }
+    return `${attachment.id}-${name}`
+}
+
 // `qar jira-attachments --issue <KEY> [--download] [--dir <path>]`
 //
 // Lists a card's attachments as JSON lines; with --download, saves the TEXT ones
@@ -124,7 +134,7 @@ export async function jiraAttachmentsCommand(
             if (attachment.size > MAX_TEXT_ATTACHMENT_BYTES) {
                 row.skipped = 'larger than 2 MB'
             } else {
-                const dest = path.join(dir, path.basename(attachment.filename))
+                const dest = path.join(dir, savedName(attachment))
                 await downloadAttachment(config, attachment.id, dest)
                 row.saved = dest
             }

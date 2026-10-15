@@ -53,11 +53,44 @@ describe('jira-attachments', () => {
         })
         await jiraAttachmentsCommand({ issue: 'OTTER-1', download: 'true', dir }, vars)
         const rows = out.map(l => JSON.parse(l))
-        expect(rows[0].saved).toBe(path.join(dir, 'plan.md'))
+        expect(rows[0].saved).toBe(path.join(dir, '10-plan.md'))
         expect(fs.readFileSync(rows[0].saved, 'utf8')).toBe('body')
         expect(rows[1].saved).toBeUndefined()
         expect(rows[2].saved).toBeUndefined()
         expect(rows[2].skipped).toMatch(/2 MB/)
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('keeps same-named attachments at distinct paths', async () => {
+        stubJira([
+            { id: '10', filename: 'plan.md', mimeType: 'text/markdown', size: 5 },
+            { id: '11', filename: 'plan.md', mimeType: 'text/markdown', size: 5 },
+        ])
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-att-'))
+        const out: string[] = []
+        vi.spyOn(process.stdout, 'write').mockImplementation(s => {
+            out.push(String(s))
+            return true
+        })
+        await jiraAttachmentsCommand({ issue: 'OTTER-1', download: 'true', dir }, vars)
+        const rows = out.map(l => JSON.parse(l))
+        expect(rows[0].saved).not.toBe(rows[1].saved)
+        expect(fs.readFileSync(rows[0].saved, 'utf8')).toBe('body')
+        expect(fs.readFileSync(rows[1].saved, 'utf8')).toBe('body')
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('saves a degenerate filename under --dir as its id', async () => {
+        stubJira([{ id: '10', filename: '..', mimeType: 'text/plain', size: 5 }])
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-att-'))
+        const out: string[] = []
+        vi.spyOn(process.stdout, 'write').mockImplementation(s => {
+            out.push(String(s))
+            return true
+        })
+        await jiraAttachmentsCommand({ issue: 'OTTER-1', download: 'true', dir }, vars)
+        expect(JSON.parse(out[0]).saved).toBe(path.join(dir, '10'))
+        expect(fs.readdirSync(dir)).toEqual(['10'])
         fs.rmSync(dir, { recursive: true, force: true })
     })
 
