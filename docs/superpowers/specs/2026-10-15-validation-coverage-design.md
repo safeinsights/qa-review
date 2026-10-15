@@ -145,7 +145,10 @@ the "Figma MCP" row is OK.
 Figma does not count `whoami` against the rate limit, but the probe costs
 about 5–10 seconds, and `AutoDoctorModal` runs the Doctor on each launch. So
 the result is cached in `~/Library/Application Support/qa-runner/figma-seat.json`
-(`{ email, plans, checkedAt }`) and reused for 24 hours. The Detail shows the
+(`{ out, checkedAt }` — the raw probe output and its time) and reused for 24
+hours. The cache is keyed by time only: the account email is only known from a
+probe, so a changed Figma login shows within a day, or at once after the file is
+deleted. The Detail shows the
 check time when the result comes from the cache. A failed probe is not cached.
 
 ### 2. Inventory
@@ -373,8 +376,8 @@ Arguments go in `src/cli/args.ts` with the other commands.
   5 FAILs in 4 areas, no blockers → multiple cards; 4 FAILs in 1 area → one
   card.
 - go test, `figmaSeatCheck`: Full, Dev, View, Collab, no SafeInsights plan, no
-  tool result, bad JSON. Cache: a fresh entry is reused, an entry older than
-  24 h or for another email is ignored.
+  tool result, bad JSON, two SafeInsights entries (best seat wins). Cache: a
+  fresh entry is reused, an entry older than 24 h is ignored.
 - vitest, Jira: an unknown issue type or link type stops `jira-create-issue`
   before `POST /issue`, and the error lists the valid names.
 - Manual: validate OTTER-617 again on QA. Success: all 7 issues and the 4
