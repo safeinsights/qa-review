@@ -114,7 +114,8 @@ Each line gets exactly one result:
 ### Phase 4: Report
 Post with `qar jira-comment` using the template under "Posting findings". Write
 for a PM with two minutes: the verdict, the counts, and their questions come
-first; PASS rows are collapsed.
+first; PASS rows are collapsed. **During the voice test (see "Voice test" under
+"Posting findings"), post the same report three times, once in each voice.**
 
 ### Phase 5: Route the failures
 Skip when there is no FAIL. Otherwise give each FAIL a severity — **blocker** (a
@@ -386,6 +387,36 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
+
+   **Voice test (temporary).** Readers disagree about the tone they want, so for
+   now every validation posts the SAME report three times, once per voice, so
+   the team can compare real examples and choose. Each of the three comments is a
+   complete, true representation: the same sections, the same images (uploaded
+   again for each post), and the same `--mention` — only the wording changes.
+   Write the three bodies to `.tmp/<CARD>-verdict-ste.md`,
+   `.tmp/<CARD>-verdict-conversational.md` and `.tmp/<CARD>-verdict-terse.md`, and
+   post them in that order. Put a tag on the line directly after the heading:
+   `_(voice: STE)_`, `_(voice: conversational)_`, `_(voice: terse)_`. Run the
+   transition and `qar verdict-posted` once, after the third post. Give the user
+   all three URLs. Once a voice is chosen, delete this block and keep one
+   definition.
+
+   - **STE** (ASD-STE100 Simplified Technical English): sentences of 20 words or
+     fewer; one idea per sentence; active voice; one term for one thing, no
+     synonyms; condition before instruction. Example FAIL line: *"The Reviewed by
+     cell shows the proposal reviewer. The annotation says: reset to 'Not
+     reviewed' at the code stage. Result: FAIL."*
+   - **Conversational**: first person, full sentences, says what you tried and why
+     it matters, one short paragraph per finding. Example: *"Reviewed by still
+     shows Malar after the study moved to code review. The Figma note on that
+     column says it should reset to 'Not reviewed', so I'm marking this a FAIL —
+     it affects 53 of the 102 rows on the Openstax dashboard."*
+   - **Terse**: fragments, no articles, one line per finding in the form
+     `id — result — evidence`. Example: *"DP.ReviewedBy.3 — FAIL — 53/102 rows
+     show prior-stage reviewer; Figma: reset at new stage."*
+
+   The 5-line summary block keeps its exact format in every voice; the voice
+   applies to everything below it.
 
    **Auth:** `qar jira-comment` reads the Jira site/email/token from the GUI's saved
    settings (Settings → Jira), so it normally needs no env vars. Only if a command
