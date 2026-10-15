@@ -189,10 +189,12 @@ export const COMMANDS = [
     },
     {
         name: 'jira-comment',
-        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]',
+        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png] [--mention <accountId>]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',
         details:
-            'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image inline.',
+            'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image ' +
+            'inline, {expand:Title}…{expand} for a collapsed block, and {{mention}} (with ' +
+            '--mention <accountId>) to @-mention someone so Jira notifies them.',
     },
     {
         name: 'jira-delete-comment',

@@ -78,7 +78,9 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
         mediaIds.push(await resolveMediaId(config, attachmentId))
     }
 
-    const adf = buildCommentAdf(splitBodyIntoSegments(body, mediaIds))
+    const adf = buildCommentAdf(splitBodyIntoSegments(body, mediaIds), {
+        mention: opts.mention || undefined,
+    })
     const created = await addCommentAdf(config, issue, adf)
     process.stdout.write(`${JSON.stringify(created)}\n`)
 }

@@ -12,6 +12,7 @@ import {
     jiraConfigFromEnv,
     jiraFetch,
     listAttachments,
+    splitExpands,
 } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
@@ -291,5 +292,49 @@ describe('downloadAttachment', () => {
         expect(fetchMock.mock.calls[0][1].redirect).toBe('follow')
         expect(fs.readFileSync(dest, 'utf8')).toBe('# plan')
         fs.rmSync(dir, { recursive: true, force: true })
+    })
+})
+
+describe('splitExpands', () => {
+    it('splits an expand block out of surrounding markdown', () => {
+        expect(splitExpands('intro\n\n{expand:Passed (2)}\n- a\n- b\n{expand}\n\nafter')).toEqual([
+            { kind: 'markdown', text: 'intro\n\n' },
+            { kind: 'expand', title: 'Passed (2)', text: '- a\n- b\n' },
+            { kind: 'markdown', text: '\n\nafter' },
+        ])
+    })
+
+    it('treats a missing closing tag as "to the end"', () => {
+        expect(splitExpands('{expand:T}\nbody')).toEqual([
+            { kind: 'expand', title: 'T', text: 'body' },
+        ])
+    })
+})
+
+describe('buildCommentAdf expand and mention', () => {
+    it('emits an ADF expand node with the title and inner blocks', () => {
+        const doc = buildCommentAdf([
+            { type: 'text', text: '{expand:Passed (2)}\n- a\n- b\n{expand}' },
+        ])
+        const node = (doc.content as Record<string, unknown>[])[0]
+        expect(node.type).toBe('expand')
+        expect(node.attrs).toEqual({ title: 'Passed (2)' })
+        expect((node.content as { type: string }[])[0].type).toBe('bulletList')
+    })
+
+    it('replaces {{mention}} with a mention node inline', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'Decisions for {{mention}}:' }], {
+            mention: '62a8e164bfade2006964f268',
+        })
+        const para = (doc.content as Record<string, unknown>[])[0]
+        const inline = para.content as Record<string, unknown>[]
+        expect(inline.map(n => n.type)).toEqual(['text', 'mention', 'text'])
+        expect(inline[1].attrs).toEqual({ id: '62a8e164bfade2006964f268' })
+    })
+
+    it('prepends a mention paragraph when the body has no placeholder', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'hello' }], { mention: 'abc' })
+        const first = (doc.content as Record<string, unknown>[])[0]
+        expect((first.content as { type: string }[])[0].type).toBe('mention')
     })
 })

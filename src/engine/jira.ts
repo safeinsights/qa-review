@@ -102,18 +102,98 @@ export function extractMediaId(location: string): string | null {
     return location.match(MEDIA_UUID_RE)?.[1] ?? null
 }
 
+export type BodyPart =
+    | { kind: 'markdown'; text: string }
+    | { kind: 'expand'; title: string; text: string }
+
+const EXPAND_OPEN = /^\{expand:([^}]*)\}[ \t]*\n?/m
+const EXPAND_CLOSE = /^\{expand\}[ \t]*/m
+
+// A long validation comment buries the three lines a PM needs under forty PASS
+// rows, so PASS rows go inside a collapsed `{expand:Passed (N)}…{expand}` block.
+// marklassian has no syntax for ADF's expand node, so the block is split out
+// HERE and each part converted separately. A block with no closing tag runs to
+// the end rather than being dropped.
+export function splitExpands(text: string): BodyPart[] {
+    const parts: BodyPart[] = []
+    let rest = text
+    for (;;) {
+        const open = rest.match(EXPAND_OPEN)
+        if (!open || open.index === undefined) break
+        if (open.index > 0) parts.push({ kind: 'markdown', text: rest.slice(0, open.index) })
+        rest = rest.slice(open.index + open[0].length)
+        const close = rest.match(EXPAND_CLOSE)
+        const end = close?.index ?? rest.length
+        parts.push({ kind: 'expand', title: open[1].trim(), text: rest.slice(0, end) })
+        rest = close ? rest.slice(end + close[0].length) : ''
+    }
+    if (rest) parts.push({ kind: 'markdown', text: rest })
+    return parts
+}
+
+const MENTION_TOKEN = '{{mention}}'
+
+function markdownBlocks(text: string): Record<string, unknown>[] {
+    if (!text.trim()) return []
+    const doc = markdownToAdf(text) as { content?: Record<string, unknown>[] }
+    return doc.content ?? []
+}
+
+// Walks inline text nodes and splits `{{mention}}` into a mention node, which is
+// what makes Jira notify the PM — a typed @name in markdown is just text.
+function injectMentions(nodes: Record<string, unknown>[], accountId: string): boolean {
+    let found = false
+    for (const node of nodes) {
+        const children = node.content as Record<string, unknown>[] | undefined
+        if (!children) continue
+        const next: Record<string, unknown>[] = []
+        for (const child of children) {
+            if (
+                child.type === 'text' &&
+                typeof child.text === 'string' &&
+                child.text.includes(MENTION_TOKEN)
+            ) {
+                found = true
+                const pieces = child.text.split(MENTION_TOKEN)
+                pieces.forEach((piece, i) => {
+                    if (piece) next.push({ ...child, text: piece })
+                    if (i < pieces.length - 1) {
+                        next.push({ type: 'mention', attrs: { id: accountId } })
+                    }
+                })
+            } else {
+                next.push(child)
+            }
+        }
+        node.content = next
+        if (injectMentions(next, accountId)) found = true
+    }
+    return found
+}
+
 // Builds the ADF document for a comment interleaving text and inline images.
 // Jira renders ADF, not markdown, so each text segment is converted from markdown
 // to ADF (headings, bold/italic, inline code, lists, links) via marklassian and its
 // block nodes are spliced in — this is what preserves the formatting Claude writes.
 // Media segments become mediaSingle nodes in place, keeping the text/image order.
-export function buildCommentAdf(segments: CommentSegment[]): Record<string, unknown> {
+// `{expand:…}` blocks and `{{mention}}` are handled here too — see `splitExpands` / `injectMentions`.
+export function buildCommentAdf(
+    segments: CommentSegment[],
+    options: { mention?: string } = {}
+): Record<string, unknown> {
     const content: Record<string, unknown>[] = []
     for (const segment of segments) {
         if (segment.type === 'text') {
-            if (!segment.text.trim()) continue
-            const doc = markdownToAdf(segment.text) as { content?: Record<string, unknown>[] }
-            for (const node of doc.content ?? []) content.push(node)
+            for (const part of splitExpands(segment.text)) {
+                if (part.kind === 'markdown') content.push(...markdownBlocks(part.text))
+                else {
+                    content.push({
+                        type: 'expand',
+                        attrs: { title: part.title },
+                        content: markdownBlocks(part.text),
+                    })
+                }
+            }
         } else {
             const attrs: Record<string, unknown> = {
                 id: segment.mediaId,
@@ -126,6 +206,15 @@ export function buildCommentAdf(segments: CommentSegment[]): Record<string, unkn
                 type: 'mediaSingle',
                 attrs: { layout: 'center' },
                 content: [{ type: 'media', attrs }],
+            })
+        }
+    }
+    if (options.mention) {
+        const found = injectMentions(content, options.mention)
+        if (!found) {
+            content.unshift({
+                type: 'paragraph',
+                content: [{ type: 'mention', attrs: { id: options.mention } }],
             })
         }
     }
