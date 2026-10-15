@@ -343,6 +343,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    **<N> requirements:** <a> PASS · <b> FAIL · <c> CONFLICT · <d> UNCLEAR · <e> NOT TESTED
    Sources: card, <k> comments, <m> attachments, <j> Figma annotations on <p> pages
    → <c+d> decisions needed from {{mention}} (below). Follow-up cards: <keys or none>.
+   <!-- when c+d = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
 
    ### Decisions needed from PM
    <!-- Omit the section AND --mention when there are no CONFLICT/UNCLEAR lines. -->
@@ -379,6 +380,8 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
    - Each Figma-sourced line names page, frame and category with a node link.
    - Omit a section (and the expand block) when it has nothing in it.
+   - When there are no CONFLICT/UNCLEAR lines, line 5 reads "No decisions needed", the
+     `{{mention}}` token is removed, and `--mention` is not passed.
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
@@ -399,13 +402,14 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    | **QA** | Validated | **"Final Review - EM & PM"** | un-assign |
    | **Staging** | Validated | **"Done"** | un-assign |
    | **QA or Staging** | Rejected | **"To Do"** | assign to the last person who worked it (below) |
-   | **PR preview / production** | either | **do NOT transition** | leave as-is |
+   | **PR preview / production** | either | **post NOTHING to Jira** | leave as-is |
 
    - **A PR preview (`--pr <n>`) or production proves nothing about the shared
      envs** — a preview is a throwaway deployment with no seeded data, and
-     production isn't where work gets signed off. Post the comment, then STOP:
-     no transition, no assignee change. Tell the user you've commented only, and
-     that moving the card needs a QA or Staging validation.
+     production isn't where work gets signed off. Post NOTHING to Jira: no
+     comment, no cards, no transition, no assignee change. Show the full report (and
+     any follow-up drafts) to the user in the session. Tell them that moving the card
+     needs a QA or Staging validation.
    - **VALIDATED WITH FOLLOW-UPS** moves the card as Validated does.
    - **Un-assign** with `jira_update_issue(fields='{"assignee": null}')`.
 
