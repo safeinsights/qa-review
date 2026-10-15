@@ -14,7 +14,7 @@ const SCRIPT_PATH = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     '../skills/qa-validate/figma-notes.js'
 )
-const MODES = new Set(['pages', 'locate', 'page'])
+const MODES = new Set(['pages', 'locate', 'page', 'frame'])
 const NODE_LIST = /^\d+:\d+(,\d+:\d+)*$/
 const HEADER = /^const (MODE|TARGET) = '([^'\\]*)'\s*$/
 
@@ -52,7 +52,7 @@ export function checkFigmaCode(code, script) {
         )
     }
     if (!MODES.has(sent.mode)) {
-        return deny(`MODE must be one of pages, locate, page (got '${sent.mode}')`)
+        return deny(`MODE must be one of pages, locate, page, frame (got '${sent.mode}')`)
     }
     if (sent.mode === 'pages' ? sent.target !== '' : !NODE_LIST.test(sent.target)) {
         return deny(

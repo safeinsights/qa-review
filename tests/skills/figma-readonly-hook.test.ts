@@ -24,6 +24,7 @@ describe('checkFigmaCode', () => {
         expect(checkFigmaCode(withHeader('pages', ''), script).allow).toBe(true)
         expect(checkFigmaCode(withHeader('locate', '3531:6192,3531:6217'), script).allow).toBe(true)
         expect(checkFigmaCode(withHeader('page', '589:3591'), script).allow).toBe(true)
+        expect(checkFigmaCode(withHeader('frame', '3531:6192'), script).allow).toBe(true)
     })
 
     it('ignores line-ending and trailing-whitespace differences', () => {

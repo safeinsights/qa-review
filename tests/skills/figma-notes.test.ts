@@ -22,7 +22,7 @@ describe('figma-notes.js', () => {
     const lines = src.split('\n')
 
     it('starts with the two variable lines the hook allows to change', () => {
-        expect(lines[0]).toMatch(/^const MODE = '(pages|locate|page)'/)
+        expect(lines[0]).toMatch(/^const MODE = '(pages|locate|page|frame)'/)
         expect(lines[1]).toMatch(/^const TARGET = '[^']*'/)
     })
 
@@ -30,7 +30,11 @@ describe('figma-notes.js', () => {
         for (const re of WRITE_APIS) expect(src).not.toMatch(re)
     })
 
-    it('switches page at most once', () => {
-        expect(src.match(/setCurrentPageAsync/g)?.length ?? 0).toBeLessThanOrEqual(1)
+    it('switches page at most once per mode', () => {
+        for (const mode of ['page', 'frame']) {
+            const body = src.slice(src.indexOf(`if (MODE === '${mode}')`))
+            const block = body.slice(0, body.indexOf('\n}\n') + 3)
+            expect(block.match(/setCurrentPageAsync/g)?.length ?? 0).toBeLessThanOrEqual(1)
+        }
     })
 })

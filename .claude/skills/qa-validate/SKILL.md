@@ -181,8 +181,15 @@ Send the file's contents as `code` with only the header lines changed:
 2. `const MODE = 'locate'` / `const TARGET = '<id1>,<id2>,…'` — ONE call for all
    linked node ids → each node's page.
 3. `const MODE = 'page'` / `const TARGET = '<pageId>'` — one call per page that
-   holds a linked node → every top-level frame and every annotation on that page
-   (frame, layer path, category, text).
+   holds a linked node → every top-level frame with its annotation count.
+4. `const MODE = 'frame'` / `const TARGET = '<frameId>'` — one call per
+   top-level frame whose count is above zero → that frame's annotations (layer
+   path, category, text). `use_figma` caps a result at 20 KB, which is why
+   notes come one frame at a time rather than one page at a time.
+
+Never edit `figma-notes.js` to get around a limit — the hook compares against
+the file on disk, so an edited script is a disabled guard. If a mode you need
+does not exist, stop and tell the user.
 
 A link with no `node-id` is not a dead end: run `pages`, show the page names, and
 ask the user which page to read. **Every frame on a read page is in scope**, not
