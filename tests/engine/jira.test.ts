@@ -77,6 +77,32 @@ describe('buildCommentAdf', () => {
         expect(doc.content).toHaveLength(2)
     })
 
+    // A QA report is line-oriented, not prose: a single newline is a line break,
+    // not a soft wrap. Markdown's default folds it into a space, which turned the
+    // "Decisions needed" block into one run-on paragraph.
+    it('keeps a single newline as a hard line break inside a paragraph', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'Decisions:\nA: one\nB: two' }])
+        const para = (doc.content as { content: Record<string, unknown>[] }[])[0]
+        expect(para.content.map(n => n.type)).toEqual([
+            'text',
+            'hardBreak',
+            'text',
+            'hardBreak',
+            'text',
+        ])
+        expect(doc.content).toHaveLength(1)
+    })
+
+    it('does not add a line break before a list item or heading, or inside a code fence', () => {
+        const doc = buildCommentAdf([
+            { type: 'text', text: 'intro\n- a\n- b\n## h\n```\nx\ny\n```' },
+        ])
+        const nodes = doc.content as { type: string; content?: Record<string, unknown>[] }[]
+        expect(nodes.map(n => n.type)).toEqual(['paragraph', 'bulletList', 'heading', 'codeBlock'])
+        expect(JSON.stringify(nodes)).not.toContain('hardBreak')
+        expect(nodes[3].content?.[0]).toMatchObject({ text: 'x\ny' })
+    })
+
     it('always emits at least one node, since ADF rejects an empty doc', () => {
         expect(buildCommentAdf([]).content).toHaveLength(1)
     })

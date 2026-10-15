@@ -139,9 +139,38 @@ export function splitExpands(text: string): BodyPart[] {
 
 const MENTION_TOKEN = '{{mention}}'
 
+// Lines that start a markdown block of their own; a hard-break marker on the line
+// BEFORE one of these would leave a stray trailing space or break the block.
+const BLOCK_START = /^(\s*([-*+]|\d+[.)])\s|#{1,6}\s|\||>|```|\{expand)/
+// Lines whose own syntax a trailing marker would corrupt (a list item is fine:
+// a break inside the item is what a continuation line means).
+const NO_MARKER = /^(\s*#{1,6}\s|\||```|\{expand)/
+
+// A validation report is line-oriented, not prose. Markdown folds a single
+// newline into a space, so "Decisions needed" posted as one run-on paragraph.
+// Every newline that joins two plain lines becomes a markdown hard break
+// (two trailing spaces → ADF hardBreak); fenced code is left untouched.
+export function hardBreaks(text: string): string {
+    const lines = text.split('\n')
+    let inFence = false
+    return lines
+        .map((line, i) => {
+            if (line.trimStart().startsWith('```')) inFence = !inFence
+            if (inFence) return line
+            const next = lines[i + 1]
+            const joinable =
+                next !== undefined &&
+                line.trim() !== '' &&
+                next.trim() !== '' &&
+                !BLOCK_START.test(next)
+            return joinable && !NO_MARKER.test(line) ? `${line.trimEnd()}  ` : line
+        })
+        .join('\n')
+}
+
 function markdownBlocks(text: string): Record<string, unknown>[] {
     if (!text.trim()) return []
-    const doc = markdownToAdf(text) as { content?: Record<string, unknown>[] }
+    const doc = markdownToAdf(hardBreaks(text)) as { content?: Record<string, unknown>[] }
     return doc.content ?? []
 }
 
