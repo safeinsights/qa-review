@@ -39,5 +39,18 @@
       "qar",
       "gh"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_figma_figma__use_figma",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${QAR_NODE:-node}\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/figma-readonly.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }
