@@ -1,1 +1,1 @@
-/qa-validate Validate Jira ticket {{jiraCard}} against {{target}}. The browser is open and not yet logged in. Follow the skill: build the requirement inventory first and wait for my approval before you log in or test anything.
+/qa-validate Validate Jira ticket {{jiraCard}} against {{target}}. The browser is open and not yet logged in. Show me the requirement inventory and wait for my approval before you log in or test anything.
