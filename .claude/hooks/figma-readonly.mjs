@@ -61,7 +61,18 @@ export function checkFigmaCode(code, script) {
     return { allow: true }
 }
 
+function emit(decision) {
+    process.stdout.write(
+        JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...decision } })
+    )
+}
+
+function deny(reason) {
+    emit({ permissionDecision: 'deny', permissionDecisionReason: reason })
+}
+
 function main() {
+    // Unreadable input or script leaves the value empty, which checkFigmaCode denies.
     let raw = ''
     try {
         raw = fs.readFileSync(0, 'utf8')
@@ -74,13 +85,20 @@ function main() {
     try {
         script = fs.readFileSync(SCRIPT_PATH, 'utf8')
     } catch {}
+    if (typeof code !== 'string') return deny('use_figma code must be a string.')
     const result = checkFigmaCode(code, script)
-    const decision = result.allow
-        ? { permissionDecision: 'allow' }
-        : { permissionDecision: 'deny', permissionDecisionReason: result.reason }
-    process.stdout.write(
-        JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...decision } })
-    )
+    if (result.allow) return emit({ permissionDecision: 'allow' })
+    deny(result.reason)
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()
+function run() {
+    try {
+        main()
+    } catch (error) {
+        // Only exit code 2 or an explicit deny blocks; a crash must never fall through.
+        deny(`figma-readonly hook crashed: ${error}`)
+        process.exit(2)
+    }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) run()

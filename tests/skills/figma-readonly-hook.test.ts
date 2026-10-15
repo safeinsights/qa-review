@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -57,9 +58,49 @@ describe('checkFigmaCode', () => {
         expect(checkFigmaCode(withHeader('pages', '1:2'), script).allow).toBe(false)
     })
 
+    it('denies a header followed by trailing code', () => {
+        const rest = script.split('\n').slice(2).join('\n')
+        const code = `const MODE = 'page'; evil()\nconst TARGET = '1:2'\n${rest}`
+        expect(checkFigmaCode(code, script).allow).toBe(false)
+    })
+
+    it('denies a swapped header order', () => {
+        const rest = script.split('\n').slice(2).join('\n')
+        const code = `const TARGET = ''\nconst MODE = 'pages'\n${rest}`
+        expect(checkFigmaCode(code, script).allow).toBe(false)
+    })
+
     it('denies when the script file is missing', () => {
         const result = checkFigmaCode(script, '')
         expect(result.allow).toBe(false)
         expect(result.reason).toContain('Sync')
+    })
+})
+
+describe('hook CLI', () => {
+    const hookPath = path.resolve(__dirname, '../../.claude/hooks/figma-readonly.mjs')
+
+    function decide(input: string) {
+        const run = spawnSync(process.execPath, [hookPath], { input, encoding: 'utf8' })
+        return JSON.parse(run.stdout).hookSpecificOutput
+    }
+
+    it('allows the unchanged script', () => {
+        const out = decide(JSON.stringify({ tool_input: { code: script } }))
+        expect(out.permissionDecision).toBe('allow')
+    })
+
+    it('denies other code, naming the script', () => {
+        const out = decide(JSON.stringify({ tool_input: { code: 'figma.root.remove()' } }))
+        expect(out.permissionDecision).toBe('deny')
+        expect(out.permissionDecisionReason).toContain('figma-notes.js')
+    })
+
+    it('denies garbage input', () => {
+        expect(decide('not json').permissionDecision).toBe('deny')
+    })
+
+    it('denies a non-string code', () => {
+        expect(decide('{"tool_input":{"code":42}}').permissionDecision).toBe('deny')
     })
 })
