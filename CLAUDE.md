@@ -827,10 +827,11 @@ for engineering" markers live — are not returned by `get_screenshot`,
 (`mcp__plugin_figma_figma__use_figma`) exposes `node.annotations`. OTTER-617 was
 validated twice against rendered frames alone and missed seven annotated rules.
 
-`use_figma` can also WRITE to a design file. `gui/app.go` pre-approves only five
+`use_figma` can also WRITE to a design file. `gui/app.go` pre-approves only four
 figma tools by name (`whoami`, `get_screenshot`, `get_metadata`,
-`get_variable_defs`, `use_figma`); the server's other write tools are deliberately
-NOT pre-approved. So the only code a session may send is
+`get_variable_defs`); `use_figma` is allowed only through the hook's explicit allow
+(a pre-approval would fail open if the hook could not run), and the server's other
+write tools are deliberately NOT pre-approved. So the only code a session may send is
 `.claude/skills/qa-validate/figma-notes.js` (modes `pages` / `locate` / `page`),
 and the `PreToolUse` hook `.claude/hooks/figma-readonly.mjs` (wired in
 `.claude/settings.json`) denies any `use_figma` call whose code differs from that

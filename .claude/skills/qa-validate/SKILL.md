@@ -379,6 +379,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    - Any FAIL makes the heading REJECTED — unless the user chose follow-up cards,
      in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
    - Each Figma-sourced line names page, frame and category with a node link.
+   - Never put `{{image:N}}` inside the `{expand:…}…{expand}` block — images are split out before expand blocks are parsed and the block would break. Screenshots belong with FAIL lines; PASS rows carry text evidence only.
    - Omit a section (and the expand block) when it has nothing in it.
    - When there are no CONFLICT/UNCLEAR lines, line 5 reads "No decisions needed", the
      `{{mention}}` token is removed, and `--mention` is not passed.

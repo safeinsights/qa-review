@@ -1490,3 +1490,13 @@ func TestSeatCache(t *testing.T) {
 		t.Fatal("entry older than 24h should be ignored")
 	}
 }
+
+func TestFigmaSeatCheckTimeoutFails(t *testing.T) {
+	check := figmaSeatCheck("", errors.New("claude -p timed out after 60s"))
+	if check.OK {
+		t.Fatal("timeout must be a FAIL")
+	}
+	if !strings.Contains(check.Detail, "timed out") {
+		t.Fatalf("detail should mention timeout: %q", check.Detail)
+	}
+}

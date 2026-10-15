@@ -42,6 +42,13 @@ describe('extractMediaId', () => {
 })
 
 describe('buildCommentAdf', () => {
+    it('skips an expand block with no content', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '{expand:Passed (0)}\n{expand}' }])
+        const nodes = doc.content as { type: string }[]
+        expect(nodes.some(n => n.type === 'expand')).toBe(false)
+        expect(nodes.length).toBeGreaterThan(0)
+    })
+
     it('renders an image as a mediaSingle node keyed by the media uuid', () => {
         const doc = buildCommentAdf([{ type: 'media', mediaId: UUID }])
         const media = (doc.content as Record<string, never>[])[0]

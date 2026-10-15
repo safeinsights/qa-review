@@ -3,8 +3,9 @@
 // use_figma runs arbitrary Plugin API code and CAN edit the design file. The
 // validator only ever needs to READ annotations, so the only code it may send is
 // .claude/skills/qa-validate/figma-notes.js, with just its MODE/TARGET lines varied.
-// Anything else is denied here — the allowlist in gui/app.go pre-approves the whole
-// figma server, so this hook is what keeps the session read-only.
+// Anything else is denied here — use_figma is deliberately NOT pre-approved in
+// gui/app.go; this hook's explicit allow is what makes the fixed script prompt-free,
+// and its deny is what keeps the session read-only.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

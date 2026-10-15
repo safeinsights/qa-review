@@ -448,12 +448,16 @@ var authoringAllowedTools = []string{
 var validationAllowedTools = []string{
 	"mcp__chrome-devtools",
 	"mcp__jira-atlassian",
-	// The hook guards use_figma; the server's other write tools are deliberately NOT pre-approved.
+	// use_figma is deliberately NOT listed: the PreToolUse hook (figma-readonly.mjs) returns
+	// an explicit allow for the fixed script, so pre-approving adds nothing. If the hook
+	// cannot run (bad QAR_NODE, missing node, syntax error) Claude Code treats the non-0/non-2
+	// exit as non-blocking, and an allowlist entry would let arbitrary Plugin API code
+	// through. Without it a broken hook degrades to a permission prompt. The server's other
+	// write tools are likewise NOT pre-approved.
 	"mcp__plugin_figma_figma__whoami",
 	"mcp__plugin_figma_figma__get_screenshot",
 	"mcp__plugin_figma_figma__get_metadata",
 	"mcp__plugin_figma_figma__get_variable_defs",
-	"mcp__plugin_figma_figma__use_figma",
 	"Bash(gh:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
@@ -2071,6 +2075,23 @@ func runToolFull(name string, args ...string) (string, error) {
 	return trimmed, err
 }
 
+// runToolFullTimeout is runToolFull with a deadline, so a hung child cannot block the caller.
+func runToolFullTimeout(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, guiResolve(name), args...)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			err = fmt.Errorf("%s timed out after %s", name, timeout)
+		}
+		logDiag("tool", "FAIL %s %s: %v — %s", name, strings.Join(args, " "), err, firstLines(trimmed, 3))
+	}
+	return trimmed, err
+}
+
 // firstLines flattens the first n non-empty lines of command output onto one line,
 // so a multi-line failure stays one greppable log entry.
 func firstLines(s string, n int) string {
@@ -2846,7 +2867,7 @@ func figmaSeatCheck(out string, err error) DoctorCheck {
 	const name = "Figma seat"
 	const docURL = "https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/"
 	if err != nil {
-		return DoctorCheck{Name: name, OK: false, Detail: "`claude -p` whoami probe failed: " + firstLines(out, 3),
+		return DoctorCheck{Name: name, OK: false, Detail: "`claude -p` whoami probe failed: " + err.Error() + " — " + firstLines(out, 3),
 			Hint: "Start a `claude` session and run `/mcp` to check the figma server, then re-run the doctor."}
 	}
 	payload, ok := findWhoami(out)
@@ -2916,7 +2937,7 @@ func figmaSeatRow() DoctorCheck {
 		check.Detail += " — checked " + at.Local().Format("Jan 2 15:04")
 		return check
 	}
-	out, err := runToolFull("claude", "-p", "Call the whoami tool and stop.",
+	out, err := runToolFullTimeout(60*time.Second, "claude", "-p", "Call the whoami tool and stop.",
 		"--allowedTools", "mcp__plugin_figma_figma__whoami",
 		"--output-format", "stream-json", "--verbose")
 	check := figmaSeatCheck(out, err)

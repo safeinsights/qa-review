@@ -8,5 +8,5 @@ Before testing, confirm the code referenced in the Jira card is present on insta
 
 If the ticket links a Figma design (check remote links and comments, not just the description), compare the implementation against it and classify every line as PASS, FAIL, CONFLICT, UNCLEAR or NOT TESTED.
 
-Give a clear PASS/FAIL verdict, noting any issues or errors are first on the new Jira comment.
+Post the verdict (REJECTED, VALIDATED, or VALIDATED WITH FOLLOW-UPS) using the skill's template, issues first.
 

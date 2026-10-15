@@ -118,6 +118,8 @@ const EXPAND_CLOSE = /^\{expand\}[ \t]*/m
 // marklassian has no syntax for ADF's expand node, so the block is split out
 // HERE and each part converted separately. A block with no closing tag runs to
 // the end rather than being dropped.
+// Limitation: the body is split on `{{image:N}}` BEFORE this runs, so an image
+// placeholder inside an expand block breaks it; the qa-validate skill forbids that.
 export function splitExpands(text: string): BodyPart[] {
     const parts: BodyPart[] = []
     let rest = text
@@ -191,11 +193,9 @@ export function buildCommentAdf(
             for (const part of splitExpands(segment.text)) {
                 if (part.kind === 'markdown') content.push(...markdownBlocks(part.text))
                 else {
-                    content.push({
-                        type: 'expand',
-                        attrs: { title: part.title },
-                        content: markdownBlocks(part.text),
-                    })
+                    const inner = markdownBlocks(part.text)
+                    if (inner.length === 0) continue
+                    content.push({ type: 'expand', attrs: { title: part.title }, content: inner })
                 }
             }
         } else {
