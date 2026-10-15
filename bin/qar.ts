@@ -10,6 +10,7 @@ import {
     jiraCommentCommand,
     jiraDeleteCommentCommand,
 } from '@/cli/commands/jira'
+import { jiraCreateIssueCommand } from '@/cli/commands/jira-create-issue'
 import { listCommand } from '@/cli/commands/list'
 import { loginCommand } from '@/cli/commands/login'
 import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
@@ -106,6 +107,8 @@ async function main() {
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-attachments':
             return jiraAttachmentsCommand(opts, await loadSettings())
+        case 'jira-create-issue':
+            return jiraCreateIssueCommand(opts, await loadSettings())
         case 'jira-delete-comment':
             return jiraDeleteCommentCommand(opts, await loadSettings())
         case 'verdict-posted':

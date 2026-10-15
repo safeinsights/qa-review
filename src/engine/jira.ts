@@ -65,6 +65,10 @@ function authHeader(config: JiraConfig): string {
     return `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')}`
 }
 
+function jsonHeaders(config: JiraConfig): Record<string, string> {
+    return { Authorization: authHeader(config), 'Content-Type': 'application/json' }
+}
+
 // `fetch` rejects with a bare `TypeError: fetch failed` for every transport-level
 // failure — offline, DNS, or (the one that actually bites here) the Claude command
 // sandbox blocking the host. That message names neither the host nor the cause, so a
@@ -273,10 +277,7 @@ export async function addCommentAdf(
 ): Promise<{ id: string; url: string }> {
     const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
         method: 'POST',
-        headers: {
-            Authorization: authHeader(config),
-            'Content-Type': 'application/json',
-        },
+        headers: jsonHeaders(config),
         body: JSON.stringify({ body: adf }),
     })
     await assertOk(response, 'Adding comment')
@@ -353,4 +354,77 @@ export async function downloadAttachment(
     await assertOk(response, `Downloading attachment ${attachmentId}`)
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
     fs.writeFileSync(destPath, Buffer.from(await response.arrayBuffer()))
+}
+
+// Issue-type and link-type NAMES are per-site configuration. A wrong name is a
+// Jira 400 naming nothing useful, so both are checked before a card is created.
+export async function issueTypeNames(config: JiraConfig, projectKey: string): Promise<string[]> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    await assertOk(response, `Reading issue types for ${projectKey}`)
+    const body = (await response.json()) as { issueTypes?: Array<{ name: string }> }
+    return (body.issueTypes ?? []).map(t => t.name)
+}
+
+export async function linkTypeNames(config: JiraConfig): Promise<string[]> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issueLinkType`, {
+        method: 'GET',
+        headers: { Authorization: authHeader(config) },
+    })
+    await assertOk(response, 'Reading issue link types')
+    const body = (await response.json()) as { issueLinkTypes?: Array<{ name: string }> }
+    return (body.issueLinkTypes ?? []).map(t => t.name)
+}
+
+// Created with summary only: the description needs media ids, and media can only
+// be uploaded to an issue that already exists, so the description is PUT afterwards.
+export async function createIssue(
+    config: JiraConfig,
+    fields: { project: string; type: string; summary: string }
+): Promise<{ key: string; id: string }> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue`, {
+        method: 'POST',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({
+            fields: {
+                project: { key: fields.project },
+                issuetype: { name: fields.type },
+                summary: fields.summary,
+            },
+        }),
+    })
+    await assertOk(response, 'Creating issue')
+    const created = (await response.json()) as { id: string; key: string }
+    return { key: created.key, id: created.id }
+}
+
+export async function updateDescriptionAdf(
+    config: JiraConfig,
+    issueKey: string,
+    adf: Record<string, unknown>
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}`, {
+        method: 'PUT',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({ fields: { description: adf } }),
+    })
+    await assertOk(response, `Setting description on ${issueKey}`)
+}
+
+export async function linkIssues(
+    config: JiraConfig,
+    link: { type: string; inward: string; outward: string }
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issueLink`, {
+        method: 'POST',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({
+            type: { name: link.type },
+            inwardIssue: { key: link.inward },
+            outwardIssue: { key: link.outward },
+        }),
+    })
+    await assertOk(response, `Linking ${link.inward} to ${link.outward}`)
 }

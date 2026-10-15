@@ -210,6 +210,15 @@ export const COMMANDS = [
             'attachments (.md/.txt/.csv, or text/* mime) are saved; images are listed only.',
     },
     {
+        name: 'jira-create-issue',
+        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates]',
+        summary:
+            'Create a follow-up card with an ADF description, inline screenshots, and a link to its parent.',
+        details:
+            'Checks the issue type and link type exist before creating anything. Body is ' +
+            'Markdown with {{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
+    },
+    {
         name: 'verdict-posted',
         usage: 'qar verdict-posted --issue <KEY> --result <validated|rejected>',
         summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',

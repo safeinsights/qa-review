@@ -5,14 +5,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
     buildCommentAdf,
+    createIssue,
     downloadAttachment,
     extractMediaId,
+    issueTypeNames,
     isTextAttachment,
     jiraConfig,
     jiraConfigFromEnv,
     jiraFetch,
+    linkIssues,
+    linkTypeNames,
     listAttachments,
     splitExpands,
+    updateDescriptionAdf,
 } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
@@ -336,5 +341,92 @@ describe('buildCommentAdf expand and mention', () => {
         const doc = buildCommentAdf([{ type: 'text', text: 'hello' }], { mention: 'abc' })
         const first = (doc.content as Record<string, unknown>[])[0]
         expect((first.content as { type: string }[])[0].type).toBe('mention')
+    })
+})
+
+const cfg = { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' }
+
+describe('issue creation endpoints', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    it('issueTypeNames reads createmeta for the project', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ issueTypes: [{ name: 'Task' }, { name: 'Bug' }] }), {
+                status: 200,
+            })
+        )
+        vi.stubGlobal('fetch', fetchMock)
+        expect(await issueTypeNames(cfg, 'OTTER')).toEqual(['Task', 'Bug'])
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes'
+        )
+    })
+
+    it('issueTypeNames surfaces a 403 instead of guessing', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue(new Response('forbidden', { status: 403 }))
+        )
+        await expect(issueTypeNames(cfg, 'OTTER')).rejects.toThrow('403')
+    })
+
+    it('linkTypeNames reads the global link types', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue(
+                new Response(
+                    JSON.stringify({
+                        issueLinkTypes: [{ name: 'Blocks' }, { name: 'Relates' }],
+                    }),
+                    { status: 200 }
+                )
+            )
+        )
+        expect(await linkTypeNames(cfg)).toEqual(['Blocks', 'Relates'])
+    })
+
+    it('createIssue posts project, type and summary and returns the key', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(
+                new Response(JSON.stringify({ id: '99', key: 'OTTER-901' }), { status: 201 })
+            )
+        vi.stubGlobal('fetch', fetchMock)
+        expect(await createIssue(cfg, { project: 'OTTER', type: 'Bug', summary: 'S' })).toEqual({
+            id: '99',
+            key: 'OTTER-901',
+        })
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+        expect(body).toEqual({
+            fields: { project: { key: 'OTTER' }, issuetype: { name: 'Bug' }, summary: 'S' },
+        })
+    })
+
+    it('updateDescriptionAdf PUTs the ADF as fields.description', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const adf = { version: 1, type: 'doc', content: [] }
+        await updateDescriptionAdf(cfg, 'OTTER-901', adf)
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/OTTER-901'
+        )
+        expect(fetchMock.mock.calls[0][1].method).toBe('PUT')
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            fields: { description: adf },
+        })
+    })
+
+    it('linkIssues posts the named link between the two keys', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 201 }))
+        vi.stubGlobal('fetch', fetchMock)
+        await linkIssues(cfg, { type: 'Relates', inward: 'OTTER-901', outward: 'OTTER-617' })
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            type: { name: 'Relates' },
+            inwardIssue: { key: 'OTTER-901' },
+            outwardIssue: { key: 'OTTER-617' },
+        })
     })
 })
