@@ -67,9 +67,16 @@ First find the PR and confirm its code is on the target:
 `gh api "search/issues?q=repo:safeinsights/management-app+<CARD>+type:pr" --jq '.items[] | {number, title, state, url: .html_url}'`
 (try another `repo:safeinsights/<repo>` if the ticket points elsewhere), then
 `gh pr view <n> --repo safeinsights/management-app --json title,body,files,mergeCommit`.
-Check the merge commit is in the release deployed on the target (the app's
-release marker, or `gh` against the deploy branch). If it is not, stop and ask
-whether to proceed. Use the changed files to focus the inventory.
+Then read the deployed release from the app's **`/about` page** (public, no
+login): its "Release" row links to `github.com/safeinsights/management-app/`
+`commit/<sha>` or `releases/tag/<tag>`. Navigate the browser there, or
+`curl -sL <baseUrl>/about` and grep for that link. There is NO `/api/health`
+or version endpoint — an unknown route returns the app shell with HTTP 200, so
+a guessed URL "succeeds" and tells you nothing. Then confirm the PR is in that
+release: `gh api repos/safeinsights/management-app/compare/<release>...<mergeCommit> --jq .status`
+— `identical` or `behind` means the PR is deployed; `ahead` or `diverged` means
+it is not, so stop and ask whether to proceed. Use the changed files to focus
+the inventory.
 
 Then build `.tmp/<CARD>-inventory.md`: ONE line per requirement, each with an
 id, the text, and its source. Nothing is tested until the user approves this list.
