@@ -147,13 +147,18 @@ Mark `tested` on the clock. Each line gets exactly one result:
 
 - Only the non-card side of a conflict pair is CONFLICT; the card side is judged
   against the app like any other line.
-- **PM decisions are rare.** Mark a result with `"decision": "<the question>"`
-  only when QA cannot decide and the answer changes the verdict: an UNCLEAR line
-  where the two readings lead to different results, or a scope conflict (one
-  source wants a feature the other marks NOT READY / NOT OTTER). A plain
-  card-vs-Figma wording difference is not a decision. One decision per root
-  cause: if two lines are unclear for the same reason, put the `decision` on
-  one of them and name the other in its evidence.
+- **PM decisions.** Mark a result with `"decision": "<the question>"` when QA
+  cannot decide and the answer changes what should be built:
+  - a conflict where the card and Figma require **different user-visible
+    behaviour** (what resets, what persists, what an empty state covers, how a
+    sort cycles) — whichever one the app follows, the PM must say which is wanted;
+  - an UNCLEAR line where the two readings lead to different results;
+  - a scope conflict (one source wants a feature the other marks NOT READY / NOT
+    OTTER).
+  Copy, wording, spacing and visual-only differences are NOT decisions; they
+  stay under "Unclear requirements". One decision per root cause: when several
+  lines conflict for the same reason ("resets at each stage" on Submitted by and
+  Reviewed by), put the `decision` on one of them and name the others in it.
 - **Anything you saw that is wrong is a FAIL, even when no line asked for it.**
   Add a line to the inventory with `"source":{"type":"observed","ref":"<page>"}`,
   a title, and the result FAIL with a severity. There is no "also observed",
