@@ -459,6 +459,8 @@ var validationAllowedTools = []string{
 	"mcp__plugin_figma_figma__get_metadata",
 	"mcp__plugin_figma_figma__get_variable_defs",
 	"Bash(gh:*)",
+	// The skill reads the deployed release from the app's /about page with curl.
+	"Bash(curl:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
 	"Bash(pnpm typecheck:*)",

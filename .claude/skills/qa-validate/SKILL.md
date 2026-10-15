@@ -55,7 +55,7 @@ neither is a bug, and both will look like one if you forget:
 - **Write every scratch file under `.tmp/`** (screenshots, verdict bodies, notes).
   It's gitignored; files written anywhere else pollute the user's `git status`.
 - **One command per Bash call.** Chained/piped commands fall outside the allowlist
-  and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `pnpm typecheck`,
+  and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `curl …`, `pnpm typecheck`,
   `pnpm test`, and read-only `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit
   and the chrome-devtools + jira-atlassian MCP tools.
 - **Be quiet.** Do the work, then give a short plain-language result.
@@ -69,8 +69,9 @@ First find the PR and confirm its code is on the target:
 `gh pr view <n> --repo safeinsights/management-app --json title,body,files,mergeCommit`.
 Then read the deployed release from the app's **`/about` page** (public, no
 login): its "Release" row links to `github.com/safeinsights/management-app/`
-`commit/<sha>` or `releases/tag/<tag>`. Navigate the browser there, or
-`curl -sL <baseUrl>/about` and grep for that link. There is NO `/api/health`
+`commit/<sha>` or `releases/tag/<tag>`. Run `curl -sL <baseUrl>/about` (one
+command, no pipe — pipes fall outside the allowlist) and find that link in the
+output; do not spend the browser on it. There is NO `/api/health`
 or version endpoint — an unknown route returns the app shell with HTTP 200, so
 a guessed URL "succeeds" and tells you nothing. Then confirm the PR is in that
 release: `gh api repos/safeinsights/management-app/compare/<release>...<mergeCommit> --jq .status`
