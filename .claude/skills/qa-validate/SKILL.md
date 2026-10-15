@@ -24,9 +24,10 @@ approve actions.
   the MCP's `jira_add_comment` cannot embed screenshots, and it has no way to
   delete a comment if you get one wrong.
 - **`gh`** is available (pre-approved) to find + read the PR.
-- The **`plugin:figma:figma` MCP tools** are available for reading any design the
-  ticket links (`get_screenshot`, `get_variable_defs`, `get_metadata`) — see
-  "Checking the implementation against linked Figma designs" below.
+- The **`plugin:figma:figma` MCP tools** are available. Annotations are read with
+  `use_figma` running ONLY the fixed script `figma-notes.js` (a hook enforces it);
+  `get_screenshot`/`get_metadata`/`get_variable_defs` stay available for layout —
+  see "Reading Figma annotations" below.
 - The repo is at **`$QAR_REPO_DIR`** and **is already your working directory.**
   The engine CLI is **`qar`** — a shim on PATH that dispatches to the bundled engine
   (packaged) or `pnpm qar` (dev). Just run `qar …`.
@@ -59,130 +60,149 @@ neither is a bug, and both will look like one if you forget:
   and the chrome-devtools + jira-atlassian MCP tools.
 - **Be quiet.** Do the work, then give a short plain-language result.
 
-## What to do
-1. **Read the ticket** with `jira_get_issue` for the named card. Extract the
-   acceptance criteria / expected behavior.
-2. **Find + read the PR** so you know what actually changed. Prefer the REST
-   search endpoint:
-   `gh api "search/issues?q=repo:safeinsights/management-app+<CARD>+type:pr" --jq '.items[] | {number, title, state, url: .html_url}'`
-   (try another `repo:safeinsights/<repo>` if the ticket points elsewhere), then
-   `gh pr view <n> --repo safeinsights/management-app --json title,body,files`.
-   Use the changed files to focus your validation on what the ticket touched.
-3. **Infer the role** the ticket concerns (`admin`, `researcher`, `reviewer`). If
-   unclear, **ask the user**.
-4. **Log in:** `qar session-login --role <role>` (deterministic Clerk + MFA on the
-   shared browser). Wait for success. To validate a different role later, run it
-   again with the new role.
-5. **Verify the acceptance criteria in the browser** using the chrome-devtools MCP
-   tools (navigate, click, fill, snapshot to read the page). Confirm each criterion
-   actually holds by reading the resulting page. Keep the user informed.
-6. **Check any linked Figma design** against what you see in the browser — see
-   "Checking the implementation against linked Figma designs" below. Look for the
-   links in remote links, the description AND the comments.
-7. **State a verdict** — a clear PASS or FAIL with concise reasoning tied to the
-   acceptance criteria (which held, which didn't, what you saw), plus any design
-   deviations reported separately from the criteria.
+## What to do — five phases
 
-## Checking the implementation against linked Figma designs
-If the ticket links a Figma design, the implementation must MATCH it — a feature can
-satisfy every written acceptance criterion and still be wrong, because the design is
-where the spacing, colors, copy and states actually live. Treat the design as a
-source of criteria that the ticket text left implicit.
+### Phase 1: Inventory (before login, before any test)
+Build `.tmp/<CARD>-inventory.md`: ONE line per requirement, each with an id, the
+text, and its source. Nothing is tested until the user approves this list.
 
-### 1. Find the design links
-Figma links reach a ticket three ways, and **the description is the least common**:
-- **Remote links** — what the Figma–Jira integration creates, and what a designer
-  attaching a design from Figma produces. They are NOT in the description, and NOT
-  in the default field set, so you will miss every one of them unless you ask:
-  `jira_get_issue(issue_key=…, include='remote_links,comments')`.
-- **The description** (`fields='description'`), as a pasted URL.
-- **A comment** — often a later revision ("updated the empty state, see…"), which is
-  why `comments` is in the call above. When comments disagree with the description,
-  **the newest link wins**; say which one you validated against.
+1. **Card.** `jira_get_issue(issue_key=…, include='remote_links,comments', fields='*all')`.
+   Every sub-requirement in the description is its own line — not one line per
+   heading. Ids follow the card's structure (`RL.SubmittedBy.3`). OTTER-617 yields
+   about 60 lines; if you have 10, you have summarised, not inventoried.
+2. **Comments.** A decision in a comment changes or adds a line; the line names
+   its source ("Iris 10/12: Last updated sorts both ways"). The newest decision wins.
+3. **Attachments.** `qar jira-attachments --issue <CARD> --download` saves the text
+   ones (a developer's test plan, a CSV of cases) under `.tmp/<CARD>-attachments/`.
+   Read each; they add lines. Images are listed only.
+4. **Figma.** See "Reading Figma annotations" below. Every annotation on every page
+   that holds a linked node becomes a line, sorted by category.
+5. **Conflicts.** When a card line and a Figma line disagree, merge them into ONE
+   line marked CONFLICT. The app is checked against the card text.
+6. Show the user a summary — line count, conflicts, absence checks, sources — and
+   wait for approval. This replaces "state the acceptance criteria and plan".
 
-A design URL looks like
-`https://figma.com/design/<fileKey>/<name>?node-id=<n1>-<n2>`. You need BOTH the
-`fileKey` and the `node-id`.
+### Phase 2: Test
+Infer the role from the inventory (ask if unclear). `qar session-login --role <role>`.
+Drive every line with the chrome-devtools MCP. Before you give up on a line, try the
+standard methods: timezone/locale and network throttle (`emulate`), viewport
+(`resize_page`), a forced request failure (`evaluate_script` wrapping `fetch`),
+`qar study-state`, `qar session-create-study`, `qar session-create-user`.
 
-**A link with no `node-id` is not usable — ask the user for a node-specific link.**
-The Figma tools require a concrete node and will not accept a guessed one; a file
-URL alone points at a whole document that may hold dozens of unrelated frames.
-Guessing a node id and validating against the wrong frame produces confident,
-completely fabricated findings — far worse than reporting the link as unusable.
-Also skip `/make/`, `/board/` (FigJam) and `/slides/` URLs: they are not design
-files, and `get_metadata`/`get_variable_defs` don't support them.
+### Phase 3: Classify
+Each line gets exactly one result:
 
-If the ticket links NO design, say so and validate the written criteria only. Do
-not go hunting through Figma for a design that might be related.
+| Result | When | Effect |
+|---|---|---|
+| PASS | The app does what the line says | — |
+| FAIL | The app does not, and card and Figma agree | REJECTED or follow-up cards (Phase 5) |
+| CONFLICT | Card and Figma disagree | PM question; the app is checked against the card |
+| UNCLEAR | The line can be read two ways | PM question; never PASS |
+| NOT TESTED | You could not build the state, AND the user approved | — |
 
-### 2. Read the design
-The `mcp__plugin_figma_figma__*` tools are available (the Setup Doctor's "Figma MCP"
-row proves the server is connected and authenticated). Use these three:
+- A CONFLICT line is never also a FAIL.
+- A line with no effect a user can see ("sorting is server-side") goes under
+  "Also observed", not FAIL.
+- **NOT TESTED needs the user's approval, per line, and should almost never
+  happen.** Stop and ask, giving the line, the methods you tried, and ONE reason
+  from: needs a real enclave run `study-state` cannot fake; needs a forbidden
+  action (modify an existing user, rotate a key on a shared env); needs an
+  external system (real email, a third party); needs time to pass; the code is
+  not on the target. "Too much effort" is not a reason. The posted line reads
+  `— NOT TESTED (confirmed by <user>)`. While any line is unresolved, no verdict.
 
-- **`get_screenshot`** (`fileKey`, `nodeId`) — the rendered design frame. **Pass
-  `enableBase64Response: true`.** By default it returns a short-lived URL and tells
-  you to `curl` it, but figma.com and its asset host are NOT in the sandbox's
-  `sandbox.network.allowedDomains`, so that curl fails with a bare transport error
-  that names nothing (see CLAUDE.md, "The Claude command sandbox blocks four
-  things"). The base64 form comes back through the MCP connection, which is not
-  sandboxed. Raise `maxDimension` (default 1024) when you need to read fine detail
-  like label text or a border.
-- **`get_variable_defs`** (`fileKey`, `nodeId`) — the design tokens actually bound
-  to that frame (`{'color/primary': '#0B5CD5', 'spacing/md': '16px'}`). This is what
-  turns "the blue looks off" into "design binds `color/primary` **#0B5CD5**, the app
-  renders **#1A73E8**" — a finding a developer can act on.
-- **`get_metadata`** (`fileKey`, `nodeId`) — the frame's layer tree with names,
-  positions and sizes. Use it to find the right child frame when one node holds
-  several states (empty / loading / error), and to get exact pixel geometry.
+### Phase 4: Report
+Post with `qar jira-comment` using the template under "Posting findings". Write
+for a PM with two minutes: the verdict, the counts, and their questions come
+first; PASS rows are collapsed.
 
-Do **NOT** use `get_design_context`: it exists to GENERATE code from a design, it
-requires loading the design-to-code skill first, and it returns a reference
-implementation that is irrelevant here — you are comparing against code that
-already exists, not writing new code.
+### Phase 5: Route the failures
+Skip when there is no FAIL. Otherwise give each FAIL a severity — **blocker** (a
+card-text criterion broken, wrong data, a user cannot finish the flow), **major**
+(a state or behaviour a Figma annotation specifies is missing), **minor** (copy,
+visual, component) — and an **area** (a short label; FAILs that one fix would
+cover share an area). Write them to `.tmp/<CARD>-fails.json` as
+`{"fails":[{"id","severity","area"}]}` and run
+`qar followup-advice --input .tmp/<CARD>-fails.json`. Present the three options
+with the returned recommendation and its reason, and let the user choose:
 
-Do not perform multiple simultaneous requests to Figma, and pause briefly between
-them to avoid rate-limitations their API imposes.
+- **Comment and send back to dev** — `## REJECTED ❌`; transition to "To Do";
+  assign the last person who worked the card (see "Transition the ticket").
+- **One follow-up card** / **Multiple follow-up cards** — draft each card to
+  `.tmp/<CARD>-followup-N.md` (summary; expected, quoting the source; observed;
+  steps; screenshots). Show the drafts; the user approves or edits. Then, per
+  approved draft:
+  `qar jira-create-issue --project <CARD's project> --summary "<text>" --body-file .tmp/<CARD>-followup-N.md --images a.png,b.png --link <CARD>`
+  (`--type` defaults to Bug, `--link-type` to Relates; both are verified first).
+  The parent comment's heading is `## VALIDATED WITH FOLLOW-UPS ✅` and lists the
+  new keys; the parent then moves as VALIDATED, and `qar verdict-posted` gets
+  `--result validated`.
 
-### 3. Compare, at the right altitude
-Put the browser on the corresponding screen and compare it to the design
-screenshot. **Match the browser to the design's conditions before judging** — the
-same viewport width (`resize_page`), the same state (populated vs. empty, the same
-role, the same expanded/collapsed section). A design drawn at desktop width
-compared against a narrow window produces a page of bogus layout findings.
+CONFLICT and UNCLEAR lines never become cards — they stay as questions.
+On a PR preview: no Jira writes at all, so no cards (show the drafts instead).
 
-Check, roughly in order of how much they matter:
-1. **Structure & presence** — is every element in the design actually there, and in
-   the same order/grouping? A missing control or a section in the wrong place is a
-   real failure.
-2. **Copy** — headings, labels, button text, empty-state and error messages, quoted
-   exactly. Wrong wording is the most common and most checkable design miss.
-3. **States** — the design usually specifies empty, loading, error, disabled and
-   hover. Drive the app into each one the design shows, rather than validating only
-   the happy path it was easiest to reach.
-4. **Visual detail** — color, spacing, type size/weight, border radius, alignment.
-   Back these with numbers from `get_variable_defs` and the computed values you read
-   from the page (`evaluate_script` with `getComputedStyle`), not from eyeballing a
-   screenshot.
+## Reading Figma annotations
 
-**Judgment — this is the part to get right.** You are validating a ticket, not
-running a pixel-diff. A design is a specification of INTENT, and normal
-implementation carries legitimate variance:
-- **Report**: missing or extra elements, wrong copy, missing states, a color or
-  spacing token that is visibly and measurably wrong, anything that breaks the
-  design's visual hierarchy or would be noticed by a user.
-- **Do NOT report**: sub-pixel and one-or-two-pixel differences, font rendering
-  between the browser and Figma, scrollbar width, placeholder/lorem content in the
-  design, or a design element that is clearly a stale earlier revision.
-- **When the design and the ticket text conflict, the TICKET wins** — and flag the
-  conflict rather than failing the card for it. The design may simply predate a
-  decision recorded in the ticket or its comments.
+The design's rules live in **Dev Mode annotations** — per-column widths, reset
+rules, states, "not ready for engineering" markers. `get_screenshot`,
+`get_metadata` and `get_variable_defs` do NOT return them, and neither does the
+REST API; only the Plugin API does. So annotations are read with
+`mcp__plugin_figma_figma__use_figma` running ONE fixed, read-only script:
+**`.claude/skills/qa-validate/figma-notes.js`**. A hook denies any `use_figma`
+call whose code differs from that file in anything but its first two lines, so
+there is no way to edit a design from this session — do not try to write your
+own Plugin API code; it will be refused.
 
-A design difference is a **separate class of finding from an acceptance-criterion
-failure.** Unless the ticket makes the design itself a criterion ("matches the
-attached design"), a visual deviation goes under "Design review" / "Also observed"
-and does **not** by itself flip the verdict to REJECTED. If deviations are serious
-enough that you think they should block, say so explicitly and **ask the user** —
-they decide, not you.
+Before any Figma call, run `mcp__plugin_figma_figma__whoami`. If the SafeInsights
+plan seat is View or Collab, stop and tell the user (those seats get 6 MCP calls a
+month); do not read Figma.
+
+### 1. Find the links
+Figma links reach a ticket three ways: **remote links** (what the Figma–Jira
+integration creates — invisible unless you ask with
+`include='remote_links,comments'`), the **description**, and **comments** (often
+a later revision; the newest wins — say which you used). A design URL is
+`https://figma.com/design/<fileKey>/<name>?node-id=<a>-<b>`; the node id is
+`<a>:<b>`. Skip `/make/`, `/board/` and `/slides/` URLs.
+
+### 2. Read, with the fixed script
+Send the file's contents as `code` with only the header lines changed:
+
+1. `const MODE = 'pages'` / `const TARGET = ''` — every page in the file.
+2. `const MODE = 'locate'` / `const TARGET = '<id1>,<id2>,…'` — ONE call for all
+   linked node ids → each node's page.
+3. `const MODE = 'page'` / `const TARGET = '<pageId>'` — one call per page that
+   holds a linked node → every top-level frame and every annotation on that page
+   (frame, layer path, category, text).
+
+A link with no `node-id` is not a dead end: run `pages`, show the page names, and
+ask the user which page to read. **Every frame on a read page is in scope**, not
+just the linked ones — loading and error frames sit beside the linked frames and
+their notes apply to the same table. Pause briefly between Figma calls.
+
+### 3. Sort each annotation by category
+
+| Category | Treatment |
+|---|---|
+| Development, Interaction, Accessibility, Design notes, Visual Inconsistencies, Notes for QA | An inventory line |
+| NOT READY, NOT READY FOR DEV, NOT OTTER, JUST FOR MOCKUP | An **absence check**: the feature must NOT be in the app |
+| IRIS NOTES, Concept Notes, DONE!, Transition, Transition - IN, Transition - OUT | Context only; not tested |
+| anything else | Ask the user |
+
+No category = Development. The same annotation shows up once per component
+instance (the RL and DP tables share one); merge identical text into one line
+that lists each frame. Every Figma line records page, frame and category, and
+links the node: `https://figma.com/design/<fileKey>?node-id=<a>-<b>`.
+
+### 4. Compare at the right altitude
+Match the browser to the design's conditions first — viewport (`resize_page`),
+state, role. Then check structure and presence, copy (quoted exactly), states
+(drive the app into each one the notes describe), and visual detail backed by
+numbers (`get_variable_defs`, `getComputedStyle`), not eyeballing. Do not report
+sub-pixel differences, font rendering, scrollbar width, or placeholder content.
+`get_screenshot` (pass `enableBase64Response: true`; figma.com is not in the
+sandbox allowlist) and `get_metadata` remain useful for layout; never use
+`get_design_context`.
 
 ## Creating a fresh user or study — use the built-in commands (do NOT hand-drive)
 Creating a new user or study from scratch is fiddly (invite → email → MFA → recovery
@@ -317,58 +337,48 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    never ambiguous:
 
    ```markdown
-   ## VALIDATED ✅
-   <!-- or: REJECTED ❌ -->
+   ## REJECTED ❌
+   <!-- or: VALIDATED ✅  /  VALIDATED WITH FOLLOW-UPS ✅ -->
+   **<env>** · release `<sha>` · PR [#<n>](<url>) · <roles>
+   **<N> requirements:** <a> PASS · <b> FAIL · <c> CONFLICT · <d> UNCLEAR · <e> NOT TESTED
+   Sources: card, <k> comments, <m> attachments, <j> Figma annotations on <p> pages
+   → <c+d> decisions needed from {{mention}} (below). Follow-up cards: <keys or none>.
 
-   Validated on **<env>** as a **<role>**, against PR [#<n>](<pr-url>).
+   ### Decisions needed from PM
+   <!-- Omit the section AND --mention when there are no CONFLICT/UNCLEAR lines. -->
+   **1. <line id> — CONFLICT.** Card: *"<quote>"*. Figma (<page> / <frame>, <category>): *"<quote>"*.
+   App today: <what it does>. **A** keep the card's behaviour · **B** follow Figma.
+   **2. <line id> — UNCLEAR.** *"<quote>"* can mean <A> or <B>. App today: <…>. **A** / **B**.
 
-   **Setup / replication steps followed:** <the state you had to build to get to
-   the thing under test — created a study, submitted a decision, etc.>
-
-   ### Acceptance criteria
-
-   **1. <criterion, quoted from the ticket> — PASS**
-   <what you observed that proves it: the exact text, the measured value, the
-   state transition.>
-
-   **2. <criterion> — FAIL**
-   <what you observed instead, and why it doesn't satisfy the criterion.>
-
+   ### Failed
+   **<line id> — FAIL (<severity>).** Expected (<source>): *"<quote>"*. Observed: <evidence>.
    {{image:1}}
 
-   ### Design review
-   <!-- Omit this section entirely when the ticket links no Figma design. -->
-   Compared against [<design name>](<figma-url>) (node `<node-id>`).
-   <What matched, then each deviation: what the design specifies vs. what the app
-   renders, with values — "design binds `color/primary` **#0B5CD5**, the app renders
-   **#1A73E8**". State plainly whether these are blocking; a deviation here does NOT
-   flip the verdict unless the ticket made the design a criterion.>
+   ### Not tested
+   **<line id> — NOT TESTED (confirmed by <user>).** <reason>.
+
+   {expand:Passed (<a>)}
+   **<card section>**
+   - <line id> — *"<quote>"*: <evidence>
+   {expand}
 
    ### Also observed
-   <Anything true but outside the criteria: extra changes the PR made, or a
-   concern that is NOT blocking. Say explicitly that it isn't a failure. Omit
-   this section when there's nothing.>
+   <true but outside the lines, explicitly not a failure. Omit when empty.>
 
-   ### Verdict
-   <One or two sentences: which criteria held, on which env, and the call.>
-   **VALIDATED.**
+   **Setup:** <state built: studies created, decisions submitted — and that they were deleted.>
    ```
 
-   Rules for filling it in:
-   - **One numbered entry per acceptance criterion, in the ticket's order**, each
-     tagged `— PASS` or `— FAIL`. A criterion you could NOT test gets its own
-     `— NOT TESTED` entry saying why; never silently drop one.
-   - **Evidence, not assertion.** "Reads: *'<exact string>'*" or "measured
-     **40.00px**" — not "looks correct".
-   - **Any FAIL makes the whole verdict REJECTED**, and the heading must say so.
-   - Place `{{image:N}}` next to the criterion it evidences; screenshots with no
-     specific home just append after the body.
-   - Keep "Also observed" strictly separate from the criteria — a non-blocking
-     note must never read as a failure.
-   - **Name the design you compared against**, with its node-specific URL, so a
-     reader can check the same frame. "Matches the design" without a link is not
-     reviewable. If a linked design could NOT be checked (no `node-id`, a
-     FigJam/Make URL), say that in this section rather than omitting it silently.
+   Rules:
+   - The first five lines are the whole status for a busy PM; keep them to five.
+   - Pass `--mention <reporter accountId>` (from `jira_get_issue` → `reporter.account_id`)
+     ONLY when "Decisions needed" is non-empty, so the PM is notified exactly when
+     they have something to answer.
+   - **Evidence, not assertion**: quoted strings, measured pixels, state transitions.
+   - Every inventory line appears exactly once, under one heading. Never drop one.
+   - Any FAIL makes the heading REJECTED — unless the user chose follow-up cards,
+     in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
+   - Each Figma-sourced line names page, frame and category with a node link.
+   - Omit a section (and the expand block) when it has nothing in it.
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
@@ -396,6 +406,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      production isn't where work gets signed off. Post the comment, then STOP:
      no transition, no assignee change. Tell the user you've commented only, and
      that moving the card needs a QA or Staging validation.
+   - **VALIDATED WITH FOLLOW-UPS** moves the card as Validated does.
    - **Un-assign** with `jira_update_issue(fields='{"assignee": null}')`.
 
    **Finding who to assign on rejection.** The card is usually already un-assigned
@@ -461,10 +472,10 @@ Never tell the user "cleanup needs a token I don't have" — fetch it as above.
   `jira_add_comment`. If a post comes out wrong, delete it with
   `qar jira-delete-comment` — don't leave a mess for the user to clean up, and
   don't repost variations hoping one renders.
-- Check any Figma design the ticket links (remote links, description, comments)
-  against the implementation, and report deviations SEPARATELY from the acceptance
-  criteria — a visual difference doesn't flip the verdict on its own unless the
-  ticket made the design a criterion. Never guess a `node-id`; ask for a
-  node-specific link instead of validating against a frame you picked.
+- Read Figma annotations only through `figma-notes.js` via `use_figma`; never send
+  other Plugin API code (the hook denies it). Every annotation on a read page is an
+  inventory line with page/frame/category and a node link.
+- CONFLICT and UNCLEAR are PM questions, never PASS or FAIL. NOT TESTED needs the
+  user's per-line approval and is very rare.
 - Always confirm before writing to Jira (comments, attachments, transitions,
   assigning/un-assigning).

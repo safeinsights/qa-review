@@ -819,6 +819,36 @@ arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
 [PR #1402](https://github.com/sooperset/mcp-atlassian/pull/1402); uploads here go
 through the issue attachment endpoint only.
 
+## Figma annotations are Plugin-API-only (and the validator may only READ)
+
+Dev Mode annotations — where a design's per-column rules, states and "not ready
+for engineering" markers live — are not returned by `get_screenshot`,
+`get_metadata`, `get_variable_defs`, or the Figma REST API. Only the Plugin API
+(`mcp__plugin_figma_figma__use_figma`) exposes `node.annotations`. OTTER-617 was
+validated twice against rendered frames alone and missed seven annotated rules.
+
+`use_figma` can also WRITE to a design file. `gui/app.go` pre-approves only five
+figma tools by name (`whoami`, `get_screenshot`, `get_metadata`,
+`get_variable_defs`, `use_figma`); the server's other write tools are deliberately
+NOT pre-approved. So the only code a session may send is
+`.claude/skills/qa-validate/figma-notes.js` (modes `pages` / `locate` / `page`),
+and the `PreToolUse` hook `.claude/hooks/figma-readonly.mjs` (wired in
+`.claude/settings.json`) denies any `use_figma` call whose code differs from that
+file in anything but its `MODE`/`TARGET` header. `tests/skills/` pins both the
+hook and the script's write-API-free body. The hook runs `"${QAR_NODE:-node}"`,
+so the packaged app's node is used.
+
+Reading needs a **Dev or Full seat on the SafeInsights plan**: View/Collab seats
+get 6 MCP calls a month. The Setup Doctor's "Figma seat" row probes `whoami`
+through `claude -p` and caches a successful answer for 24 h in
+`~/Library/Application Support/qa-runner/figma-seat.json`; delete that file to
+force a re-check.
+
+Follow-up cards go through `qar jira-create-issue` (ADF description, inline
+screenshots, a Relates link to the parent) — the MCP's `jira_create_issue` can do
+none of those three. `qar followup-advice` is the routing rule (blocker → send
+back; few/same-area → one card; else several), kept in code so it is testable.
+
 ## Useful commands
 
 - `pnpm test` (vitest), `pnpm typecheck`
@@ -845,5 +875,8 @@ through the issue attachment endpoint only.
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)
 - `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
+- `pnpm qar jira-attachments --issue OTTER-617 --download`
+- `pnpm qar jira-create-issue --project OTTER --summary "…" --body-file f.md --link OTTER-617`
+- `pnpm qar followup-advice --input .tmp/OTTER-617-fails.json`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

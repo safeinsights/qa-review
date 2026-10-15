@@ -443,16 +443,17 @@ var authoringAllowedTools = []string{
 // Same file/shell surface as authoring.
 //
 // The figma server is user-level rather than per-session (it is not in the
-// --mcp-config we write), but --allowedTools is matched by tool NAME, so listing the
-// prefix here pre-approves it just the same. Its tools are read-only in practice for
-// qa-validate — the skill uses get_screenshot/get_variable_defs/get_metadata — and
-// the prefix covers the whole server, so a WRITE tool (use_figma, create_new_file)
-// would also be pre-approved. That is acceptable only because the skill never calls
-// one; if that changes, list the read tools individually instead.
+// --mcp-config we write), but --allowedTools is matched by tool NAME, so listing
+// names here pre-approves them just the same.
 var validationAllowedTools = []string{
 	"mcp__chrome-devtools",
 	"mcp__jira-atlassian",
-	"mcp__plugin_figma_figma",
+	// The hook guards use_figma; the server's other write tools are deliberately NOT pre-approved.
+	"mcp__plugin_figma_figma__whoami",
+	"mcp__plugin_figma_figma__get_screenshot",
+	"mcp__plugin_figma_figma__get_metadata",
+	"mcp__plugin_figma_figma__get_variable_defs",
+	"mcp__plugin_figma_figma__use_figma",
 	"Bash(gh:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
