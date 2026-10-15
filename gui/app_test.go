@@ -597,13 +597,19 @@ func TestPrCIStatusNoPR(t *testing.T) {
 }
 
 func TestComposeValidationPrompt(t *testing.T) {
-	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
-		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
+	// The prompt is typed into the PTY as one message and claude submits on a
+	// newline, so the instructions are appended on the SAME line — and a user who
+	// typed several lines gets them flattened rather than split into messages.
+	t.Run("appends user instructions on the same line", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on\nthe mobile layout.")
 		if !strings.Contains(p, "/qa-validate") || !strings.Contains(p, "OTTER-1") {
 			t.Fatalf("base prompt missing:\n%s", p)
 		}
-		if !strings.Contains(p, "\n\nAdditional instructions from the user:\nFocus on the mobile layout.") {
-			t.Fatalf("instructions not appended as a paragraph:\n%s", p)
+		if !strings.Contains(p, " Additional instructions from the user: Focus on the mobile layout.") {
+			t.Fatalf("instructions not appended inline:\n%s", p)
+		}
+		if strings.Contains(p, "\n") {
+			t.Fatalf("composed prompt contains a newline:\n%s", p)
 		}
 	})
 

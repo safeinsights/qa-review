@@ -67,13 +67,16 @@ func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
 	// runs in the qa-review checkout, so a bare `gh` command would resolve THERE, not
 	// against the PR under test.
 	if strings.TrimSpace(pr) != "" {
-		out += "\n\n" + prompt("pr-env-caveat", map[string]string{
+		out += " " + prompt("pr-env-caveat", map[string]string{
 			"pr":   strings.TrimSpace(pr),
 			"repo": managementAppSlug,
 		})
 	}
-	if s := strings.TrimSpace(instructions); s != "" {
-		out += "\n\nAdditional instructions from the user:\n" + s
+	// The whole prompt is typed into the PTY as ONE message, and claude's TUI
+	// submits on a newline, so every join is a space and the user's own text is
+	// flattened too — otherwise the session sees only the tail of the prompt.
+	if s := strings.Join(strings.Fields(instructions), " "); s != "" {
+		out += " Additional instructions from the user: " + s
 	}
 	return out
 }

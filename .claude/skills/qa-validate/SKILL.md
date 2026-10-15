@@ -63,8 +63,16 @@ neither is a bug, and both will look like one if you forget:
 ## What to do — five phases
 
 ### Phase 1: Inventory (before login, before any test)
-Build `.tmp/<CARD>-inventory.md`: ONE line per requirement, each with an id, the
-text, and its source. Nothing is tested until the user approves this list.
+First find the PR and confirm its code is on the target:
+`gh api "search/issues?q=repo:safeinsights/management-app+<CARD>+type:pr" --jq '.items[] | {number, title, state, url: .html_url}'`
+(try another `repo:safeinsights/<repo>` if the ticket points elsewhere), then
+`gh pr view <n> --repo safeinsights/management-app --json title,body,files,mergeCommit`.
+Check the merge commit is in the release deployed on the target (the app's
+release marker, or `gh` against the deploy branch). If it is not, stop and ask
+whether to proceed. Use the changed files to focus the inventory.
+
+Then build `.tmp/<CARD>-inventory.md`: ONE line per requirement, each with an
+id, the text, and its source. Nothing is tested until the user approves this list.
 
 1. **Card.** `jira_get_issue(issue_key=…, include='remote_links,comments', fields='*all')`.
    Every sub-requirement in the description is its own line — not one line per
