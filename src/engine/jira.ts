@@ -211,3 +211,57 @@ export async function deleteComment(
     if (response.status === 404) return
     await assertOk(response, `Deleting comment ${commentId}`)
 }
+
+export interface JiraAttachment {
+    id: string
+    filename: string
+    mimeType: string
+    size: number
+}
+
+const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv'])
+
+// Text attachments (a developer's test plan, a CSV of cases) add requirements the
+// card text leaves out. Images are listed but never downloaded — the validator can't
+// read them, and a binary "text" file would just be garbage under .tmp/.
+export function isTextAttachment(attachment: JiraAttachment): boolean {
+    return (
+        attachment.mimeType.startsWith('text/') ||
+        TEXT_EXTENSIONS.has(path.extname(attachment.filename).toLowerCase())
+    )
+}
+
+// The MCP's jira_get_issue omits attachments unless `fields` names them, and even
+// then returns metadata only — this is the path to their CONTENT.
+export async function listAttachments(
+    config: JiraConfig,
+    issueKey: string
+): Promise<JiraAttachment[]> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/${issueKey}?fields=attachment`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    await assertOk(response, `Listing attachments on ${issueKey}`)
+    const body = (await response.json()) as { fields?: { attachment?: JiraAttachment[] } }
+    return (body.fields?.attachment ?? []).map(a => ({
+        id: String(a.id),
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+    }))
+}
+
+// Same endpoint resolveMediaId uses, but FOLLOWING the redirect to the bytes.
+export async function downloadAttachment(
+    config: JiraConfig,
+    attachmentId: string,
+    destPath: string
+): Promise<void> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`,
+        { method: 'GET', headers: { Authorization: authHeader(config) }, redirect: 'follow' }
+    )
+    await assertOk(response, `Downloading attachment ${attachmentId}`)
+    fs.mkdirSync(path.dirname(destPath), { recursive: true })
+    fs.writeFileSync(destPath, Buffer.from(await response.arrayBuffer()))
+}

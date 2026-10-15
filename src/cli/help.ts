@@ -200,6 +200,14 @@ export const COMMANDS = [
         summary: 'Delete Jira comments (404 = already gone = success).',
     },
     {
+        name: 'jira-attachments',
+        usage: 'qar jira-attachments --issue <KEY> [--download] [--dir <path>]',
+        summary: "List a card's attachments; --download saves the text ones under .tmp/.",
+        details:
+            'jira_get_issue returns attachment metadata at best, never content. Text ' +
+            'attachments (.md/.txt/.csv, or text/* mime) are saved; images are listed only.',
+    },
+    {
         name: 'verdict-posted',
         usage: 'qar verdict-posted --issue <KEY> --result <validated|rejected>',
         summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',

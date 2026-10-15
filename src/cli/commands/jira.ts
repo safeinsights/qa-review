@@ -1,10 +1,14 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import {
     addCommentAdf,
     buildCommentAdf,
     type CommentSegment,
     deleteComment,
+    downloadAttachment,
+    isTextAttachment,
     jiraConfig,
+    listAttachments,
     resolveMediaId,
     uploadAttachment,
 } from '@/engine/jira'
@@ -94,5 +98,37 @@ export async function jiraDeleteCommentCommand(
     for (const id of ids) {
         await deleteComment(config, issue, id)
         process.stdout.write(`${JSON.stringify({ id, deleted: true })}\n`)
+    }
+}
+
+const MAX_TEXT_ATTACHMENT_BYTES = 2 * 1024 * 1024
+
+// `qar jira-attachments --issue <KEY> [--download] [--dir <path>]`
+//
+// Lists a card's attachments as JSON lines; with --download, saves the TEXT ones
+// (test plans, CSVs) under --dir (default .tmp/<KEY>-attachments) so the validator
+// can read them. Images are listed only.
+export async function jiraAttachmentsCommand(
+    opts: Record<string, string>,
+    vars: Vars
+): Promise<void> {
+    const issue = opts.issue ?? ''
+    if (!issue) throw new Error('jira-attachments requires --issue <KEY>')
+    const config = jiraConfig(vars)
+    const download = opts.download === 'true'
+    const dir = opts.dir || path.join('.tmp', `${issue}-attachments`)
+
+    for (const attachment of await listAttachments(config, issue)) {
+        const row: Record<string, unknown> = { ...attachment }
+        if (download && isTextAttachment(attachment)) {
+            if (attachment.size > MAX_TEXT_ATTACHMENT_BYTES) {
+                row.skipped = 'larger than 2 MB'
+            } else {
+                const dest = path.join(dir, path.basename(attachment.filename))
+                await downloadAttachment(config, attachment.id, dest)
+                row.saved = dest
+            }
+        }
+        process.stdout.write(`${JSON.stringify(row)}\n`)
     }
 }

@@ -31,6 +31,7 @@ const COMMAND_BOOLEANS: Partial<Record<CommandName, readonly string[]>> = {
     // `--name`. Aliasing would be a behaviour change, not a bug fix.
     'get-secret': ['force', 'key'],
     'set-secret': ['key'],
+    'jira-attachments': ['download'],
 }
 
 // `help` MUST be here: otherwise `qar session --help` parses `--help` as a key

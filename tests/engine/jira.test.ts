@@ -1,11 +1,17 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
     buildCommentAdf,
+    downloadAttachment,
     extractMediaId,
+    isTextAttachment,
     jiraConfig,
     jiraConfigFromEnv,
     jiraFetch,
+    listAttachments,
 } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
@@ -201,5 +207,89 @@ describe('jiraConfig (from merged settings vars)', () => {
 
     it('still fails loudly when the username is absent from settings and env', () => {
         expect(() => jiraConfig({ JIRA_API_TOKEN: 'tok' })).toThrow(/JIRA_USERNAME/)
+    })
+})
+
+describe('listAttachments', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    it('requests only the attachment field and maps the rows', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    fields: {
+                        attachment: [
+                            {
+                                id: '10',
+                                filename: 'manualtest617.md',
+                                mimeType: 'text/markdown',
+                                size: 1200,
+                            },
+                            { id: '11', filename: 'shot.png', mimeType: 'image/png', size: 90000 },
+                        ],
+                    },
+                }),
+                { status: 200 }
+            )
+        )
+        vi.stubGlobal('fetch', fetchMock)
+        const rows = await listAttachments(
+            { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' },
+            'OTTER-617'
+        )
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/OTTER-617?fields=attachment'
+        )
+        expect(rows).toEqual([
+            { id: '10', filename: 'manualtest617.md', mimeType: 'text/markdown', size: 1200 },
+            { id: '11', filename: 'shot.png', mimeType: 'image/png', size: 90000 },
+        ])
+    })
+})
+
+describe('isTextAttachment', () => {
+    it('accepts text mime types and md/txt/csv names, rejects images', () => {
+        expect(
+            isTextAttachment({
+                id: '1',
+                filename: 'a.md',
+                mimeType: 'application/octet-stream',
+                size: 1,
+            })
+        ).toBe(true)
+        expect(
+            isTextAttachment({ id: '1', filename: 'a.bin', mimeType: 'text/plain', size: 1 })
+        ).toBe(true)
+        expect(
+            isTextAttachment({ id: '1', filename: 'a.png', mimeType: 'image/png', size: 1 })
+        ).toBe(false)
+    })
+})
+
+describe('downloadAttachment', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    it('follows the content redirect and writes the bytes', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response('# plan', { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-att-'))
+        const dest = path.join(dir, 'plan.md')
+        await downloadAttachment(
+            { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' },
+            '10',
+            dest
+        )
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/attachment/content/10'
+        )
+        expect(fetchMock.mock.calls[0][1].redirect).toBe('follow')
+        expect(fs.readFileSync(dest, 'utf8')).toBe('# plan')
+        fs.rmSync(dir, { recursive: true, force: true })
     })
 })
