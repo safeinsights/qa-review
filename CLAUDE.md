@@ -879,5 +879,7 @@ back; few/same-area → one card; else several), kept in code so it is testable.
 - `pnpm qar jira-attachments --issue OTTER-617 --download`
 - `pnpm qar jira-create-issue --project OTTER --summary "…" --body-file f.md --link OTTER-617`
 - `pnpm qar followup-advice --input .tmp/OTTER-617-fails.json`
+- `pnpm qar inventory-render --input .tmp/OTTER-617-inventory.json` — the requirement
+  inventory as one self-contained HTML page the session opens in its browser
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

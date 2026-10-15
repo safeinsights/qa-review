@@ -5,6 +5,7 @@ import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
 import { followupAdviceCommand } from '@/cli/commands/followup-advice'
 import { getSecretCommand } from '@/cli/commands/get-secret'
+import { inventoryRenderCommand } from '@/cli/commands/inventory-render'
 import { inviteCommand } from '@/cli/commands/invite'
 import {
     jiraAttachmentsCommand,
@@ -116,6 +117,8 @@ async function main() {
             return verdictPostedCommand(opts)
         case 'followup-advice':
             return followupAdviceCommand(opts)
+        case 'inventory-render':
+            return inventoryRenderCommand(opts)
         default:
             console.error(unknownCommandMessage(subcommand))
             process.exit(1)

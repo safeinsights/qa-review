@@ -79,8 +79,8 @@ release: `gh api repos/safeinsights/management-app/compare/<release>...<mergeCom
 it is not, so stop and ask whether to proceed. Use the changed files to focus
 the inventory.
 
-Then build `.tmp/<CARD>-inventory.md`: ONE line per requirement, each with an
-id, the text, and its source. Nothing is tested until the user approves this list.
+Then build the inventory: ONE line per requirement, each with an id, the text,
+and its source. Nothing is tested until the user approves this list.
 
 1. **Card.** `jira_get_issue(issue_key=…, include='remote_links,comments', fields='*all')`.
    Every sub-requirement in the description is its own line — not one line per
@@ -93,10 +93,22 @@ id, the text, and its source. Nothing is tested until the user approves this lis
    Read each; they add lines. Images are listed only.
 4. **Figma.** See "Reading Figma annotations" below. Every annotation on every page
    that holds a linked node becomes a line, sorted by category.
-5. **Conflicts.** When a card line and a Figma line disagree, merge them into ONE
-   line marked CONFLICT. The app is checked against the card text.
-6. Show the user a summary — line count, conflicts, absence checks, sources — and
-   wait for approval. This replaces "state the acceptance criteria and plan".
+5. **Conflicts.** When a card line and a Figma line disagree, keep BOTH lines
+   and set `conflictWith` on each to the other's id. The app is checked against
+   the card text; the pair is reported once, as CONFLICT.
+6. **Write the inventory as JSON** to `.tmp/<CARD>-inventory.json`:
+   `{"card","target","lines":[{"id","kind":"check|absence|context","text",
+   "source":{"type":"card|comment|attachment|figma","ref","url?","page?","frame?",
+   "category?"},"conflictWith?"}]}` — `kind` is `check` for a requirement,
+   `absence` for a NOT READY / NOT OTTER / JUST FOR MOCKUP annotation (the feature
+   must be absent), `context` for notes that are not tested. The JSON is the
+   source of truth; do not keep a parallel `.md`.
+7. **Render and show it**: `qar inventory-render --input .tmp/<CARD>-inventory.json`
+   prints `{"output","summary"}`. Open `output` in the session browser as a NEW
+   tab (`new_page` with `file://<output>`), so it appears in the Validation pane,
+   then `select_page` back to the app tab. In chat, give the `summary` (lines,
+   checks, absence checks, conflicts, sources) and wait for approval. This
+   replaces "state the acceptance criteria and plan".
 
 ### Phase 2: Test
 Infer the role from the inventory (ask if unclear). `qar session-login --role <role>`.

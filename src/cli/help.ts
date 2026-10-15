@@ -232,6 +232,16 @@ export const COMMANDS = [
             'Input is {"fails":[{"id","severity":"blocker|major|minor","area"}]}. Any blocker → ' +
             'send-back; ≤3 FAILs or one area → one-card; otherwise multiple-cards.',
     },
+    {
+        name: 'inventory-render',
+        usage: 'qar inventory-render --input <path.json> [--output <path.html>]',
+        summary: 'Render a validation requirement inventory as a self-contained HTML page.',
+        details:
+            'Input is {"card","target","lines":[{"id","kind":"check|absence|context","text",' +
+            '"source":{"type":"card|comment|attachment|figma","ref","url?","page?","frame?",' +
+            '"category?"},"conflictWith?"}]}. Default output is the input path with .html. ' +
+            'Prints {"output","summary"}.',
+    },
 ] as const satisfies readonly CommandHelp[]
 
 export function commandNames(): string[] {
