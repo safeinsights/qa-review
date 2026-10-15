@@ -850,6 +850,22 @@ screenshots, a Relates link to the parent) — the MCP's `jira_create_issue` can
 none of those three. `qar followup-advice` is the routing rule (blocker → send
 back; few/same-area → one card; else several), kept in code so it is testable.
 
+**The report is gated by code, not by prose.** Two runs filed real bugs under
+"also noted" and named lines by inventory id, which nobody can read without the
+inventory open. So: every inventory line has a plain-language `title` (the only
+name the report uses); the session writes `.tmp/<CARD>-results.json`; and
+`qar results-check` (`src/engine/results.ts`) refuses a set with a line missing a
+result, a result missing evidence, a FAIL missing severity/area, a NOT TESTED
+missing the approver, or an `observed`-source line that is not a FAIL. There is
+no "also observed" section: something seen outside the inventory is added as an
+`observed` line and can only FAIL. **The card is the spec**: in a card-vs-Figma
+conflict the card line is PASS or FAIL against the app and the Figma line is
+CONFLICT, listed under "Unclear requirements" for information. A PM is asked
+only for results carrying `decision` (an UNCLEAR line whose readings change the
+verdict, or a scope conflict), at most three, one per root cause. `qar jira-comment` keeps a single newline as a
+hard line break (`hardBreaks()`), since a report is line-oriented and markdown's
+soft wrap had folded "Decisions needed" into one paragraph.
+
 ## Useful commands
 
 - `pnpm test` (vitest), `pnpm typecheck`
@@ -878,8 +894,15 @@ back; few/same-area → one card; else several), kept in code so it is testable.
 - `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
 - `pnpm qar jira-attachments --issue OTTER-617 --download`
 - `pnpm qar jira-create-issue --project OTTER --summary "…" --body-file f.md --link OTTER-617`
-- `pnpm qar followup-advice --input .tmp/OTTER-617-fails.json`
 - `pnpm qar inventory-render --input .tmp/OTTER-617-inventory.json` — the requirement
   inventory as one self-contained HTML page the session opens in its browser
+- `pnpm qar results-check --inventory .tmp/OTTER-617-inventory.json --results .tmp/OTTER-617-results.json`
+  — the gate before a verdict: every line has one evidenced result, observed
+  findings are FAILs; lists every gap
+- `pnpm qar followup-advice --input .tmp/OTTER-617-results.json`
+- `pnpm qar clock --file .tmp/OTTER-617-clock.json --mark tested` / `--report` — phase
+  timing for the report summary
+- `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
+  files and link them from the comment
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

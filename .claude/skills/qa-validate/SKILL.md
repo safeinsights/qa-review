@@ -63,6 +63,10 @@ neither is a bug, and both will look like one if you forget:
 ## What to do — five phases
 
 ### Phase 1: Inventory (before login, before any test)
+Start the clock first: `qar clock --file .tmp/<CARD>-clock.json --mark start`. Mark
+the end of each later phase the same way (`inventory`, `approved`, `tested`,
+`posted`); the report quotes the durations.
+
 First find the PR and confirm its code is on the target:
 `gh api "search/issues?q=repo:safeinsights/management-app+<CARD>+type:pr" --jq '.items[] | {number, title, state, url: .html_url}'`
 (try another `repo:safeinsights/<repo>` if the ticket points elsewhere), then
@@ -79,8 +83,8 @@ release: `gh api repos/safeinsights/management-app/compare/<release>...<mergeCom
 it is not, so stop and ask whether to proceed. Use the changed files to focus
 the inventory.
 
-Then build the inventory: ONE line per requirement, each with an id, the text,
-and its source. Nothing is tested until the user approves this list.
+Then build the inventory: ONE line per requirement, each with an id, a title,
+the text, and its source. Nothing is tested until the user approves this list.
 
 1. **Card.** `jira_get_issue(issue_key=…, include='remote_links,comments', fields='*all')`.
    Every sub-requirement in the description is its own line — not one line per
@@ -94,15 +98,24 @@ and its source. Nothing is tested until the user approves this list.
 4. **Figma.** See "Reading Figma annotations" below. Every annotation on every page
    that holds a linked node becomes a line, sorted by category.
 5. **Conflicts.** When a card line and a Figma line disagree, keep BOTH lines
-   and set `conflictWith` on each to the other's id. The app is checked against
-   the card text; the pair is reported once, as CONFLICT.
+   and set `conflictWith` on each to the other's id. **The card is the spec.**
+   The card line is checked against the app and gets PASS or FAIL; the Figma
+   line gets CONFLICT and is listed under "Unclear requirements" with what the
+   app does. A conflict is NOT a PM decision by itself.
 6. **Write the inventory as JSON** to `.tmp/<CARD>-inventory.json`:
-   `{"card","target","lines":[{"id","kind":"check|absence|context","text",
-   "source":{"type":"card|comment|attachment|figma","ref","url?","page?","frame?",
-   "category?"},"conflictWith?"}]}` — `kind` is `check` for a requirement,
+   `{"card","target","lines":[{"id","title","kind":"check|absence|context","text",
+   "source":{"type":"card|comment|attachment|figma|observed","ref","url?","page?",
+   "frame?","category?"},"conflictWith?"}]}` — `kind` is `check` for a requirement,
    `absence` for a NOT READY / NOT OTTER / JUST FOR MOCKUP annotation (the feature
    must be absent), `context` for notes that are not tested. The JSON is the
    source of truth; do not keep a parallel `.md`.
+   **`title` is a short plain-language name** that stands on its own in the
+   report, where ids never appear: "Submitted by resets at the code stage", "No
+   New study button on the Researcher tab", "Last updated sorts both ways". A
+   reader of the Jira comment must understand the line without the inventory
+   open. Make titles unique; where a card line and a Figma line conflict, give
+   both the same subject so the pair reads as one ("Empty state when the only
+   study is a draft — card" / "… — Figma").
 7. **Render and show it**: `qar inventory-render --input .tmp/<CARD>-inventory.json`
    prints `{"output","summary"}`. Show `output` in the session browser by
    navigating the EXISTING app tab to it: `navigate_page` with `file://<output>`
@@ -111,7 +124,8 @@ and its source. Nothing is tested until the user approves this list.
    lost: you have not logged in yet, and `qar session-login` navigates the tab
    back to the app after approval. In chat, give the `summary` (lines, checks,
    absence checks, conflicts, sources) and wait for approval. This replaces
-   "state the acceptance criteria and plan".
+   "state the acceptance criteria and plan". Mark `inventory` when the page is
+   shown and `approved` when the user approves.
 
 ### Phase 2: Test
 Infer the role from the inventory (ask if unclear). `qar session-login --role <role>`.
@@ -121,19 +135,41 @@ standard methods: timezone/locale and network throttle (`emulate`), viewport
 `qar study-state`, `qar session-create-study`, `qar session-create-user`.
 
 ### Phase 3: Classify
-Each line gets exactly one result:
+Mark `tested` on the clock. Each line gets exactly one result:
 
 | Result | When | Effect |
 |---|---|---|
 | PASS | The app does what the line says | — |
-| FAIL | The app does not, and card and Figma agree | REJECTED or follow-up cards (Phase 5) |
-| CONFLICT | Card and Figma disagree | PM question; the app is checked against the card |
-| UNCLEAR | The line can be read two ways | PM question; never PASS |
+| FAIL | The app does not | REJECTED or follow-up cards (Phase 5) |
+| CONFLICT | The Figma side of a pair that disagrees with the card | "Unclear requirements" list; the card side is PASS or FAIL |
+| UNCLEAR | The line can be read two ways | "Unclear requirements"; PM decision only if high priority; never PASS |
 | NOT TESTED | You could not build the state, AND the user approved | — |
 
-- A CONFLICT line is never also a FAIL.
-- A line with no effect a user can see ("sorting is server-side") goes under
-  "Also observed", not FAIL.
+- Only the non-card side of a conflict pair is CONFLICT; the card side is judged
+  against the app like any other line.
+- **PM decisions are rare.** Mark a result with `"decision": "<the question>"`
+  only when QA cannot decide and the answer changes the verdict: an UNCLEAR line
+  where the two readings lead to different results, or a scope conflict (one
+  source wants a feature the other marks NOT READY / NOT OTTER). A plain
+  card-vs-Figma wording difference is not a decision. One decision per root
+  cause: if two lines are unclear for the same reason, put the `decision` on
+  one of them and name the other in its evidence.
+- **Anything you saw that is wrong is a FAIL, even when no line asked for it.**
+  Add a line to the inventory with `"source":{"type":"observed","ref":"<page>"}`,
+  a title, and the result FAIL with a severity. There is no "also observed",
+  "also noted" or "minor remark" section anywhere in the report; a finding that
+  is not a FAIL does not exist. Something that is not wrong is not recorded.
+- **Write the results** to `.tmp/<CARD>-results.json` as
+  `{"results":[{"id","result","evidence","severity?","area?","approvedBy?"}]}`:
+  one entry per `check`/`absence` line (context lines take none); `evidence` is
+  the quoted string, pixel measurement or screenshot path that proves it; FAIL
+  carries `severity` (see Phase 5) and `area`; NOT TESTED carries `approvedBy`
+  (the user's name). Then run
+  `qar results-check --inventory .tmp/<CARD>-inventory.json --results .tmp/<CARD>-results.json`.
+  It lists every gap (a line with no result, a result with no evidence, a FAIL
+  with no severity, an observed line that is not a FAIL, a line with no title).
+  Fix the gaps; **nothing is posted until it prints `{"ok":true,…}`.** This is
+  the final review, and it is done by code so that it is not skipped.
 - **NOT TESTED needs the user's approval, per line, and should almost never
   happen.** Stop and ask, giving the line, the methods you tried, and ONE reason
   from: needs a real enclave run `study-state` cannot fake; needs a forbidden
@@ -145,7 +181,11 @@ Each line gets exactly one result:
 ### Phase 4: Report
 Post with `qar jira-comment` using the template under "Posting findings". Write
 for a PM with two minutes: the verdict, the counts, and their questions come
-first; PASS rows are collapsed. **During the voice test (see "Voice test" under
+first; PASS rows are collapsed. Name lines by their **title**, never by id. Get
+the timing line from `qar clock --file .tmp/<CARD>-clock.json --report` and
+attach the inventory and the results with
+`--attach .tmp/<CARD>-inventory.html,.tmp/<CARD>-inventory.json,.tmp/<CARD>-results.json`.
+Mark `posted` after the comment is up. **During the voice test (see "Voice test" under
 "Posting findings"), post the same report three times, once in each voice.**
 
 ### Phase 5: Route the failures
@@ -153,9 +193,8 @@ Skip when there is no FAIL. Otherwise give each FAIL a severity — **blocker** 
 card-text criterion broken, wrong data, a user cannot finish the flow), **major**
 (a state or behaviour a Figma annotation specifies is missing), **minor** (copy,
 visual, component) — and an **area** (a short label; FAILs that one fix would
-cover share an area). Write them to `.tmp/<CARD>-fails.json` as
-`{"fails":[{"id","severity","area"}]}` and run
-`qar followup-advice --input .tmp/<CARD>-fails.json`. Present the three options
+cover share an area). Both are already in the results file, so run
+`qar followup-advice --input .tmp/<CARD>-results.json`. Present the three options
 with the returned recommendation and its reason, and let the user choose:
 
 - **Comment and send back to dev** — `## REJECTED ❌`; transition to "To Do";
@@ -170,7 +209,7 @@ with the returned recommendation and its reason, and let the user choose:
   new keys; the parent then moves as VALIDATED, and `qar verdict-posted` gets
   `--result validated`.
 
-CONFLICT and UNCLEAR lines never become cards — they stay as questions.
+CONFLICT and UNCLEAR lines never become cards — they stay under "Unclear requirements".
 On a PR preview: no Jira writes at all, so no cards (show the drafts instead).
 
 ## Reading Figma annotations
@@ -358,12 +397,17 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    verdict (what you tested, the result, the reasoning) to a `.md` file under
    `.tmp/`, then:
    ```
-   qar jira-comment --issue <CARD> --body-file .tmp/<name>.md --images .tmp/a.png,.tmp/b.png
+   qar jira-comment --issue <CARD> --body-file .tmp/<name>.md --images .tmp/a.png,.tmp/b.png --attach .tmp/<CARD>-inventory.html,.tmp/<CARD>-inventory.json,.tmp/<CARD>-results.json
    ```
    It uploads each screenshot, resolves its media id, and posts ONE comment with the
    images **embedded inline**. Images append after the body; put `{{image:1}}` /
-   `{{image:2}}` in the body to place them mid-text instead. It prints
+   `{{image:2}}` in the body to place them mid-text instead. `--attach` uploads
+   the other files and adds an "Attachments:" line linking them. It prints
    `{"id","url"}` — give the user the URL.
+
+   A single newline in the body is a real line break in Jira (a blank line
+   starts a new paragraph), so write one item per line and never run items
+   together in one paragraph.
 
    **The body is Markdown** — it's converted to Jira's ADF, so use formatting:
    `##` headings, `**bold**`, `*italic*`, `` `code` ``, `-` bullet lists, and
@@ -380,48 +424,68 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    <!-- or: VALIDATED ✅  /  VALIDATED WITH FOLLOW-UPS ✅ -->
    **<env>** · release `<sha>` · PR [#<n>](<url>) · <roles>
    **<N> requirements:** <a> PASS · <b> FAIL · <c> CONFLICT · <d> UNCLEAR · <e> NOT TESTED
-   Sources: card, <k> comments, <m> attachments, <j> Figma annotations on <p> pages
-   → <c+d> decisions needed from {{mention}} (below). Follow-up cards: <keys or none>.
-   <!-- when c+d = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
+   Sources: card, <k> comments, <m> attachments, <j> Figma annotations on <p> pages · <output of qar clock --report>
+   → <q> decisions needed from {{mention}} (below). Follow-up cards: <keys or none>.
+   <!-- q = results carrying "decision". When q = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
 
    ### Decisions needed from PM
-   <!-- Omit the section AND --mention when there are no CONFLICT/UNCLEAR lines. -->
-   **1. <line id> — CONFLICT.** Card: *"<quote>"*. Figma (<page> / <frame>, <category>): *"<quote>"*.
-   App today: <what it does>. **A** keep the card's behaviour · **B** follow Figma.
-   **2. <line id> — UNCLEAR.** *"<quote>"* can mean <A> or <B>. App today: <…>. **A** / **B**.
+   <!-- Omit the section AND --mention when no result carries "decision". At most 3 items; put the rest in {expand:More decisions}…{expand}. -->
+   Reply on this card with the item number and your answer.
+
+   **1. <title>.** <One question the PM can answer with yes or no.>
+   Today: <what the app does>. I recommend <answer>, because <one reason>.
+
+   ### Unclear requirements
+   <!-- Every CONFLICT and UNCLEAR line, one per line, for information. Omit when empty. -->
+   - **<title>** — card: <one clause> · Figma ([<frame>](<node url>)): <one clause> · app: <what it does>
+   - **<title>** — can mean <X> or <Y> · app: <what it does>
 
    ### Failed
-   **<line id> — FAIL (<severity>).** Expected (<source>): *"<quote>"*. Observed: <evidence>.
+   **<title> — FAIL (<severity>).** Expected (<source>): *"<quote>"*. Observed: <evidence>.
    {{image:1}}
 
    ### Not tested
-   **<line id> — NOT TESTED (confirmed by <user>).** <reason>.
+   **<title> — NOT TESTED (confirmed by <user>).** <reason>.
 
    {expand:Passed (<a>)}
    **<card section>**
-   - <line id> — *"<quote>"*: <evidence>
+   - <title>: <evidence>
    {expand}
-
-   ### Also observed
-   <true but outside the lines, explicitly not a failure. Omit when empty.>
 
    **Setup:** <state built: studies created, decisions submitted — and that they were deleted.>
    ```
 
    Rules:
    - The first five lines are the whole status for a busy PM; keep them to five.
+   - **Titles, not ids.** An id like `RL.SubmittedBy.3` means nothing in Jira; the
+     title from the inventory is the name of the line everywhere in the report.
+   - **One item per line.** Each decision, FAIL and PASS row starts on its own line;
+     a blank line separates decisions. Never join items into one paragraph.
+   - **A decision is a question with a recommendation.** The PM has no form to fill
+     in: do not offer "A / B" labels, and do not spell out what each answer
+     leads to — the PM knows. Ask one question, say what the app does today,
+     and recommend an answer with a reason. Nothing else under the item. Full
+     quotes of the card and the Figma note do not belong in the question.
+   - **"Decisions needed" is short and "Unclear requirements" is complete.** Only
+     results carrying `decision` (see Phase 3) go in the first; every CONFLICT and
+     UNCLEAR line goes in the second, as one line each, so the PM sees every
+     discrepancy and what was actually built without being asked to rule on it.
+   - There is no "Also observed" section. See Phase 3: an observation is a FAIL
+     line or it is nothing.
    - Pass `--mention <reporter accountId>` (from `jira_get_issue` → `reporter.account_id`)
      ONLY when "Decisions needed" is non-empty, so the PM is notified exactly when
      they have something to answer.
    - **Evidence, not assertion**: quoted strings, measured pixels, state transitions.
-   - Every inventory line appears exactly once, under one heading. Never drop one.
+   - Every inventory line appears exactly once, under one heading. Never drop one;
+     `qar results-check` must have printed `ok` for this exact results file.
    - Any FAIL makes the heading REJECTED — unless the user chose follow-up cards,
      in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
    - Each Figma-sourced line names page, frame and category with a node link.
    - Never put `{{image:N}}` inside the `{expand:…}…{expand}` block — images are split out before expand blocks are parsed and the block would break. Screenshots belong with FAIL lines; PASS rows carry text evidence only.
    - Omit a section (and the expand block) when it has nothing in it.
-   - When there are no CONFLICT/UNCLEAR lines, line 5 reads "No decisions needed", the
-     `{{mention}}` token is removed, and `--mention` is not passed.
+   - When no result carries `decision`, line 5 reads "No decisions needed", the
+     `{{mention}}` token is removed, and `--mention` is not passed — even if
+     "Unclear requirements" is long.
 
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
@@ -450,8 +514,8 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      column says it should reset to 'Not reviewed', so I'm marking this a FAIL —
      it affects 53 of the 102 rows on the Openstax dashboard."*
    - **Terse**: fragments, no articles, one line per finding in the form
-     `id — result — evidence`. Example: *"DP.ReviewedBy.3 — FAIL — 53/102 rows
-     show prior-stage reviewer; Figma: reset at new stage."*
+     `title — result — evidence`. Example: *"Reviewed by resets at new stage — FAIL
+     — 53/102 rows show prior-stage reviewer; Figma: reset at new stage."*
 
    The 5-line summary block keeps its exact format in every voice; the voice
    applies to everything below it.
