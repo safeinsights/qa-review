@@ -38,6 +38,12 @@ func repoLocationFile() string {
 	return filepath.Join(appSupportDir(), "repo-location.txt")
 }
 
+// figmaSeatCachePath holds the last successful `whoami` probe. The Doctor runs on
+// every launch and the probe costs a claude -p round trip, so it is reused for a day.
+func figmaSeatCachePath() string {
+	return filepath.Join(appSupportDir(), "figma-seat.json")
+}
+
 // defaultRepoDir is used when the user hasn't chosen a location.
 func defaultRepoDir() string {
 	return filepath.Join(appSupportDir(), "repo")
