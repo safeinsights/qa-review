@@ -20,6 +20,24 @@ describe('followup-advice', () => {
         for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
     })
 
+    it('accepts a results file and routes on its FAIL entries only', async () => {
+        const input = writeInput(
+            JSON.stringify({
+                results: [
+                    { id: 'a', result: 'PASS', evidence: 'x' },
+                    { id: 'b', result: 'FAIL', severity: 'blocker', area: 'x', evidence: 'y' },
+                ],
+            })
+        )
+        const out: string[] = []
+        vi.spyOn(process.stdout, 'write').mockImplementation(s => {
+            out.push(String(s))
+            return true
+        })
+        await followupAdviceCommand({ input })
+        expect(JSON.parse(out[0]).option).toBe('send-back')
+    })
+
     it('reads {fails:[…]} from --input and prints the recommendation', async () => {
         const input = writeInput(
             JSON.stringify({ fails: [{ id: 'a', severity: 'blocker', area: 'x' }] })

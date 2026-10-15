@@ -6,7 +6,9 @@
 // file (inline CSS and JS, no CDN) because it is opened from .tmp/ over file://,
 // where nothing external is guaranteed to load.
 
-export type SourceType = 'card' | 'comment' | 'attachment' | 'figma'
+// `observed` is for something seen during testing that no source asked for; such a
+// line can only be a FAIL (see results.ts), which is what keeps it from being deferred.
+export type SourceType = 'card' | 'comment' | 'attachment' | 'figma' | 'observed'
 
 export type LineKind = 'check' | 'absence' | 'context'
 
@@ -21,6 +23,9 @@ export interface LineSource {
 
 export interface InventoryLine {
     id: string
+    // A short plain-language name ("Submitted by resets at the code stage"). The
+    // report names lines by title, so a reader never needs the inventory open.
+    title?: string
     kind: LineKind
     text: string
     source: LineSource
@@ -42,7 +47,7 @@ export interface InventorySummary {
     sources: Record<SourceType, number>
 }
 
-const SOURCE_TYPES: SourceType[] = ['card', 'comment', 'attachment', 'figma']
+const SOURCE_TYPES: SourceType[] = ['card', 'comment', 'attachment', 'figma', 'observed']
 
 export function summarize(inventory: Inventory): InventorySummary {
     const sources = Object.fromEntries(SOURCE_TYPES.map(t => [t, 0])) as Record<SourceType, number>
@@ -99,6 +104,7 @@ function row(line: InventoryLine): string {
     return (
         `<tr data-line="${escapeHtml(line.id)}" data-kind="${line.kind}" data-source="${line.source.type}"${conflict}>` +
         `<td class="id">${escapeHtml(line.id)}</td>` +
+        `<td class="title">${escapeHtml(line.title ?? '')}</td>` +
         `<td class="kind">${line.kind}</td>` +
         `<td class="text">${escapeHtml(line.text)}${conflictNote}</td>` +
         `<td class="source">${sourceCell(line.source)}</td>` +
@@ -123,7 +129,7 @@ tr[data-kind=context]{color:#777}
 tr[data-conflict=true] td.text{background:#fff4d6}
 .conflict{font-size:12px;color:#8a5a00;margin-top:2px}
 .src{font-size:11px;padding:1px 6px;border-radius:8px;background:#e8eef7;margin-right:4px}
-.src-figma{background:#efe3fb}.src-comment{background:#e3f6e8}.src-attachment{background:#fbeede}
+.src-figma{background:#efe3fb}.src-comment{background:#e3f6e8}.src-attachment{background:#fbeede}.src-observed{background:#fde0e0}
 .cat{font-size:12px;padding:1px 6px;border-radius:4px;background:#f0f0f0}
 tr.hidden{display:none}
 `
@@ -146,7 +152,8 @@ export function renderInventoryHtml(inventory: Inventory): string {
         `${plural(s.lines, 'requirement')} · ${plural(s.checks, 'check')} · ` +
         `${plural(s.absences, 'absence check')} · ${plural(s.context, 'context line')} · ` +
         `${plural(s.conflicts, 'conflict')} — sources: card ${s.sources.card}, ` +
-        `comments ${s.sources.comment}, attachments ${s.sources.attachment}, Figma ${s.sources.figma}`
+        `comments ${s.sources.comment}, attachments ${s.sources.attachment}, Figma ${s.sources.figma}, ` +
+        `observed ${s.sources.observed}`
     const filters = [
         filterBox('kind', 'check', 'checks'),
         filterBox('kind', 'absence', 'absence checks'),
@@ -160,7 +167,7 @@ export function renderInventoryHtml(inventory: Inventory): string {
 <h1>${escapeHtml(inventory.card)} — requirement inventory (${escapeHtml(inventory.target)})</h1>
 <div class="summary">${summary}</div>
 <div class="controls"><input id="q" type="search" placeholder="Search requirements…"> ${filters}</div>
-<table><thead><tr><th>Id</th><th>Kind</th><th>Requirement</th><th>Source</th><th>Category</th></tr></thead>
+<table><thead><tr><th>Id</th><th>Title</th><th>Kind</th><th>Requirement</th><th>Source</th><th>Category</th></tr></thead>
 <tbody>
 ${rows}
 </tbody></table>

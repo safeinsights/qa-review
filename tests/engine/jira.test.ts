@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
+    attachmentsLine,
     buildCommentAdf,
     createIssue,
     downloadAttachment,
@@ -461,5 +462,22 @@ describe('issue creation endpoints', () => {
             inwardIssue: { key: 'OTTER-901' },
             outwardIssue: { key: 'OTTER-617' },
         })
+    })
+})
+
+describe('attachmentsLine', () => {
+    it('lists each uploaded file as a link on one line', () => {
+        expect(
+            attachmentsLine([
+                { filename: 'OTTER-1-inventory.html', url: 'https://x/a/1' },
+                { filename: 'OTTER-1-results.json', url: 'https://x/a/2' },
+            ])
+        ).toBe(
+            '**Attachments:** [OTTER-1-inventory.html](https://x/a/1) · [OTTER-1-results.json](https://x/a/2)'
+        )
+    })
+
+    it('is empty with nothing to list', () => {
+        expect(attachmentsLine([])).toBe('')
     })
 })

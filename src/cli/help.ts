@@ -189,12 +189,13 @@ export const COMMANDS = [
     },
     {
         name: 'jira-comment',
-        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png] [--mention <accountId>]',
+        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png] [--attach a.html,b.json] [--mention <accountId>]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',
         details:
             'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image ' +
             'inline, {expand:Title}…{expand} for a collapsed block, and {{mention}} (with ' +
-            '--mention <accountId>) to @-mention someone so Jira notifies them.',
+            '--mention <accountId>) to @-mention someone so Jira notifies them. --attach uploads ' +
+            'other files and appends an "Attachments:" line linking them.',
     },
     {
         name: 'jira-delete-comment',
@@ -229,7 +230,8 @@ export const COMMANDS = [
         usage: 'qar followup-advice --input <path.json>',
         summary: 'Recommend how to route validation FAILs: send back, one card, or multiple cards.',
         details:
-            'Input is {"fails":[{"id","severity":"blocker|major|minor","area"}]}. Any blocker → ' +
+            'Input is the results file from results-check (FAIL entries are used), or ' +
+            '{"fails":[{"id","severity":"blocker|major|minor","area"}]}. Any blocker → ' +
             'send-back; ≤3 FAILs or one area → one-card; otherwise multiple-cards.',
     },
     {
@@ -237,10 +239,28 @@ export const COMMANDS = [
         usage: 'qar inventory-render --input <path.json> [--output <path.html>]',
         summary: 'Render a validation requirement inventory as a self-contained HTML page.',
         details:
-            'Input is {"card","target","lines":[{"id","kind":"check|absence|context","text",' +
-            '"source":{"type":"card|comment|attachment|figma","ref","url?","page?","frame?",' +
+            'Input is {"card","target","lines":[{"id","title","kind":"check|absence|context","text",' +
+            '"source":{"type":"card|comment|attachment|figma|observed","ref","url?","page?","frame?",' +
             '"category?"},"conflictWith?"}]}. Default output is the input path with .html. ' +
             'Prints {"output","summary"}.',
+    },
+    {
+        name: 'results-check',
+        usage: 'qar results-check --inventory <path.json> --results <path.json>',
+        summary: 'Gate a validation report: every inventory line has one evidenced result.',
+        details:
+            'Results are {"results":[{"id","result":"PASS|FAIL|CONFLICT|UNCLEAR|NOT TESTED",' +
+            '"evidence","severity?","area?","approvedBy?","decision?"}]}. FAIL needs severity and area; ' +
+            'NOT TESTED needs approvedBy; a line with source type "observed" can only be a FAIL. ' +
+            'Fails listing every gap; prints {"ok","counts"} when clean.',
+    },
+    {
+        name: 'clock',
+        usage: 'qar clock --file <path.json> (--mark <phase> | --report)',
+        summary: 'Record validation phase times and print the durations for the report.',
+        details:
+            '--mark appends a timestamp named by the phase it ends (start, inventory, approved, ' +
+            'tested, posted). --report prints "Total 1 h 12 min · inventory 14 min · …".',
     },
 ] as const satisfies readonly CommandHelp[]
 

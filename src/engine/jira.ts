@@ -282,6 +282,24 @@ export async function uploadAttachment(
     return id
 }
 
+export interface UploadedFile {
+    filename: string
+    url: string
+}
+
+// The line appended to a comment body for non-image attachments (the inventory
+// page, the results JSON), so a reader can find the files the verdict rests on.
+export function attachmentsLine(files: UploadedFile[]): string {
+    if (files.length === 0) return ''
+    const links = files.map(f => `[${f.filename}](${f.url})`).join(' · ')
+    return `**Attachments:** ${links}`
+}
+
+// Where a browser with a Jira session can open an uploaded attachment.
+export function attachmentUrl(config: JiraConfig, attachmentId: string): string {
+    return `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`
+}
+
 // Resolves an attachment's Media Services UUID from the content endpoint's redirect.
 export async function resolveMediaId(config: JiraConfig, attachmentId: string): Promise<string> {
     const response = await jiraFetch(

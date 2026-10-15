@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
     addCommentAdf,
+    attachmentsLine,
+    attachmentUrl,
     buildCommentAdf,
     type CommentSegment,
     deleteComment,
@@ -51,9 +53,11 @@ function splitList(value: string | undefined): string[] {
         .filter(Boolean)
 }
 
-// `qar jira-comment --issue <KEY> --body-file <path> [--images a.png,b.png]`
+// `qar jira-comment --issue <KEY> --body-file <path> [--images a.png,b.png] [--attach a.html,b.json]`
 //
-// Posts ONE comment whose body embeds the given screenshots inline. Jira Cloud can
+// Posts ONE comment whose body embeds the given screenshots inline. `--attach`
+// uploads other files (the inventory page, the results JSON) and appends a line
+// linking them, so the evidence a verdict rests on travels with the card. Jira Cloud can
 // only render an embedded image as an ADF media node keyed by a Media Services
 // UUID, so each image is uploaded, its UUID resolved from the attachment-content
 // redirect, and the comment posted as ADF. Prints {"id","url"} as JSON.
@@ -68,8 +72,9 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
 
     const config = jiraConfig(vars)
     const images = splitList(opts.images)
-    for (const image of images) {
-        if (!fs.existsSync(image)) throw new Error(`Image not found: ${image}`)
+    const attachments = splitList(opts.attach)
+    for (const file of [...images, ...attachments]) {
+        if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`)
     }
 
     const mediaIds: string[] = []
@@ -78,7 +83,15 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
         mediaIds.push(await resolveMediaId(config, attachmentId))
     }
 
-    const adf = buildCommentAdf(splitBodyIntoSegments(body, mediaIds), {
+    const uploaded = []
+    for (const file of attachments) {
+        const id = await uploadAttachment(config, issue, file)
+        uploaded.push({ filename: path.basename(file), url: attachmentUrl(config, id) })
+    }
+    const line = attachmentsLine(uploaded)
+    const fullBody = line ? `${body.trimEnd()}\n\n${line}\n` : body
+
+    const adf = buildCommentAdf(splitBodyIntoSegments(fullBody, mediaIds), {
         mention: opts.mention || undefined,
     })
     const created = await addCommentAdf(config, issue, adf)

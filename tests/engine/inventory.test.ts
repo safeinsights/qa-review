@@ -7,6 +7,7 @@ const inventory: Inventory = {
     lines: [
         {
             id: 'RL.SubmittedBy.3',
+            title: 'Most recent submitter',
             kind: 'check',
             text: 'Show the <most recent> submitter',
             source: { type: 'card', ref: 'description' },
@@ -55,7 +56,7 @@ describe('summarize', () => {
             absences: 1,
             context: 1,
             conflicts: 1,
-            sources: { card: 1, comment: 1, attachment: 0, figma: 3 },
+            sources: { card: 1, comment: 1, attachment: 0, figma: 3, observed: 0 },
         })
     })
 })
@@ -78,6 +79,10 @@ describe('renderInventoryHtml', () => {
     it('escapes requirement text', () => {
         expect(html).toContain('Show the &lt;most recent&gt; submitter')
         expect(html).not.toContain('<most recent>')
+    })
+
+    it('shows the title beside the id', () => {
+        expect(html).toContain('Most recent submitter')
     })
 
     it('renders one row per line with its id, kind, source and category', () => {

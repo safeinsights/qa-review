@@ -1,6 +1,7 @@
 import { booleansFor, parseArgs } from '@/cli/args'
 import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
+import { clockCommand } from '@/cli/commands/clock'
 import { codegenCommand } from '@/cli/commands/codegen'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
 import { followupAdviceCommand } from '@/cli/commands/followup-advice'
@@ -20,6 +21,7 @@ import { migrateCommand } from '@/cli/commands/migrate'
 import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import { requestAccessCommand } from '@/cli/commands/request-access'
+import { resultsCheckCommand } from '@/cli/commands/results-check'
 import { runCommand } from '@/cli/commands/run'
 import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
@@ -119,6 +121,10 @@ async function main() {
             return followupAdviceCommand(opts)
         case 'inventory-render':
             return inventoryRenderCommand(opts)
+        case 'results-check':
+            return resultsCheckCommand(opts)
+        case 'clock':
+            return clockCommand(opts)
         default:
             console.error(unknownCommandMessage(subcommand))
             process.exit(1)
