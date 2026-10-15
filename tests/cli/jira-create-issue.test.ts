@@ -155,7 +155,40 @@ describe('jira-create-issue', () => {
         const { dir, body } = tmpBody()
         await expect(
             jiraCreateIssueCommand({ project: 'OTTER', summary: 's', 'body-file': body }, vars)
-        ).rejects.toThrow(/OTTER-902.*description/)
+        ).rejects.toThrow(/Created OTTER-902, but setting the description failed/)
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('names the created key and the link step when linking fails', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (url: string, init: RequestInit = {}) => {
+                if (url.includes('/createmeta/')) {
+                    return new Response(JSON.stringify({ issueTypes: [{ name: 'Bug' }] }), {
+                        status: 200,
+                    })
+                }
+                if (url.endsWith('/issueLinkType')) {
+                    return new Response(JSON.stringify({ issueLinkTypes: [{ name: 'Relates' }] }), {
+                        status: 200,
+                    })
+                }
+                if (url.endsWith('/rest/api/3/issue') && init.method === 'POST') {
+                    return new Response(JSON.stringify({ id: '1', key: 'OTTER-901' }), {
+                        status: 201,
+                    })
+                }
+                if (url.endsWith('/issueLink')) return new Response('boom', { status: 500 })
+                return new Response(null, { status: 204 })
+            })
+        )
+        const { dir, body } = tmpBody()
+        await expect(
+            jiraCreateIssueCommand(
+                { project: 'OTTER', summary: 's', 'body-file': body, link: 'OTTER-617' },
+                vars
+            )
+        ).rejects.toThrow(/Created OTTER-901, but linking to OTTER-617 failed/)
         fs.rmSync(dir, { recursive: true, force: true })
     })
 

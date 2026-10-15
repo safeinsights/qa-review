@@ -87,7 +87,9 @@ export async function jiraCreateIssueCommand(
             await step('resolving an image id', () => resolveMediaId(config, attachmentId))
         )
     }
-    const adf = buildCommentAdf(splitBodyIntoSegments(body, mediaIds))
+    const adf = await step('building the description', async () =>
+        buildCommentAdf(splitBodyIntoSegments(body, mediaIds))
+    )
     await step('setting the description', () => updateDescriptionAdf(config, created.key, adf))
     if (link) {
         await step(`linking to ${link}`, () =>
