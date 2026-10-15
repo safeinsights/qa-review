@@ -104,11 +104,14 @@ and its source. Nothing is tested until the user approves this list.
    must be absent), `context` for notes that are not tested. The JSON is the
    source of truth; do not keep a parallel `.md`.
 7. **Render and show it**: `qar inventory-render --input .tmp/<CARD>-inventory.json`
-   prints `{"output","summary"}`. Open `output` in the session browser as a NEW
-   tab (`new_page` with `file://<output>`), so it appears in the Validation pane,
-   then `select_page` back to the app tab. In chat, give the `summary` (lines,
-   checks, absence checks, conflicts, sources) and wait for approval. This
-   replaces "state the acceptance criteria and plan".
+   prints `{"output","summary"}`. Show `output` in the session browser by
+   navigating the EXISTING app tab to it: `navigate_page` with `file://<output>`
+   (the one `qar session` opened — the Validation pane streams only that tab,
+   so a `new_page` tab is invisible to the user; do not open one). Nothing is
+   lost: you have not logged in yet, and `qar session-login` navigates the tab
+   back to the app after approval. In chat, give the `summary` (lines, checks,
+   absence checks, conflicts, sources) and wait for approval. This replaces
+   "state the acceptance criteria and plan".
 
 ### Phase 2: Test
 Infer the role from the inventory (ask if unclear). `qar session-login --role <role>`.
