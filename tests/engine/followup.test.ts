@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { recommendFollowUp } from '@/engine/followup'
+import { recommendFollowUp, type Severity } from '@/engine/followup'
 
 describe('recommendFollowUp', () => {
     it('sends back when any FAIL is a blocker', () => {
@@ -37,10 +37,26 @@ describe('recommendFollowUp', () => {
             { id: '8', severity: 'minor', area: 'link component' },
         ])
         expect(r.option).toBe('multiple-cards')
-        expect(r.reason).toMatch(/5 FAILs.*4 areas|5 FAILs.*5 areas/)
+        expect(r.reason).toMatch(/5 FAILs across 5 areas/)
+    })
+
+    it('recommends multiple cards at the FEW boundary when four FAILs span four areas', () => {
+        const fails = ['a', 'b', 'c', 'd'].map(id => ({ id, severity: 'major' as const, area: id }))
+        expect(recommendFollowUp(fails).option).toBe('multiple-cards')
+    })
+
+    it('uses singular FAIL and area in the reason for one of each', () => {
+        const r = recommendFollowUp([{ id: 'a', severity: 'minor', area: 'copy' }])
+        expect(r.reason).toMatch(/^1 FAIL in 1 area,/)
     })
 
     it('rejects an empty list', () => {
         expect(() => recommendFollowUp([])).toThrow('no FAILs')
+    })
+
+    it('rejects an unknown severity instead of treating it as non-blocking', () => {
+        expect(() =>
+            recommendFollowUp([{ id: 'x', severity: 'Blocker' as Severity, area: 'a' }])
+        ).toThrow(/unknown severity "Blocker" on x/)
     })
 })
