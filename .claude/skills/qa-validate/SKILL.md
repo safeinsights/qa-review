@@ -437,8 +437,9 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    <!-- Omit the section AND --mention when no result carries "decision". At most 3 items; put the rest in {expand:More decisions}…{expand}. -->
    Reply on this card with the item number and your answer.
 
-   **1. <title>.** <One question the PM can answer with yes or no.>
-   Today: <what the app does>. I recommend <answer>, because <one reason>.
+   **1. <The question, as a full sentence the PM can answer with yes or no.>** The card says <what the card requires>. The Figma note on <frame> says <what Figma requires>. The app <what it does now>, as <the card / Figma> says. I recommend <answer>: <one reason>.
+
+   **2. <Question for an UNCLEAR line.>** The card says "<sentence>". This can mean <reading one> or <reading two>. The app does <reading>. I recommend <reading>: <one reason>.
 
    ### Unclear requirements
    <!-- Every CONFLICT and UNCLEAR line, one per line, for information. Omit when empty. -->
@@ -466,11 +467,12 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      title from the inventory is the name of the line everywhere in the report.
    - **One item per line.** Each decision, FAIL and PASS row starts on its own line;
      a blank line separates decisions. Never join items into one paragraph.
-   - **A decision is a question with a recommendation.** The PM has no form to fill
-     in: do not offer "A / B" labels, and do not spell out what each answer
-     leads to — the PM knows. Ask one question, say what the app does today,
-     and recommend an answer with a reason. Nothing else under the item. Full
-     quotes of the card and the Figma note do not belong in the question.
+   - **A decision is a short paragraph of full sentences, in every voice.** The
+     PM reads it cold, so it must say in plain words what the card asks for, what
+     Figma asks for, what the app does now, and what you recommend with one
+     reason. No labels ("Today:", "Card:"), no fragments, no "A / B" options, no
+     ids, no pixel values, and no account of what each answer would lead to.
+     Four sentences is the norm; five is the limit.
    - **"Decisions needed" is short and "Unclear requirements" is complete.** Only
      results carrying `decision` (see Phase 3) go in the first; every CONFLICT and
      UNCLEAR line goes in the second, as one line each, so the PM sees every
