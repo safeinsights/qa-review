@@ -45,6 +45,12 @@ describe('formatClock', () => {
         )
     })
 
+    it('stops at the posted mark even when now is later', () => {
+        expect(formatClock(marks, T0 + min(600))).toBe(
+            'Total 1 h 18 min · inventory 14 min · approved 6 min · tested 51 min · posted 7 min'
+        )
+    })
+
     it('needs at least one mark', () => {
         expect(() => formatClock([])).toThrow('no marks')
     })

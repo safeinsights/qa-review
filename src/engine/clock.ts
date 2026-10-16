@@ -19,13 +19,17 @@ export function formatDuration(ms: number): string {
     return `${Math.floor(minutes / 60)} h ${minutes % 60} min`
 }
 
+export const END_PHASE = 'posted'
+
 // Each phase is named by the mark that ENDS it, so `start → inventory` reads as
 // "inventory 14 min". When the last mark is not the end of the run (the report is
-// written before the `posted` mark), the open phase runs to `now`.
+// written before the `posted` mark), the open phase runs to `now`; after `posted`
+// the clock is stopped, so a report quoted a day later still shows the run.
 export function formatClock(marks: Mark[], now?: number): string {
     if (marks.length === 0) throw new Error('clock: no marks')
     const times = marks.map(m => ({ phase: m.phase, at: Date.parse(m.at) }))
-    if (now !== undefined && now > times[times.length - 1].at) {
+    const last = times[times.length - 1]
+    if (now !== undefined && now > last.at && last.phase !== END_PHASE) {
         times.push({ phase: '(now)', at: now })
     }
     const parts = times.slice(1).map((t, i) => `${t.phase} ${formatDuration(t.at - times[i].at)}`)
