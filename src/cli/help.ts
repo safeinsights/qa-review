@@ -189,10 +189,14 @@ export const COMMANDS = [
     },
     {
         name: 'jira-comment',
-        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]',
+        usage: 'qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png] [--attach a.html,b.json] [--mention <accountId>]',
         summary: 'Post ONE Jira comment with screenshots embedded inline.',
         details:
-            'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image inline.',
+            'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image ' +
+            'inline, {expand:Title}…{expand} for a collapsed block, and {{mention}} (with ' +
+            '--mention <accountId>) to @-mention someone so Jira notifies them. --attach uploads ' +
+            'other files and appends an "Attachments:" line linking them. The last line is ' +
+            'always "Posted by qa-review <version>" (git describe of this checkout).',
     },
     {
         name: 'jira-delete-comment',
@@ -200,10 +204,64 @@ export const COMMANDS = [
         summary: 'Delete Jira comments (404 = already gone = success).',
     },
     {
+        name: 'jira-attachments',
+        usage: 'qar jira-attachments --issue <KEY> [--download] [--dir <path>]',
+        summary: "List a card's attachments; --download saves the text ones under .tmp/.",
+        details:
+            'jira_get_issue returns attachment metadata at best, never content. Text ' +
+            'attachments (.md/.txt/.csv, or text/* mime) are saved; images are listed only.',
+    },
+    {
+        name: 'jira-create-issue',
+        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates]',
+        summary:
+            'Create a follow-up card with an ADF description, inline screenshots, and a link to its parent.',
+        details:
+            'Checks the issue type and link type exist before creating anything. Body is ' +
+            'Markdown with {{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
+    },
+    {
         name: 'verdict-posted',
         usage: 'qar verdict-posted --issue <KEY> --result <validated|rejected>',
         summary: 'Tell the GUI a verdict was posted, so it hides the Verdict button.',
         details: 'Call right after posting a verdict comment + transition to Jira.',
+    },
+    {
+        name: 'followup-advice',
+        usage: 'qar followup-advice --input <path.json>',
+        summary: 'Recommend how to route validation FAILs: send back, one card, or multiple cards.',
+        details:
+            'Input is the results file from results-check (FAIL entries are used), or ' +
+            '{"fails":[{"id","severity":"blocker|major|minor","area"}]}. Any blocker → ' +
+            'send-back; ≤3 FAILs or one area → one-card; otherwise multiple-cards.',
+    },
+    {
+        name: 'inventory-render',
+        usage: 'qar inventory-render --input <path.json> [--output <path.html>]',
+        summary: 'Render a validation requirement inventory as a self-contained HTML page.',
+        details:
+            'Input is {"card","target","lines":[{"id","title","kind":"check|absence|context","text",' +
+            '"source":{"type":"card|comment|attachment|figma|observed","ref","url?","page?","frame?",' +
+            '"category?"},"conflictWith?"}]}. Default output is the input path with .html. ' +
+            'Prints {"output","summary"}.',
+    },
+    {
+        name: 'results-check',
+        usage: 'qar results-check --inventory <path.json> --results <path.json>',
+        summary: 'Gate a validation report: every inventory line has one evidenced result.',
+        details:
+            'Results are {"results":[{"id","result":"PASS|FAIL|CONFLICT|UNCLEAR|NOT TESTED",' +
+            '"evidence","severity?","area?","approvedBy?","decision?"}]}. FAIL needs severity and area; ' +
+            'NOT TESTED needs approvedBy; a line with source type "observed" can only be a FAIL. ' +
+            'Fails listing every gap; prints {"ok","counts"} when clean.',
+    },
+    {
+        name: 'clock',
+        usage: 'qar clock --file <path.json> (--mark <phase> | --report)',
+        summary: 'Record validation phase times and print the durations for the report.',
+        details:
+            '--mark appends a timestamp named by the phase it ends (start, inventory, approved, ' +
+            'tested, posted). --report prints "Total 1 h 12 min · inventory 14 min · …".',
     },
 ] as const satisfies readonly CommandHelp[]
 

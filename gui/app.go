@@ -443,17 +443,24 @@ var authoringAllowedTools = []string{
 // Same file/shell surface as authoring.
 //
 // The figma server is user-level rather than per-session (it is not in the
-// --mcp-config we write), but --allowedTools is matched by tool NAME, so listing the
-// prefix here pre-approves it just the same. Its tools are read-only in practice for
-// qa-validate — the skill uses get_screenshot/get_variable_defs/get_metadata — and
-// the prefix covers the whole server, so a WRITE tool (use_figma, create_new_file)
-// would also be pre-approved. That is acceptable only because the skill never calls
-// one; if that changes, list the read tools individually instead.
+// --mcp-config we write), but --allowedTools is matched by tool NAME, so listing
+// names here pre-approves them just the same.
 var validationAllowedTools = []string{
 	"mcp__chrome-devtools",
 	"mcp__jira-atlassian",
-	"mcp__plugin_figma_figma",
+	// use_figma is deliberately NOT listed: the PreToolUse hook (figma-readonly.mjs) returns
+	// an explicit allow for the fixed script, so pre-approving adds nothing. If the hook
+	// cannot run (bad QAR_NODE, missing node, syntax error) Claude Code treats the non-0/non-2
+	// exit as non-blocking, and an allowlist entry would let arbitrary Plugin API code
+	// through. Without it a broken hook degrades to a permission prompt. The server's other
+	// write tools are likewise NOT pre-approved.
+	"mcp__plugin_figma_figma__whoami",
+	"mcp__plugin_figma_figma__get_screenshot",
+	"mcp__plugin_figma_figma__get_metadata",
+	"mcp__plugin_figma_figma__get_variable_defs",
 	"Bash(gh:*)",
+	// The skill reads the deployed release from the app's /about page with curl.
+	"Bash(curl:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
 	"Bash(pnpm typecheck:*)",
@@ -2070,6 +2077,23 @@ func runToolFull(name string, args ...string) (string, error) {
 	return trimmed, err
 }
 
+// runToolFullTimeout is runToolFull with a deadline, so a hung child cannot block the caller.
+func runToolFullTimeout(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, guiResolve(name), args...)
+	cmd.Env = withGuiPath()
+	out, err := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			err = fmt.Errorf("%s timed out after %s", name, timeout)
+		}
+		logDiag("tool", "FAIL %s %s: %v — %s", name, strings.Join(args, " "), err, firstLines(trimmed, 3))
+	}
+	return trimmed, err
+}
+
 // firstLines flattens the first n non-empty lines of command output onto one line,
 // so a multi-line failure stays one greppable log entry.
 func firstLines(s string, n int) string {
@@ -2532,7 +2556,13 @@ func (a *App) RunDoctor() []DoctorCheck {
 	// so one shell-out answers both "is a figma server set up" and "is it connected".
 	if toolOnPath("claude") {
 		out, err := runToolFull("claude", "mcp", "list")
-		checks = append(checks, figmaMcpCheck(out, err))
+		mcp := figmaMcpCheck(out, err)
+		checks = append(checks, mcp)
+		// The seat probe needs a connected figma server; skip it (rather than add a
+		// second red row with the same cause) when the MCP row already failed.
+		if mcp.OK {
+			checks = append(checks, figmaSeatRow())
+		}
 	}
 
 	return checks
@@ -2759,6 +2789,166 @@ func figmaMcpCheck(out string, err error) DoctorCheck {
 		Hint:   "Start a `claude` session and run `/mcp` to reconnect (or re-authenticate) the figma server.",
 		DocURL: docURL,
 	}
+}
+
+// figmaPlanName is the Figma plan that owns the SI design files. A seat on any
+// OTHER plan says nothing about whether those files can be read.
+const figmaPlanName = "SafeInsights"
+
+const seatCacheTTL = 24 * time.Hour
+
+type whoamiPlan struct {
+	Name string `json:"name"`
+	Seat string `json:"seat"`
+}
+
+type whoamiPayload struct {
+	Whoami struct {
+		Email string       `json:"email"`
+		Plans []whoamiPlan `json:"plans"`
+	} `json:"whoami"`
+}
+
+// findWhoami digs the whoami tool result out of `claude -p --output-format
+// stream-json` output. The payload arrives as a JSON string INSIDE a tool_result
+// block, so every string value in every line is tried as a document with a
+// top-level "whoami" key — that is more robust than pinning the stream's exact shape.
+func findWhoami(out string) (whoamiPayload, bool) {
+	for _, ln := range strings.Split(out, "\n") {
+		var any interface{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(ln)), &any); err != nil {
+			continue
+		}
+		if p, ok := whoamiInValue(any); ok {
+			return p, true
+		}
+	}
+	return whoamiPayload{}, false
+}
+
+func whoamiInValue(v interface{}) (whoamiPayload, bool) {
+	switch t := v.(type) {
+	case string:
+		var p whoamiPayload
+		if err := json.Unmarshal([]byte(t), &p); err == nil && (p.Whoami.Email != "" || len(p.Whoami.Plans) > 0) {
+			return p, true
+		}
+	case map[string]interface{}:
+		for _, child := range t {
+			if p, ok := whoamiInValue(child); ok {
+				return p, true
+			}
+		}
+	case []interface{}:
+		for _, child := range t {
+			if p, ok := whoamiInValue(child); ok {
+				return p, true
+			}
+		}
+	}
+	return whoamiPayload{}, false
+}
+
+// seatRank orders seats by what the MCP lets them do: a guest + member pair on the
+// same plan reports twice, and the BEST seat is the one that applies.
+func seatRank(seat string) int {
+	switch strings.ToLower(seat) {
+	case "full":
+		return 3
+	case "dev":
+		return 2
+	case "collab":
+		return 1
+	case "view":
+		return 0
+	}
+	return -1
+}
+
+func figmaSeatCheck(out string, err error) DoctorCheck {
+	const name = "Figma seat"
+	const docURL = "https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/"
+	if err != nil {
+		return DoctorCheck{Name: name, OK: false, Detail: "`claude -p` whoami probe failed: " + err.Error() + " — " + firstLines(out, 3),
+			Hint: "Start a `claude` session and run `/mcp` to check the figma server, then re-run the doctor."}
+	}
+	payload, ok := findWhoami(out)
+	if !ok {
+		return DoctorCheck{Name: name, OK: false, Detail: "no whoami result in probe output: " + firstLines(out, 2),
+			Hint: "Start a `claude` session and run `/mcp` to reconnect the figma server.", DocURL: docURL}
+	}
+	best := ""
+	for _, p := range payload.Whoami.Plans {
+		if p.Name == figmaPlanName && seatRank(p.Seat) > seatRank(best) {
+			best = p.Seat
+		}
+	}
+	email := payload.Whoami.Email
+	if best == "" {
+		return DoctorCheck{Name: name, OK: false,
+			Detail: "signed in as " + email + ", which has no seat on the " + figmaPlanName + " plan",
+			Hint:   "Sign in to Figma with your " + figmaPlanName + " account, then run `/mcp` in a claude session to re-authenticate.",
+			DocURL: docURL}
+	}
+	detail := figmaPlanName + " — " + best + " seat (" + email + ")"
+	if seatRank(best) >= seatRank("dev") {
+		return DoctorCheck{Name: name, OK: true, Detail: detail}
+	}
+	return DoctorCheck{Name: name, OK: false, Detail: detail,
+		Hint:   "View and Collab seats get 6 Figma MCP calls per month — not enough to read a design. Ask a " + figmaPlanName + " Figma admin for a Dev seat.",
+		DocURL: docURL}
+}
+
+type seatCache struct {
+	Out       string    `json:"out"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
+func loadSeatCache(path string, now time.Time) (string, time.Time, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	var c seatCache
+	if err := json.Unmarshal(data, &c); err != nil || c.Out == "" {
+		return "", time.Time{}, false
+	}
+	if now.Sub(c.CheckedAt) > seatCacheTTL || c.CheckedAt.After(now) {
+		return "", time.Time{}, false
+	}
+	return c.Out, c.CheckedAt, true
+}
+
+func saveSeatCache(path, out string, now time.Time) error {
+	data, err := json.Marshal(seatCache{Out: out, CheckedAt: now})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+// figmaSeatRow runs the (cached) whoami probe. Only a successful probe is cached:
+// caching a failure would hide a fix for a day.
+func figmaSeatRow() DoctorCheck {
+	now := time.Now()
+	if out, at, ok := loadSeatCache(figmaSeatCachePath(), now); ok {
+		check := figmaSeatCheck(out, nil)
+		check.Detail += " — checked " + at.Local().Format("Jan 2 15:04")
+		return check
+	}
+	out, err := runToolFullTimeout(60*time.Second, "claude", "-p", "Call the whoami tool and stop.",
+		"--allowedTools", "mcp__plugin_figma_figma__whoami",
+		"--output-format", "stream-json", "--verbose")
+	check := figmaSeatCheck(out, err)
+	if check.OK {
+		if saveErr := saveSeatCache(figmaSeatCachePath(), out, now); saveErr != nil {
+			logDiag("tool", "figma seat cache write failed: %v", saveErr)
+		}
+	}
+	return check
 }
 
 const jiraTokenDocURL = "https://id.atlassian.com/manage-profile/security/api-tokens"

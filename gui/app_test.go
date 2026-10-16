@@ -597,13 +597,19 @@ func TestPrCIStatusNoPR(t *testing.T) {
 }
 
 func TestComposeValidationPrompt(t *testing.T) {
-	t.Run("appends user instructions as a final paragraph", func(t *testing.T) {
-		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on the mobile layout.")
+	// The prompt is typed into the PTY as one message and claude submits on a
+	// newline, so the instructions are appended on the SAME line — and a user who
+	// typed several lines gets them flattened rather than split into messages.
+	t.Run("appends user instructions on the same line", func(t *testing.T) {
+		p := composeValidationPrompt("qa", "", "OTTER-1", "Focus on\nthe mobile layout.")
 		if !strings.Contains(p, "/qa-validate") || !strings.Contains(p, "OTTER-1") {
 			t.Fatalf("base prompt missing:\n%s", p)
 		}
-		if !strings.Contains(p, "\n\nAdditional instructions from the user:\nFocus on the mobile layout.") {
-			t.Fatalf("instructions not appended as a paragraph:\n%s", p)
+		if !strings.Contains(p, " Additional instructions from the user: Focus on the mobile layout.") {
+			t.Fatalf("instructions not appended inline:\n%s", p)
+		}
+		if strings.Contains(p, "\n") {
+			t.Fatalf("composed prompt contains a newline:\n%s", p)
 		}
 	})
 
@@ -1424,5 +1430,79 @@ func TestCommitsBehindQuietWhenUnknown(t *testing.T) {
 	t.Setenv("QAR_REPO_DIR", noUpstream)
 	if got := a.CommitsBehind(""); got != 0 {
 		t.Fatalf("CommitsBehind() = %d with no upstream, want 0", got)
+	}
+}
+
+// The seat row proves the signed-in Figma account can actually use the MCP: View
+// and Collab seats are capped at 6 calls a month, which reads as "Figma is broken"
+// from inside a session. It parses the whoami tool result out of a stream-json run.
+func TestFigmaSeatCheck(t *testing.T) {
+	whoami := func(plans string) string {
+		payload := `{"whoami":{"handle":"N","email":"n@rice.edu","plans":[` + plans + `]}}`
+		esc, _ := json.Marshal(payload)
+		return `{"type":"system","subtype":"init"}` + "\n" +
+			`{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":` + string(esc) + `}]}]}}` + "\n" +
+			`{"type":"result","result":"done"}`
+	}
+	plan := func(name, seat string) string {
+		return `{"name":"` + name + `","seat":"` + seat + `","role":"member"}`
+	}
+	for _, tc := range []struct {
+		name, out, wantDetail, wantHint string
+		err                             error
+		wantOK                          bool
+	}{
+		{name: "full seat", out: whoami(plan("SafeInsights", "Full")), wantOK: true, wantDetail: "Full seat (n@rice.edu)"},
+		{name: "dev seat", out: whoami(plan("SafeInsights", "Dev")), wantOK: true, wantDetail: "Dev seat"},
+		{name: "view seat", out: whoami(plan("SafeInsights", "View")), wantOK: false, wantDetail: "View seat", wantHint: "6 Figma MCP calls"},
+		{name: "collab seat", out: whoami(plan("SafeInsights", "Collab")), wantOK: false, wantDetail: "Collab seat", wantHint: "Dev seat"},
+		{name: "best of two entries wins", out: whoami(plan("SafeInsights", "View") + "," + plan("SafeInsights", "Dev")), wantOK: true, wantDetail: "Dev seat"},
+		{name: "other plans only", out: whoami(plan("OpenStax", "Full")), wantOK: false, wantDetail: "n@rice.edu", wantHint: "/mcp"},
+		// Real `claude -p` shape: tool_result.content is a bare string, not a text-block array.
+		{name: "real plain-string tool_result", out: `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"{\"whoami\":{\"email\":\"n@rice.edu\",\"plans\":[{\"name\":\"Kinetic\",\"seat\":\"Collab\"},{\"name\":\"SafeInsights\",\"seat\":\"Dev\",\"role\":\"guest\"}]}}"}]}}`, wantOK: true, wantDetail: "Dev seat"},
+		{name: "no tool result", out: `{"type":"result","result":"I cannot"}`, wantOK: false, wantDetail: "no whoami result"},
+		{name: "bad json", out: "not json at all", wantOK: false, wantDetail: "no whoami result"},
+		{name: "claude failed", out: "boom", err: errors.New("exit 1"), wantOK: false, wantDetail: "boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := figmaSeatCheck(tc.out, tc.err)
+			if got.OK != tc.wantOK {
+				t.Fatalf("OK = %v, want %v (detail %q)", got.OK, tc.wantOK, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Errorf("Detail %q does not contain %q", got.Detail, tc.wantDetail)
+			}
+			if tc.wantHint != "" && !strings.Contains(got.Hint, tc.wantHint) {
+				t.Errorf("Hint %q does not contain %q", got.Hint, tc.wantHint)
+			}
+		})
+	}
+}
+
+func TestSeatCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "figma-seat.json")
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	if _, _, ok := loadSeatCache(path, now); ok {
+		t.Fatal("missing file should not load")
+	}
+	if err := saveSeatCache(path, "probe-output", now); err != nil {
+		t.Fatal(err)
+	}
+	out, at, ok := loadSeatCache(path, now.Add(23*time.Hour))
+	if !ok || out != "probe-output" || !at.Equal(now) {
+		t.Fatalf("fresh entry: ok=%v out=%q at=%v", ok, out, at)
+	}
+	if _, _, ok := loadSeatCache(path, now.Add(25*time.Hour)); ok {
+		t.Fatal("entry older than 24h should be ignored")
+	}
+}
+
+func TestFigmaSeatCheckTimeoutFails(t *testing.T) {
+	check := figmaSeatCheck("", errors.New("claude -p timed out after 60s"))
+	if check.OK {
+		t.Fatal("timeout must be a FAIL")
+	}
+	if !strings.Contains(check.Detail, "timed out") {
+		t.Fatalf("detail should mention timeout: %q", check.Detail)
 	}
 }

@@ -49,3 +49,23 @@ func TestPromptTarget(t *testing.T) {
 		t.Fatalf("blank PR should fall back to env: %q", got)
 	}
 }
+
+// A newline INSIDE a template is as bad as a trailing one: claude's TUI treats the
+// text before it as a submitted message, so the session sees only the tail. The
+// validation prompt shipped multi-line once and the session asked for the card it
+// had already been given.
+func TestPromptTemplatesAreSingleLine(t *testing.T) {
+	entries, err := promptFS.ReadDir("prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := promptFS.ReadFile("prompts/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.TrimRight(string(data), "\n"), "\n") {
+			t.Errorf("%s contains a newline inside the prompt", e.Name())
+		}
+	}
+}
