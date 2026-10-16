@@ -190,8 +190,8 @@ first; PASS rows are collapsed. Name lines by their **title**, never by id. Get
 the timing line from `qar clock --file .tmp/<CARD>-clock.json --report` and
 attach the inventory and the results with
 `--attach .tmp/<CARD>-inventory.html,.tmp/<CARD>-inventory.json,.tmp/<CARD>-results.json`.
-Mark `posted` after the comment is up. **During the voice test (see "Voice test" under
-"Posting findings"), post the same report three times, once in each voice.**
+Mark `posted` after the comment is up. Write in the conversational voice (see
+"Voice" under "Posting findings").
 
 ### Phase 5: Route the failures
 Skip when there is no FAIL. Otherwise give each FAIL a severity — **blocker** (a
@@ -434,7 +434,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    <!-- q = results carrying "decision". When q = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
 
    ### Decisions needed from PM
-   <!-- Omit the section AND --mention when no result carries "decision". At most 3 items; put the rest in {expand:More decisions}…{expand}. -->
+   <!-- Omit the section AND --mention when no result carries "decision". Every decision is listed here in full, in order; never collapse any of them into an {expand} block. -->
    Reply on this card with the item number and your answer.
 
    **1. <The question, as a full sentence the PM can answer with yes or no.>** The card says <what the card requires>. The Figma note on <frame> says <what Figma requires>. The app <what it does now>, as <the card / Figma> says. I recommend <answer>: <one reason>.
@@ -459,6 +459,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    {expand}
 
    **Setup:** <state built: studies created, decisions submitted — and that they were deleted.>
+   <!-- qar jira-comment adds the "Attachments:" line and "Posted by qa-review <version>" itself; do not write them. -->
    ```
 
    Rules:
@@ -467,16 +468,24 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      title from the inventory is the name of the line everywhere in the report.
    - **One item per line.** Each decision, FAIL and PASS row starts on its own line;
      a blank line separates decisions. Never join items into one paragraph.
-   - **A decision is a short paragraph of full sentences, in every voice.** The
-     PM reads it cold, so it must say in plain words what the card asks for, what
-     Figma asks for, what the app does now, and what you recommend with one
-     reason. No labels ("Today:", "Card:"), no fragments, no "A / B" options, no
-     ids, no pixel values, and no account of what each answer would lead to.
-     Four sentences is the norm; five is the limit.
-   - **"Decisions needed" is short and "Unclear requirements" is complete.** Only
-     results carrying `decision` (see Phase 3) go in the first; every CONFLICT and
-     UNCLEAR line goes in the second, as one line each, so the PM sees every
-     discrepancy and what was actually built without being asked to rule on it.
+   - **"Decisions needed from PM" is the most important section of the report.**
+     The PM reads it cold, with two minutes. Every decision appears there in
+     full and in order; none is collapsed, cut, or moved to an expand block.
+   - **A decision is a short paragraph of full sentences.** It carries every
+     fact the PM needs to answer, and nothing else: the question, what the card
+     asks for, what Figma asks for, what the app does now, and your
+     recommendation with one reason. Add a sentence only when the PM cannot
+     answer without it — which other lines the same answer settles, or who the
+     behaviour affects. Leave out how you tested, ids, pixel values, screenshot
+     paths, severity, and what each answer would lead to. No labels ("Today:",
+     "Card:"), no fragments, no "A / B" options. Most decisions take four or
+     five sentences; a longer one is a sign it holds a detail the PM does not
+     need.
+   - **"Decisions needed" holds only real questions; "Unclear requirements" is
+     complete.** Only results carrying `decision` (see Phase 3) go in the first;
+     every CONFLICT and UNCLEAR line goes in the second, as one line each, so
+     the PM sees every discrepancy and what was actually built without being
+     asked to rule on it.
    - There is no "Also observed" section. See Phase 3: an observation is a FAIL
      line or it is nothing.
    - Pass `--mention <reporter accountId>` (from `jira_get_issue` → `reporter.account_id`)
@@ -497,35 +506,15 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    If you post something wrong, remove it yourself rather than leaving it for the
    user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
 
-   **Voice test (temporary).** Readers disagree about the tone they want, so for
-   now every validation posts the SAME report three times, once per voice, so
-   the team can compare real examples and choose. Each of the three comments is a
-   complete, true representation: the same sections, the same images (uploaded
-   again for each post), and the same `--mention` — only the wording changes.
-   Write the three bodies to `.tmp/<CARD>-verdict-ste.md`,
-   `.tmp/<CARD>-verdict-conversational.md` and `.tmp/<CARD>-verdict-terse.md`, and
-   post them in that order. Put a tag on the line directly after the heading:
-   `_(voice: STE)_`, `_(voice: conversational)_`, `_(voice: terse)_`. Run the
-   transition and `qar verdict-posted` once, after the third post. Give the user
-   all three URLs. Once a voice is chosen, delete this block and keep one
-   definition.
-
-   - **STE** (ASD-STE100 Simplified Technical English): sentences of 20 words or
-     fewer; one idea per sentence; active voice; one term for one thing, no
-     synonyms; condition before instruction. Example FAIL line: *"The Reviewed by
-     cell shows the proposal reviewer. The annotation says: reset to 'Not
-     reviewed' at the code stage. Result: FAIL."*
-   - **Conversational**: first person, full sentences, says what you tried and why
-     it matters, one short paragraph per finding. Example: *"Reviewed by still
-     shows Malar after the study moved to code review. The Figma note on that
-     column says it should reset to 'Not reviewed', so I'm marking this a FAIL —
-     it affects 53 of the 102 rows on the Openstax dashboard."*
-   - **Terse**: fragments, no articles, one line per finding in the form
-     `title — result — evidence`. Example: *"Reviewed by resets at new stage — FAIL
-     — 53/102 rows show prior-stage reviewer; Figma: reset at new stage."*
-
-   The 5-line summary block keeps its exact format in every voice; the voice
-   applies to everything below it.
+   **Voice: conversational.** First person, full sentences, says what you tried
+   and why it matters, one short paragraph per finding. Example FAIL line:
+   *"**Reviewed by resets at the code stage — FAIL (major).** Reviewed by still
+   shows Malar after the study moved to code review. The Figma note on that
+   column says it should reset to 'Not reviewed', so I'm marking this a FAIL —
+   it affects 53 of the 102 rows on the Openstax dashboard."* The 5-line
+   summary block keeps its exact format; the voice applies to everything below
+   it. Keep the template's line shapes (bold title and result first) and let
+   the voice set the wording inside them.
 
    **Auth:** `qar jira-comment` reads the Jira site/email/token from the GUI's saved
    settings (Settings → Jira), so it normally needs no env vars. Only if a command

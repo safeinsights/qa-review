@@ -798,6 +798,11 @@ POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
   posts ONE comment with the images embedded. Images append after the body by
   default; put a `{{image:N}}` placeholder (1-based) in the body to position one
   inline instead. Prints `{"id","url"}`.
+- Every comment ends with `Posted by qa-review <version>`, linked to the GitHub
+  release or commit (`src/engine/version.ts`, `git describe --tags --always --dirty`
+  on the checkout the engine runs from), so a reader knows which build of the
+  validator wrote it. The packaged app runs the engine from its clone, so this
+  names the clone's commit, not the `.app` version shown in Setup.
 - `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
   has no delete tool, so this is the only way to clean up a bad post). 404 = already
   gone = success.
@@ -861,8 +866,10 @@ no "also observed" section: something seen outside the inventory is added as an
 `observed` line and can only FAIL. **The card is the spec**: in a card-vs-Figma
 conflict the card line is PASS or FAIL against the app and the Figma line is
 CONFLICT, listed under "Unclear requirements" for information. A PM is asked
-only for results carrying `decision` (an UNCLEAR line whose readings change the
-verdict, or a scope conflict), at most three, one per root cause. `qar jira-comment` keeps a single newline as a
+only for results carrying `decision` (a card-vs-Figma conflict in user-visible
+behaviour, an UNCLEAR line whose readings change the verdict, or a scope
+conflict), one per root cause; every decision is shown in full, never collapsed.
+Reports are written in the conversational voice. `qar jira-comment` keeps a single newline as a
 hard line break (`hardBreaks()`), since a report is line-oriented and markdown's
 soft wrap had folded "Decisions needed" into one paragraph.
 
