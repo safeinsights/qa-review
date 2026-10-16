@@ -195,7 +195,8 @@ export const COMMANDS = [
             'Body is Markdown (headings, bold, lists, links). Use {{image:N}} to place an image ' +
             'inline, {expand:Title}…{expand} for a collapsed block, and {{mention}} (with ' +
             '--mention <accountId>) to @-mention someone so Jira notifies them. --attach uploads ' +
-            'other files and appends an "Attachments:" line linking them.',
+            'other files and appends an "Attachments:" line linking them. The last line is ' +
+            'always "Posted by qa-review <version>" (git describe of this checkout).',
     },
     {
         name: 'jira-delete-comment',

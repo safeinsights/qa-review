@@ -15,6 +15,7 @@ import {
     uploadAttachment,
 } from '@/engine/jira'
 import type { Vars } from '@/engine/settings'
+import { toolVersion, versionLine } from '@/engine/version'
 
 // Splits a body into ordered text/media segments on `{{image:N}}` placeholders,
 // where N is a 1-based index into the supplied image list. Images that are never
@@ -88,8 +89,12 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
         const id = await uploadAttachment(config, issue, file)
         uploaded.push({ filename: path.basename(file), url: attachmentUrl(config, id) })
     }
-    const line = attachmentsLine(uploaded)
-    const fullBody = line ? `${body.trimEnd()}\n\n${line}\n` : body
+    // Every comment ends with the version of this tool, so a reader can tell which
+    // build of the validator wrote it.
+    const footer = [attachmentsLine(uploaded), `_${versionLine(toolVersion())}_`]
+        .filter(Boolean)
+        .join('\n')
+    const fullBody = `${body.trimEnd()}\n\n${footer}\n`
 
     const adf = buildCommentAdf(splitBodyIntoSegments(fullBody, mediaIds), {
         mention: opts.mention || undefined,
