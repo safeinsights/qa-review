@@ -161,4 +161,39 @@ describe('checkResults', () => {
             'A.2-figma: the Figma side of a conflict must be CONFLICT',
         ])
     })
+
+    function withLines(edit: (id: string) => string | undefined): Inventory {
+        return {
+            ...inventory,
+            lines: inventory.lines.map(l => {
+                const conflictWith = edit(l.id)
+                return conflictWith === undefined ? l : { ...l, conflictWith }
+            }),
+        }
+    }
+
+    // An observed line must FAIL and a non-card side of a pair must be CONFLICT, so
+    // no result could ever pass; the inventory itself is named as the problem.
+    it('rejects an observed line in a conflict pair once, whatever its result', () => {
+        const inv = withLines(id => (id === 'OBS.1' ? 'A.1' : id === 'A.1' ? 'OBS.1' : undefined))
+        for (const result of ['FAIL', 'CONFLICT'] as const) {
+            const results = good.map(r => (r.id === 'OBS.1' ? { ...r, result } : r))
+            expect(checkResults(inv, results).problems).toContain(
+                'OBS.1: an observed line cannot be in a conflict (it can only be a FAIL)'
+            )
+        }
+        expect(checkResults(inv, good).problems).toEqual([
+            'OBS.1: an observed line cannot be in a conflict (it can only be a FAIL)',
+        ])
+    })
+
+    it('rejects a conflictWith that is missing, one-sided, or self-referential', () => {
+        const missing = withLines(id => (id === 'A.2' ? 'ZZ.9' : undefined))
+        expect(checkResults(missing, good).problems).toEqual([
+            'A.2: conflictWith "ZZ.9" is not in the inventory',
+            'A.2-figma: conflictWith "A.2" does not point back at A.2-figma',
+        ])
+        const self = withLines(id => (id === 'A.2' ? 'A.2' : undefined))
+        expect(checkResults(self, good).problems).toContain('A.2: conflictWith points at itself')
+    })
 })

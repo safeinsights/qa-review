@@ -55,7 +55,7 @@ neither is a bug, and both will look like one if you forget:
 - **Write every scratch file under `.tmp/`** (screenshots, verdict bodies, notes).
   It's gitignored; files written anywhere else pollute the user's `git status`.
 - **One command per Bash call.** Chained/piped commands fall outside the allowlist
-  and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `curl …`, `pnpm typecheck`,
+  and prompt. Pre-approved: `qar …`, `pnpm qar …`, `gh …`, `pnpm typecheck`,
   `pnpm test`, and read-only `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit
   and the chrome-devtools + jira-atlassian MCP tools.
 - **Be quiet.** Do the work, then give a short plain-language result.
@@ -71,11 +71,10 @@ First find the PR and confirm its code is on the target:
 `gh api "search/issues?q=repo:safeinsights/management-app+<CARD>+type:pr" --jq '.items[] | {number, title, state, url: .html_url}'`
 (try another `repo:safeinsights/<repo>` if the ticket points elsewhere), then
 `gh pr view <n> --repo safeinsights/management-app --json title,body,files,mergeCommit`.
-Then read the deployed release from the app's **`/about` page** (public, no
-login): its "Release" row links to `github.com/safeinsights/management-app/`
-`commit/<sha>` or `releases/tag/<tag>`. Run `curl -sL <baseUrl>/about` (one
-command, no pipe — pipes fall outside the allowlist) and find that link in the
-output; do not spend the browser on it. There is NO `/api/health`
+Then read the deployed release: `qar deployed-release --env <env>` (or
+`--pr <n>`). It reads the app's public **`/about` page** and prints the "Release"
+row as JSON; its `ref` is the `<release>` below. Do not spend the browser on it,
+and do not use `curl` (it is not pre-approved). There is NO `/api/health`
 or version endpoint — an unknown route returns the app shell with HTTP 200, so
 a guessed URL "succeeds" and tells you nothing. Then confirm the PR is in that
 release: `gh api repos/safeinsights/management-app/compare/<release>...<mergeCommit> --jq .status`
@@ -223,13 +222,16 @@ The design's rules live in **Dev Mode annotations** — per-column widths, reset
 rules, states, "not ready for engineering" markers. `get_screenshot`,
 `get_metadata` and `get_variable_defs` do NOT return them, and neither does the
 REST API; only the Plugin API does. So annotations are read with
-`mcp__plugin_figma_figma__use_figma` running ONE fixed, read-only script:
+the Figma server's `use_figma` tool (`mcp__<server>__use_figma` — e.g.
+`mcp__plugin_figma_figma__use_figma`, `mcp__figma__use_figma` or
+`mcp__claude_ai_Figma__use_figma`, whichever this session has) running ONE fixed,
+read-only script:
 **`.claude/skills/qa-validate/figma-notes.js`**. A hook denies any `use_figma`
 call whose code differs from that file in anything but its first two lines, so
 there is no way to edit a design from this session — do not try to write your
 own Plugin API code; it will be refused.
 
-Before any Figma call, run `mcp__plugin_figma_figma__whoami`. If the SafeInsights
+Before any Figma call, run that server's `whoami`. If the SafeInsights
 plan seat is View or Collab, stop and tell the user (those seats get 6 MCP calls a
 month); do not read Figma.
 

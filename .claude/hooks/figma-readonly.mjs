@@ -1,4 +1,7 @@
-// PreToolUse guard for mcp__plugin_figma_figma__use_figma.
+// PreToolUse guard for use_figma, under ANY server name. The matcher in
+// .claude/settings.json is `^mcp__.+__use_figma$`, not the plugin's tool name: the
+// plugin, `claude mcp add … figma` and the claude.ai connector each expose it under
+// a different prefix, and a matcher naming one leaves the guard off for the others.
 //
 // use_figma runs arbitrary Plugin API code and CAN edit the design file. The
 // validator only ever needs to READ annotations, so the only code it may send is

@@ -1506,3 +1506,49 @@ func TestFigmaSeatCheckTimeoutFails(t *testing.T) {
 		t.Fatalf("detail should mention timeout: %q", check.Detail)
 	}
 }
+
+func TestMcpToolName(t *testing.T) {
+	for server, want := range map[string]string{
+		"plugin:figma:figma": "mcp__plugin_figma_figma__whoami",
+		"figma":              "mcp__figma__whoami",
+		"claude.ai Figma":    "mcp__claude_ai_Figma__whoami",
+		"chrome-devtools":    "mcp__chrome-devtools__whoami",
+	} {
+		if got := mcpToolName(server, "whoami"); got != want {
+			t.Errorf("mcpToolName(%q) = %q, want %q", server, got, want)
+		}
+	}
+}
+
+// The seat probe must call whoami under the name THIS machine registered the
+// server as; a hard-coded plugin name failed for every other install.
+func TestConnectedFigmaServer(t *testing.T) {
+	out := "figma-old: npx old-figma-mcp - ✘ Failed to connect\n" +
+		"claude.ai Figma: https://mcp.figma.com/mcp - ✔ Connected\n" +
+		"chrome-devtools: npx chrome-devtools-mcp - ✔ Connected"
+	if got := connectedFigmaServer(out); got != "claude.ai Figma" {
+		t.Fatalf("connectedFigmaServer = %q, want claude.ai Figma", got)
+	}
+	if got := connectedFigmaServer("figma: x - ✘ Failed to connect"); got != "" {
+		t.Fatalf("no connected server should give \"\", got %q", got)
+	}
+}
+
+// use_figma can write to a design; only the hook may allow it, so it must never be
+// pre-approved under any server name.
+func TestValidationAllowedToolsFigma(t *testing.T) {
+	allowed := strings.Join(validationAllowedTools, ",")
+	for _, server := range knownFigmaServers {
+		if !strings.Contains(allowed, mcpToolName(server, "get_metadata")) {
+			t.Errorf("read tools for %q not pre-approved", server)
+		}
+	}
+	for _, tool := range validationAllowedTools {
+		if strings.Contains(tool, "use_figma") {
+			t.Errorf("use_figma must not be pre-approved: %q", tool)
+		}
+		if strings.HasPrefix(tool, "Bash(curl") {
+			t.Errorf("curl must not be pre-approved (it can upload any file): %q", tool)
+		}
+	}
+}

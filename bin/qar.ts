@@ -3,6 +3,7 @@ import { accessStatusCommand } from '@/cli/commands/access-status'
 import { cleanupCommand } from '@/cli/commands/cleanup'
 import { clockCommand } from '@/cli/commands/clock'
 import { codegenCommand } from '@/cli/commands/codegen'
+import { deployedReleaseCommand } from '@/cli/commands/deployed-release'
 import { fixAccountCommand } from '@/cli/commands/fix-account'
 import { followupAdviceCommand } from '@/cli/commands/followup-advice'
 import { getSecretCommand } from '@/cli/commands/get-secret'
@@ -107,6 +108,8 @@ async function main() {
             return fixAccountCommand(opts, await loadSettings())
         case 'study-state':
             return studyStateCommand(opts, await loadSettings())
+        case 'deployed-release':
+            return deployedReleaseCommand(opts, await loadSettings())
         case 'jira-comment':
             return jiraCommentCommand(opts, await loadSettings())
         case 'jira-attachments':

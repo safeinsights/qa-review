@@ -30,6 +30,7 @@
         "app.staging.safeinsights.org",
         "app.safeinsights.org",
         "api.github.com",
+        "api.media.atlassian.com",
         "api.mail.tm"
       ]
     },
@@ -43,7 +44,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_figma_figma__use_figma",
+        "matcher": "^mcp__.+__use_figma$",
         "hooks": [
           {
             "type": "command",

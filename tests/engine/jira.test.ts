@@ -315,21 +315,48 @@ describe('downloadAttachment', () => {
         vi.restoreAllMocks()
     })
 
-    it('follows the content redirect and writes the bytes', async () => {
-        const fetchMock = vi.fn().mockResolvedValue(new Response('# plan', { status: 200 }))
-        vi.stubGlobal('fetch', fetchMock)
+    const config = { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' }
+    const media = 'https://api.media.atlassian.com/file/u/binary?token=t'
+
+    function tmpDest(): { dir: string; dest: string } {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-att-'))
-        const dest = path.join(dir, 'plan.md')
-        await downloadAttachment(
-            { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' },
-            '10',
-            dest
-        )
+        return { dir, dest: path.join(dir, 'plan.md') }
+    }
+
+    it('follows the content redirect by hand, without the Jira credentials', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, { status: 302, headers: { location: media } })
+            )
+            .mockResolvedValueOnce(new Response('# plan', { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const { dir, dest } = tmpDest()
+        await downloadAttachment(config, '10', dest)
         expect(fetchMock.mock.calls[0][0]).toBe(
             'https://x.atlassian.net/rest/api/3/attachment/content/10'
         )
-        expect(fetchMock.mock.calls[0][1].redirect).toBe('follow')
+        expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
+        expect(fetchMock.mock.calls[1][0]).toBe(media)
+        expect(fetchMock.mock.calls[1][1].headers).toBeUndefined()
         expect(fs.readFileSync(dest, 'utf8')).toBe('# plan')
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    // The sandbox blocks a host it does not list; the error must name THAT host,
+    // not the Jira site that is already allowlisted.
+    it('names the media host when the redirect target is unreachable', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, { status: 302, headers: { location: media } })
+            )
+            .mockRejectedValueOnce(new TypeError('fetch failed'))
+        vi.stubGlobal('fetch', fetchMock)
+        const { dir, dest } = tmpDest()
+        await expect(downloadAttachment(config, '10', dest)).rejects.toThrow(
+            /Could not reach api\.media\.atlassian\.com/
+        )
         fs.rmSync(dir, { recursive: true, force: true })
     })
 })

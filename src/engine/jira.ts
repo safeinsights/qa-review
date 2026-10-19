@@ -388,16 +388,26 @@ export async function listAttachments(
     }))
 }
 
-// Same endpoint resolveMediaId uses, but FOLLOWING the redirect to the bytes.
+// Same endpoint resolveMediaId uses, but following the redirect to the bytes. The
+// redirect leaves the Jira site for the Media Services host, so it is followed by
+// hand: an automatic follow that fails would be reported as "could not reach
+// <Jira host>", naming a host that is already allowlisted instead of the one that
+// is not. The Location carries its own token, and fetch would drop the Jira
+// Authorization header on that cross-origin hop anyway, so none is sent.
 export async function downloadAttachment(
     config: JiraConfig,
     attachmentId: string,
     destPath: string
 ): Promise<void> {
-    const response = await jiraFetch(
+    let response = await jiraFetch(
         `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`,
-        { method: 'GET', headers: { Authorization: authHeader(config) }, redirect: 'follow' }
+        { method: 'GET', headers: { Authorization: authHeader(config) }, redirect: 'manual' }
     )
+    const location = response.headers.get('location')
+    if (response.status >= 300 && response.status < 400 && location) {
+        const target = new URL(location, config.baseUrl).toString()
+        response = await jiraFetch(target, { method: 'GET' })
+    }
     await assertOk(response, `Downloading attachment ${attachmentId}`)
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
     fs.writeFileSync(destPath, Buffer.from(await response.arrayBuffer()))

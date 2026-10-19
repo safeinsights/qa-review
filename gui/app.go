@@ -445,22 +445,10 @@ var authoringAllowedTools = []string{
 // The figma server is user-level rather than per-session (it is not in the
 // --mcp-config we write), but --allowedTools is matched by tool NAME, so listing
 // names here pre-approves them just the same.
-var validationAllowedTools = []string{
+var validationAllowedTools = append([]string{
 	"mcp__chrome-devtools",
 	"mcp__jira-atlassian",
-	// use_figma is deliberately NOT listed: the PreToolUse hook (figma-readonly.mjs) returns
-	// an explicit allow for the fixed script, so pre-approving adds nothing. If the hook
-	// cannot run (bad QAR_NODE, missing node, syntax error) Claude Code treats the non-0/non-2
-	// exit as non-blocking, and an allowlist entry would let arbitrary Plugin API code
-	// through. Without it a broken hook degrades to a permission prompt. The server's other
-	// write tools are likewise NOT pre-approved.
-	"mcp__plugin_figma_figma__whoami",
-	"mcp__plugin_figma_figma__get_screenshot",
-	"mcp__plugin_figma_figma__get_metadata",
-	"mcp__plugin_figma_figma__get_variable_defs",
 	"Bash(gh:*)",
-	// The skill reads the deployed release from the app's /about page with curl.
-	"Bash(curl:*)",
 	"Bash(pnpm qar:*)",
 	"Bash(qar:*)",
 	"Bash(pnpm typecheck:*)",
@@ -473,6 +461,40 @@ var validationAllowedTools = []string{
 	"Read",
 	"Write",
 	"Edit",
+}, figmaReadTools()...)
+
+// knownFigmaServers are the names a Figma MCP server is registered under: the
+// Claude Code plugin, the `claude mcp add … figma` the Doctor hint recommends, and
+// the claude.ai connector. The session does not run `claude mcp list` (it health-
+// checks every server, which is slow), so it pre-approves all three. A server under
+// any other name still works; its read tools just prompt.
+var knownFigmaServers = []string{"plugin:figma:figma", "figma", "claude.ai Figma"}
+
+// figmaReadTools lists the read-only Figma tools under every known server name.
+//
+// use_figma is deliberately NOT listed: the PreToolUse hook (figma-readonly.mjs) returns
+// an explicit allow for the fixed script, so pre-approving adds nothing. If the hook
+// cannot run (bad QAR_NODE, missing node, syntax error) Claude Code treats the non-0/non-2
+// exit as non-blocking, and an allowlist entry would let arbitrary Plugin API code
+// through. Without it a broken hook degrades to a permission prompt. The server's other
+// write tools are likewise NOT pre-approved.
+func figmaReadTools() []string {
+	var tools []string
+	for _, server := range knownFigmaServers {
+		for _, tool := range []string{"whoami", "get_screenshot", "get_metadata", "get_variable_defs"} {
+			tools = append(tools, mcpToolName(server, tool))
+		}
+	}
+	return tools
+}
+
+var mcpNameUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+// mcpToolName is the name Claude Code gives a server's tool: every character of the
+// server name outside [A-Za-z0-9_-] becomes "_", so "plugin:figma:figma" exposes
+// mcp__plugin_figma_figma__whoami and "claude.ai Figma" mcp__claude_ai_Figma__whoami.
+func mcpToolName(server, tool string) string {
+	return "mcp__" + mcpNameUnsafe.ReplaceAllString(server, "_") + "__" + tool
 }
 
 // StartAuthoringSession boots an interactive "author a suite" session:
@@ -2561,7 +2583,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 		// The seat probe needs a connected figma server; skip it (rather than add a
 		// second red row with the same cause) when the MCP row already failed.
 		if mcp.OK {
-			checks = append(checks, figmaSeatRow())
+			checks = append(checks, figmaSeatRow(connectedFigmaServer(out)))
 		}
 	}
 
@@ -2747,26 +2769,7 @@ func figmaMcpCheck(out string, err error) DoctorCheck {
 		}
 	}
 
-	// Server lines look like:
-	//   plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected
-	//   chrome-devtools: npx chrome-devtools-mcp@latest - ✘ Failed to connect
-	// Match on the server NAME (before the first ": ") so an endpoint or command that
-	// merely mentions figma (a wrapper script path, a proxy) doesn't count as one.
-	type server struct{ name, status string }
-	var figmas []server
-	for _, ln := range strings.Split(out, "\n") {
-		dash := strings.LastIndex(ln, " - ")
-		colon := strings.Index(ln, ": ")
-		if dash < 0 || colon < 0 || colon > dash {
-			continue
-		}
-		sName := strings.TrimSpace(ln[:colon])
-		if !strings.Contains(strings.ToLower(sName), "figma") {
-			continue
-		}
-		figmas = append(figmas, server{name: sName, status: strings.TrimSpace(ln[dash+len(" - "):])})
-	}
-
+	figmas := figmaServers(out)
 	if len(figmas) == 0 {
 		return DoctorCheck{
 			Name: name, OK: false,
@@ -2777,9 +2780,7 @@ func figmaMcpCheck(out string, err error) DoctorCheck {
 		}
 	}
 	for _, s := range figmas {
-		// Both checkmark glyphs: the CLI emits ✔ (U+2714) but ✓ has appeared in other
-		// terminals/versions; "Connected" alone also matches in case the glyph changes.
-		if strings.Contains(s.status, "Connected") || strings.Contains(s.status, "✔") || strings.Contains(s.status, "✓") {
+		if s.connected() {
 			return DoctorCheck{Name: name, OK: true, Detail: s.name + " — " + s.status}
 		}
 	}
@@ -2789,6 +2790,49 @@ func figmaMcpCheck(out string, err error) DoctorCheck {
 		Hint:   "Start a `claude` session and run `/mcp` to reconnect (or re-authenticate) the figma server.",
 		DocURL: docURL,
 	}
+}
+
+type mcpServer struct{ name, status string }
+
+// Both checkmark glyphs: the CLI emits ✔ (U+2714) but ✓ has appeared in other
+// terminals/versions; "Connected" alone also matches in case the glyph changes.
+func (s mcpServer) connected() bool {
+	return strings.Contains(s.status, "Connected") || strings.Contains(s.status, "✔") || strings.Contains(s.status, "✓")
+}
+
+// figmaServers parses the figma entries out of `claude mcp list`. Server lines look like:
+//
+//	plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ✔ Connected
+//	chrome-devtools: npx chrome-devtools-mcp@latest - ✘ Failed to connect
+//
+// Match on the server NAME (before the first ": ") so an endpoint or command that
+// merely mentions figma (a wrapper script path, a proxy) doesn't count as one.
+func figmaServers(out string) []mcpServer {
+	var figmas []mcpServer
+	for _, ln := range strings.Split(out, "\n") {
+		dash := strings.LastIndex(ln, " - ")
+		colon := strings.Index(ln, ": ")
+		if dash < 0 || colon < 0 || colon > dash {
+			continue
+		}
+		sName := strings.TrimSpace(ln[:colon])
+		if !strings.Contains(strings.ToLower(sName), "figma") {
+			continue
+		}
+		figmas = append(figmas, mcpServer{name: sName, status: strings.TrimSpace(ln[dash+len(" - "):])})
+	}
+	return figmas
+}
+
+// connectedFigmaServer is the name of the first connected figma server, so the seat
+// probe calls whoami under the name THIS machine registered it as. Empty when none is.
+func connectedFigmaServer(out string) string {
+	for _, s := range figmaServers(out) {
+		if s.connected() {
+			return s.name
+		}
+	}
+	return ""
 }
 
 // figmaPlanName is the Figma plan that owns the SI design files. A seat on any
@@ -2930,21 +2974,28 @@ func saveSeatCache(path, out string, now time.Time) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// figmaSeatRow runs the (cached) whoami probe. Only a successful probe is cached:
-// caching a failure would hide a fix for a day.
-func figmaSeatRow() DoctorCheck {
+// figmaSeatRow runs the (cached) whoami probe against the named server. Any answer
+// whoami actually gave is cached, whatever the seat: a View/Collab seat or a non-
+// SafeInsights account would otherwise re-run a 60s `claude -p` on every Doctor
+// run, and on those seats each run may spend one of the 6 MCP calls a month. Only a
+// probe that produced no answer (timeout, transport, unparseable) is retried.
+func figmaSeatRow(server string) DoctorCheck {
 	now := time.Now()
-	if out, at, ok := loadSeatCache(figmaSeatCachePath(), now); ok {
+	cachePath := figmaSeatCachePath()
+	if out, at, ok := loadSeatCache(cachePath, now); ok {
 		check := figmaSeatCheck(out, nil)
 		check.Detail += " — checked " + at.Local().Format("Jan 2 15:04")
+		if !check.OK {
+			check.Hint += " Then delete " + cachePath + " to re-check before the cached answer expires."
+		}
 		return check
 	}
 	out, err := runToolFullTimeout(60*time.Second, "claude", "-p", "Call the whoami tool and stop.",
-		"--allowedTools", "mcp__plugin_figma_figma__whoami",
+		"--allowedTools", mcpToolName(server, "whoami"),
 		"--output-format", "stream-json", "--verbose")
 	check := figmaSeatCheck(out, err)
-	if check.OK {
-		if saveErr := saveSeatCache(figmaSeatCachePath(), out, now); saveErr != nil {
+	if _, answered := findWhoami(out); err == nil && answered {
+		if saveErr := saveSeatCache(cachePath, out, now); saveErr != nil {
 			logDiag("tool", "figma seat cache write failed: %v", saveErr)
 		}
 	}

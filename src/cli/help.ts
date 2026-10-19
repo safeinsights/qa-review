@@ -196,7 +196,15 @@ export const COMMANDS = [
             'inline, {expand:Title}…{expand} for a collapsed block, and {{mention}} (with ' +
             '--mention <accountId>) to @-mention someone so Jira notifies them. --attach uploads ' +
             'other files and appends an "Attachments:" line linking them. The last line is ' +
-            'always "Posted by qa-review <version>" (git describe of this checkout).',
+            'always "Posted by qa-review <version>" (git describe of the repo clone, which in the packaged app can be ahead of the bundled engine).',
+    },
+    {
+        name: 'deployed-release',
+        usage: 'qar deployed-release (--env <env> | --pr <n>)',
+        summary: 'Print the management-app release an environment runs, from its /about page.',
+        details:
+            'Prints {"aboutUrl","label","kind":"commit|tag","ref","url","rows"}. "ref" is what ' +
+            'to compare a PR merge commit against. Fails when the page has no "Release" row.',
     },
     {
         name: 'jira-delete-comment',

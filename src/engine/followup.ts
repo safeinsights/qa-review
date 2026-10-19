@@ -1,4 +1,6 @@
-export type Severity = 'blocker' | 'major' | 'minor'
+import { SEVERITIES, type Severity } from './results'
+
+export type { Severity }
 
 export interface Fail {
     id: string
@@ -9,7 +11,6 @@ export interface Fail {
 export type FollowUpOption = 'send-back' | 'one-card' | 'multiple-cards'
 
 const FEW = 3
-const SEVERITIES: readonly string[] = ['blocker', 'major', 'minor']
 
 function plural(n: number, word: string): string {
     return `${n} ${word}${n === 1 ? '' : 's'}`
@@ -24,7 +25,7 @@ export function recommendFollowUp(fails: Fail[]): { option: FollowUpOption; reas
     // An unknown severity must not fall through as non-blocking: a typo or wrong
     // case would route a not-done card to one-card.
     for (const { id, severity } of fails) {
-        if (!SEVERITIES.includes(severity)) {
+        if (!(SEVERITIES as readonly string[]).includes(severity)) {
             throw new Error(`recommendFollowUp: unknown severity "${severity}" on ${id}`)
         }
     }

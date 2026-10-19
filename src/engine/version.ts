@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import { repoDir } from './paths'
 
-// The version of this tool, read from the git checkout it runs from. The packaged
-// app runs the engine from a clone, so git describes it like a dev checkout: a
-// bare tag on a release, `<tag>-<n>-g<sha>` past one, `-dirty` with local edits.
+// The version of this tool, read from the repo checkout (`repoDir()`): a bare tag
+// on a release, `<tag>-<n>-g<sha>` past one, `-dirty` with local edits. In the
+// packaged app that is the CLONE, not the engine: the engine runs from the bundle
+// in Resources/engine, and only suites, skills and config come from the clone. The
+// clone can be ahead of the bundle, so this names the skill text that drove the
+// session rather than the engine code that posted.
 export const QA_REVIEW_REPO = 'https://github.com/safeinsights/qa-review'
 
 export interface ToolVersion {

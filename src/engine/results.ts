@@ -1,4 +1,4 @@
-import type { Inventory } from './inventory'
+import type { Inventory, InventoryLine } from './inventory'
 
 // The audit gate between testing and posting. A validation used to be free to file
 // an unverified finding under "also observed"; now every check line needs exactly
@@ -26,6 +26,23 @@ export interface ResultsReport {
     ok: boolean
     counts: Record<ResultValue, number>
     problems: string[]
+}
+
+// A pair the result rules cannot judge. An observed line must FAIL while a non-card
+// side of a pair must be CONFLICT, so no result could ever satisfy both.
+function conflictProblems(line: InventoryLine, lines: Map<string, InventoryLine>): string[] {
+    const other = line.conflictWith
+    if (!other) return []
+    if (line.source.type === 'observed') {
+        return [`${line.id}: an observed line cannot be in a conflict (it can only be a FAIL)`]
+    }
+    if (other === line.id) return [`${line.id}: conflictWith points at itself`]
+    const pair = lines.get(other)
+    if (!pair) return [`${line.id}: conflictWith "${other}" is not in the inventory`]
+    if (pair.conflictWith !== line.id) {
+        return [`${line.id}: conflictWith "${other}" does not point back at ${line.id}`]
+    }
+    return []
 }
 
 function isBlank(value: unknown): boolean {
@@ -70,18 +87,17 @@ export function checkResults(inventory: Inventory, results: ResultEntry[]): Resu
         if (entry.result === 'CONFLICT' && !line.conflictWith) {
             problems.push(`${entry.id}: CONFLICT but the line has no conflictWith`)
         }
+        // An observed line in a pair is reported once, by the inventory pass below;
+        // the pair rules would only add a second, contradictory demand.
+        const paired = Boolean(line.conflictWith) && line.source.type !== 'observed'
         // The card is the spec: its side of a pair is judged against the app, and the
         // other side records the discrepancy for the "Unclear requirements" list.
-        if (
-            line.conflictWith &&
-            line.source.type === 'card' &&
-            !['PASS', 'FAIL'].includes(entry.result)
-        ) {
+        if (paired && line.source.type === 'card' && !['PASS', 'FAIL'].includes(entry.result)) {
             problems.push(
                 `${entry.id}: the card side of a conflict is checked against the app: PASS or FAIL`
             )
         }
-        if (line.conflictWith && line.source.type !== 'card' && entry.result !== 'CONFLICT') {
+        if (paired && line.source.type !== 'card' && entry.result !== 'CONFLICT') {
             problems.push(
                 `${entry.id}: the ${line.source.type === 'figma' ? 'Figma' : line.source.type} side of a conflict must be CONFLICT`
             )
@@ -91,6 +107,7 @@ export function checkResults(inventory: Inventory, results: ResultEntry[]): Resu
     for (const line of inventory.lines) {
         if (isBlank(line.title)) problems.push(`${line.id}: no title`)
         if (line.kind !== 'context' && !seen.has(line.id)) problems.push(`${line.id}: no result`)
+        problems.push(...conflictProblems(line, lines))
     }
 
     return { ok: problems.length === 0, counts, problems }
