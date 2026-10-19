@@ -80,6 +80,84 @@ Each run writes a timestamped folder under `results/` — e.g. `results/2026-07-
 | `trace.zip` | A Playwright trace — drop it on [trace.playwright.dev](https://trace.playwright.dev) to scrub through every action, network call, and DOM snapshot. |
 | `summary.json` / `run-state.json` | The machine-readable record (step timings, URLs, console logs) behind the report. |
 
+## How a validation works
+
+A validation checks that a Jira card was built as specified. The Claude session
+inside the app runs the `qa-validate` skill; the rules that decide a result live
+in code, so a report cannot skip them.
+
+```
+   Inventory ──▶ Approve ──▶ Test ──▶ Results gate ──▶ Report ──▶ Route
+   (card, comments,  (you)   (live   (qar results-check)  (one Jira   (send back /
+    attachments,              browser)                     comment)    follow-up cards)
+    Figma notes)
+```
+
+1. **Inventory.** Every requirement from the card, its comments, its text
+   attachments, and every Figma Dev Mode annotation on the linked frames becomes
+   one line in `.tmp/<CARD>-inventory.json`: an id, a plain-language title, a
+   source, and a kind — `check` (must be present), `absence` (must not be
+   present, from NOT READY / NOT OTTER notes) or `context` (not tested). When a
+   card line and a Figma line disagree, both stay and point at each other. The
+   inventory is rendered as a page in the session browser, and nothing is tested
+   until you approve it.
+2. **Test.** The session logs in with the role the card implies and drives every
+   `check` and `absence` line in the browser. Before it gives up on a line it must
+   try the standard methods: timezone, network throttling, viewport, a forced
+   request failure, `qar study-state`.
+3. **Results gate.** Each line gets exactly one result with evidence in
+   `.tmp/<CARD>-results.json`. `qar results-check` lists every gap — a line with no
+   result, a result with no evidence, a FAIL with no severity — and nothing is
+   posted until it prints `ok`.
+4. **Report.** One Jira comment from a fixed template, written for a PM with two
+   minutes. Lines are named by title, never by id.
+5. **Route.** Each FAIL carries a severity and an area; `qar followup-advice`
+   says whether to send the card back, open one follow-up card, or several.
+
+### How a line gets its result
+
+| Result | When | Must carry |
+|---|---|---|
+| PASS | The app does what the line says | evidence |
+| FAIL | The app does not | evidence, severity (blocker / major / minor), area |
+| CONFLICT | The non-card side of a card-vs-Figma pair | the paired line |
+| UNCLEAR | The line can be read two ways | never counted as a PASS |
+| NOT TESTED | The state could not be built, and you approved skipping it | your name |
+
+Three rules decide the hard cases:
+
+- **The card is the spec.** In a card-vs-Figma pair the card line is judged
+  against the app (PASS or FAIL). The Figma line is CONFLICT and is listed for
+  information only.
+- **Anything wrong that was seen is a FAIL.** It is added to the inventory as an
+  `observed` line, and such a line can only FAIL. There is no "also noted"
+  section: a finding that is not a FAIL does not exist.
+- **A PM decision is asked only when the answer changes what gets built**: a
+  card-vs-Figma conflict in user-visible behaviour, an UNCLEAR line whose two
+  readings give different results, or a scope conflict. Copy and visual
+  differences are never decisions. One decision per root cause.
+
+### How the report sections are filled
+
+- **Heading.** Any FAIL makes it REJECTED. Otherwise VALIDATED, or VALIDATED WITH
+  FOLLOW-UPS when you chose follow-up cards.
+- **Five summary lines.** Environment, release and PR; counts per result; sources
+  and phase timing; how many decisions are needed and which follow-up cards exist.
+- **Decisions needed from PM.** Only results carrying a decision, every one shown
+  in full: the question, what the card says, what Figma says, what the app does
+  now, and a recommendation. The PM is @-mentioned only when this section exists.
+- **Unclear requirements.** Every CONFLICT and UNCLEAR line, one line each: the
+  card clause, the Figma clause with a link, and what the app does.
+- **Failed.** Every FAIL with its severity, the expected text and its source, the
+  observed evidence, and screenshots.
+- **Not tested.** Every NOT TESTED line with who approved it and why.
+- **Passed.** Every PASS, collapsed, grouped by card section or Figma frame.
+- **Setup, attachments, version.** What state was built and deleted; links to
+  the inventory and results files; the qa-review version that posted it.
+
+Every inventory line appears exactly once, under exactly one heading, and the
+results file that passed the gate is attached to the comment.
+
 ## Quick start
 
 **Just want to run tests?** Use the desktop app — no setup, no terminal. Launch it,
