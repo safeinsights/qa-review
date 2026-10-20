@@ -64,8 +64,25 @@ func TestPromptTemplatesAreSingleLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(strings.TrimRight(string(data), "\n"), "\n") {
-			t.Errorf("%s contains a newline inside the prompt", e.Name())
+		if strings.ContainsAny(strings.TrimRight(string(data), "\r\n"), "\r\n") {
+			t.Errorf("%s contains a line break inside the prompt", e.Name())
+		}
+	}
+}
+
+// The user's own text comes from a textarea, so a composed prompt must stay on one
+// line even when the template, the PR caveat and the instructions are all joined.
+func TestComposedPromptsAreSingleLine(t *testing.T) {
+	multiLine := "first line\r\nsecond line\nthird\rfourth"
+	for name, p := range map[string]string{
+		"authoring":          composeAuthoringPrompt("qa", "42", "researcher", multiLine),
+		"validation with PR": composeValidationPrompt("qa", "42", "OTTER-1", multiLine),
+		"validation by PR":   composeValidationPrompt("qa", "42", "", multiLine),
+		"validation, no PR":  composeValidationPrompt("qa", "", "OTTER-1", multiLine),
+		"companion":          composeCompanionPrompt("create-study"),
+	} {
+		if strings.ContainsAny(p, "\r\n") {
+			t.Errorf("%s prompt contains a line break: %q", name, p)
 		}
 	}
 }

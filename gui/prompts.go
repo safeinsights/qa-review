@@ -13,8 +13,8 @@ import (
 var promptFS embed.FS
 
 // prompt reads an embedded prompt template and substitutes `{{key}}` placeholders
-// from vars. The trailing newline every file ends with is trimmed — these are
-// submitted as a single PTY message, and a stray newline would send it early.
+// from vars. The trailing line ending every file ends with is trimmed — these are
+// submitted as a single PTY message, and a stray CR or LF would send it early.
 // Panics on a missing file: the templates are embedded, so absence is a build
 // error, not a runtime condition.
 func prompt(name string, vars map[string]string) string {
@@ -22,7 +22,7 @@ func prompt(name string, vars map[string]string) string {
 	if err != nil {
 		panic(err)
 	}
-	out := strings.TrimRight(string(data), "\n")
+	out := strings.TrimRight(string(data), "\r\n")
 	for k, v := range vars {
 		out = strings.ReplaceAll(out, "{{"+k+"}}", v)
 	}
@@ -36,7 +36,7 @@ func composeAuthoringPrompt(env, pr, role, instruction string) string {
 	return prompt("authoring", map[string]string{
 		"target":      promptTarget(env, pr),
 		"role":        role,
-		"instruction": instruction,
+		"instruction": flattenLines(instruction),
 	})
 }
 
@@ -72,10 +72,7 @@ func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
 			"repo": managementAppSlug,
 		})
 	}
-	// The whole prompt is typed into the PTY as ONE message, and claude's TUI
-	// submits on a newline, so every join is a space and the user's own text is
-	// flattened too — otherwise the session sees only the tail of the prompt.
-	if s := strings.Join(strings.Fields(instructions), " "); s != "" {
+	if s := flattenLines(instructions); s != "" {
 		out += " Additional instructions from the user: " + s
 	}
 	return out
@@ -86,6 +83,13 @@ func composeValidationPrompt(env, pr, jiraCard, instructions string) string {
 // live run browser (driven by the engine; Claude drives it only when idle).
 func composeCompanionPrompt(suite string) string {
 	return prompt("companion", map[string]string{"suite": suite})
+}
+
+// flattenLines joins user text onto one line. The whole prompt is typed into the
+// PTY as ONE message, and claude's TUI submits on a CR or LF, so a line break in
+// the user's text would leave the session with only the tail of the prompt.
+func flattenLines(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // promptTarget renders the engine's target flag — a PR preview overrides the env.
