@@ -48,9 +48,18 @@ import type { RunContext, Suite } from './types'
 const DP_ORG = 'Openstax'
 
 // Straight apostrophes here, curly ones in the invitation copy — match either rather
-// than pinning a character that is one content edit away from changing.
-const RESEARCHER_EMPTY = /You haven['’]t yet participated in a study/
-const REVIEWER_EMPTY = /You haven['’]t yet participated in reviewing a study/
+// than pinning a character that is one content edit away from changing. Production's
+// build words the researcher empty state as an explainer instead, so accept both.
+const RESEARCHER_EMPTY =
+    /You haven['’]t yet participated in a study|A study lets you run your own code/
+const REVIEWER_EMPTY =
+    /You haven['’]t yet participated in reviewing a study|A study lets researchers run code against your organization/
+
+// Production (v1.6.9 as of Oct 19 2026) predates the dashboard's Data Organization
+// agreement gate and opens a two-org user on Reviewer rather than Researcher. Branching
+// on the host keeps QA's stricter checks intact; drop this once production catches up.
+const isProductionHost = (baseURL: string): boolean =>
+    new URL(baseURL).hostname === 'app.safeinsights.org'
 const SIGNED_OUT_GATE = /You must be signed out to accept invitations/
 // The whole sentence, date included — captured once and compared after every later
 // milestone. A second enrolment on the same day would leave the date equal, which is
@@ -95,6 +104,32 @@ async function nextInviteUrl(inbox: Inbox, consumed: string[]): Promise<string> 
     const url = extractSignupUrl(message)
     consumed.push(url)
     return url
+}
+
+// mailtm.ts keeps its listing private, and an engine change would not reach the packaged
+// app, so the snapshot is read here. It exists so a code sent by an EARLIER attempt
+// (one that died on the link page) can't satisfy the wait before the new one arrives.
+async function inboxMessageIds(inbox: Inbox): Promise<Set<string>> {
+    const res = await fetch('https://api.mail.tm/messages', {
+        headers: { Authorization: `Bearer ${inbox.token}` },
+    })
+    if (!res.ok) throw new Error(`mail.tm GET /messages failed: ${res.status}`)
+    const body = (await res.json()) as { 'hydra:member'?: { id: string }[] }
+    return new Set((body['hydra:member'] ?? []).map(m => m.id))
+}
+
+const EMAIL_CODE = /\b(\d{6})\b/
+
+async function nextEmailCode(inbox: Inbox, before: Set<string>): Promise<string> {
+    const message = await waitForMessage(
+        inbox,
+        m =>
+            !before.has(m.id) &&
+            !/get started with safeinsights/i.test(m.subject) &&
+            EMAIL_CODE.test(`${m.subject}\n${m.text}`),
+        INVITE_EMAIL_TIMEOUT_MS
+    )
+    return (`${message.subject}\n${message.text}`.match(EMAIL_CODE) as RegExpMatchArray)[1]
 }
 
 // A code computed in the last seconds of its 30s window can expire between fill and
@@ -230,10 +265,12 @@ async function gotoMyDashboard(page: Page, baseURL: string): Promise<void> {
     // settles, so waiting for it is what makes a following empty-state assertion
     // meaningful rather than a race against an unpopulated list. It is scoped to the
     // card and not pinned to a level: builds differ on the page title (some say
-    // "My dashboard", newer ones a second "My studies") and on heading levels.
+    // "My dashboard", newer ones a second "My studies"), on the card's own heading
+    // (production's says "All studies", or "Studies for review" on the Reviewer view)
+    // and on heading levels.
     await page
         .locator('.mantine-Paper-root')
-        .getByRole('heading', { name: 'My studies' })
+        .getByRole('heading', { name: /^((My|All) studies|Studies for review)$/ })
         .waitFor(VISIBLE)
 }
 
@@ -464,9 +501,16 @@ export const newUserSignupFlowsSuite: Suite = {
                 ctx.step(async () => {
                     const page = ctx.page
                     await gotoMyDashboard(page, ctx.baseURL)
-                    // Joining the data partner raises its participation agreement over the
-                    // dashboard; the research lab's was ticked on the signup form instead.
-                    await acknowledgeAgreement(page, 'Data Organization Participation Agreement')
+                    if (isProductionHost(ctx.baseURL)) {
+                        await audienceTab(page, 'Researcher').click()
+                    } else {
+                        // Joining the data partner raises its participation agreement over
+                        // the dashboard; the research lab's was ticked on the signup form.
+                        await acknowledgeAgreement(
+                            page,
+                            'Data Organization Participation Agreement'
+                        )
+                    }
                     await expect(page.getByRole('radio', { name: 'Researcher' })).toBeChecked()
                     await expect(page.getByText(RESEARCHER_EMPTY)).toBeVisible()
 
@@ -521,6 +565,7 @@ export const newUserSignupFlowsSuite: Suite = {
                         waitUntil: 'domcontentloaded',
                     })
                     await page.getByText(SIGNED_OUT_GATE).waitFor(VISIBLE)
+                    const codesBefore = await inboxMessageIds(mergeInbox(ctx))
                     const existing = page.getByRole('link', {
                         name: /login with existing account/i,
                     })
@@ -534,6 +579,25 @@ export const newUserSignupFlowsSuite: Suite = {
                         primaryInbox(ctx).address,
                         ctx.state.mfaSecret as string
                     )
+                    // Production's build first proves ownership of the invited address
+                    // with an emailed code; QA's goes straight to the dashboard. They are
+                    // different pages, so waiting on either is a settled render, not a race.
+                    const linkHeading = page.getByRole('heading', {
+                        name: 'Link your email addresses',
+                    })
+                    const labRow = page.locator(
+                        `a[href="/${ORG_FOR_ROLE.researcher}/dashboard"] [title]`
+                    )
+                    await linkHeading.or(labRow).first().waitFor(VISIBLE)
+                    if (await linkHeading.isVisible()) {
+                        const code = await nextEmailCode(mergeInbox(ctx), codesBefore)
+                        // Not fillPin: this page focuses the first box, which drops its
+                        // placeholder, so fillPin's placeholder match finds five boxes of six.
+                        const boxes = page.locator('[role="group"] input:not([type="hidden"])')
+                        await expect(boxes).toHaveCount(code.length)
+                        for (let i = 0; i < code.length; i++) await boxes.nth(i).fill(code[i])
+                        await page.getByRole('button', { name: 'Verify and link' }).click()
+                    }
                     // The invite is folded into the account that signed in — no new account,
                     // and straight onto the org dashboard rather than back into enrolment.
                     const labName = await sidebarOrgName(page, ORG_FOR_ROLE.researcher)
