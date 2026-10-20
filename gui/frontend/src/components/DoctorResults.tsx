@@ -32,7 +32,7 @@ export function DoctorResults({
     }
     if (!checks) return null
 
-    const failing = checks.filter(c => !c.ok).length
+    const failing = doctorFailingCount(checks)
     const allOk = failing === 0
     return (
         <div>
@@ -50,7 +50,7 @@ export function DoctorResults({
 }
 
 export function doctorFailingCount(checks: DoctorCheck[] | null): number {
-    return checks?.filter(c => !c.ok).length ?? 0
+    return checks?.filter(c => !c.ok && !c.advisory).length ?? 0
 }
 
 function CheckRow({ check }: { check: DoctorCheck }) {

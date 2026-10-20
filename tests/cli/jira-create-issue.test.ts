@@ -7,7 +7,9 @@ import { jiraCreateIssueCommand } from '@/cli/commands/jira-create-issue'
 const vars = { JIRA_USERNAME: 'a@b.c', JIRA_API_TOKEN: 't', JIRA_URL: 'https://x.atlassian.net' }
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
 
-function stubJira(overrides: { issueTypes?: string[]; linkTypes?: string[] } = {}) {
+function stubJira(
+    overrides: { issueTypes?: string[]; linkTypes?: string[]; missing?: string } = {}
+) {
     const calls: Array<{ url: string; method: string; body?: unknown }> = []
     vi.stubGlobal(
         'fetch',
@@ -26,6 +28,9 @@ function stubJira(overrides: { issueTypes?: string[]; linkTypes?: string[] } = {
                     }),
                     { status: 200 }
                 )
+            }
+            if (overrides.missing && url.includes(`/issue/${overrides.missing}?`)) {
+                return new Response('{}', { status: 404 })
             }
             if (url.endsWith('/issueLinkType')) {
                 return new Response(
@@ -55,8 +60,12 @@ function stubJira(overrides: { issueTypes?: string[]; linkTypes?: string[] } = {
     return calls
 }
 
+// Uploads are confined to <repo>/.tmp, so the fixture builds a throwaway repo root.
 function tmpBody(): { dir: string; body: string; image: string } {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-ci-'))
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-ci-'))
+    vi.stubEnv('QAR_REPO_DIR', repo)
+    const dir = path.join(repo, '.tmp')
+    fs.mkdirSync(dir)
     const body = path.join(dir, 'card.md')
     const image = path.join(dir, 'shot.png')
     fs.writeFileSync(body, '## Expected\nx\n\n{{image:1}}')
@@ -67,7 +76,41 @@ function tmpBody(): { dir: string; body: string; image: string } {
 describe('jira-create-issue', () => {
     afterEach(() => {
         vi.unstubAllGlobals()
+        vi.unstubAllEnvs()
         vi.restoreAllMocks()
+    })
+
+    it('refuses an image outside the scratch dir before creating anything', async () => {
+        const calls = stubJira()
+        const { body } = tmpBody()
+        const outside = path.join(os.tmpdir(), `qar-outside-${process.pid}.png`)
+        fs.writeFileSync(outside, 'x')
+        await expect(
+            jiraCreateIssueCommand(
+                { project: 'OTTER', summary: 's', 'body-file': body, images: outside },
+                vars
+            )
+        ).rejects.toThrow(/Refusing to upload/)
+        expect(calls).toEqual([])
+        fs.rmSync(outside)
+    })
+
+    it('rejects a bare --link, and a nonexistent parent, before creating the card', async () => {
+        const calls = stubJira()
+        const { body } = tmpBody()
+        const base = { project: 'OTTER', summary: 's', 'body-file': body }
+        await expect(jiraCreateIssueCommand({ ...base, link: 'true' }, vars)).rejects.toThrow(
+            /--link needs an issue key/
+        )
+        expect(calls).toEqual([])
+
+        const missing = stubJira({ missing: 'OTTER-6177' })
+        await expect(jiraCreateIssueCommand({ ...base, link: 'OTTER-6177' }, vars)).rejects.toThrow(
+            /OTTER-6177 does not exist/
+        )
+        expect(missing.some(c => c.method === 'POST' && c.url.endsWith('/rest/api/3/issue'))).toBe(
+            false
+        )
     })
 
     it('verifies types, creates, uploads, describes, links, and prints the key', async () => {
@@ -98,13 +141,14 @@ describe('jira-create-issue', () => {
         expect(methods).toEqual([
             'GET /rest/api/3/issue/createmeta/OTTER/issuetypes',
             'GET /rest/api/3/issueLinkType',
+            'GET /rest/api/3/issue/OTTER-617?fields=summary',
             'POST /rest/api/3/issue',
             'POST /rest/api/3/issue/OTTER-901/attachments',
             'GET /rest/api/3/attachment/content/55',
             'PUT /rest/api/3/issue/OTTER-901',
             'POST /rest/api/3/issueLink',
         ])
-        expect(calls[6].body).toEqual({
+        expect(calls[7].body).toEqual({
             type: { name: 'Relates' },
             inwardIssue: { key: 'OTTER-901' },
             outwardIssue: { key: 'OTTER-617' },

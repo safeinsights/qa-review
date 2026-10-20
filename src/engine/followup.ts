@@ -29,6 +29,9 @@ export function recommendFollowUp(fails: Fail[]): { option: FollowUpOption; reas
             throw new Error(`recommendFollowUp: unknown severity "${severity}" on ${id}`)
         }
     }
+    for (const { id, area } of fails) {
+        if (typeof area !== 'string') throw new Error(`recommendFollowUp: missing area on ${id}`)
+    }
     const blockers = fails.filter(f => f.severity === 'blocker').length
     if (blockers) {
         return {

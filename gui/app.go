@@ -476,8 +476,10 @@ var knownFigmaServers = []string{"plugin:figma:figma", "figma", "claude.ai Figma
 // an explicit allow for the fixed script, so pre-approving adds nothing. If the hook
 // cannot run (bad QAR_NODE, missing node, syntax error) Claude Code treats the non-0/non-2
 // exit as non-blocking, and an allowlist entry would let arbitrary Plugin API code
-// through. Without it a broken hook degrades to a permission prompt. The server's other
-// write tools are likewise NOT pre-approved.
+// through. Sessions run with --permission-mode auto, so a broken hook does NOT degrade
+// to a human prompt: the auto-mode classifier decides. A deny rule would not help
+// (deny outranks the hook's allow, blocking the fixed script too), so the hook staying
+// runnable is the control. The server's other write tools are likewise NOT pre-approved.
 func figmaReadTools() []string {
 	var tools []string
 	for _, server := range knownFigmaServers {
@@ -1961,7 +1963,7 @@ func (a *App) ReportIssue(title, note, tab, runState string) (string, error) {
 	}
 
 	b.WriteString("\n## Setup Doctor\n")
-	b.WriteString(doctorMarkdown(a.RunDoctor()))
+	b.WriteString(doctorMarkdown(a.runDoctor(false)))
 
 	// This app's failures are silent (see diagLogPath): they reach the user as an
 	// absence, not an error. Attach the log always — the user can't be expected to
@@ -2083,6 +2085,9 @@ type DoctorCheck struct {
 	Detail string `json:"detail"` // version / "authenticated" on success; the error on failure
 	Hint   string `json:"hint"`   // remediation shown when !OK
 	DocURL string `json:"docURL"` // download/install page for the tool, shown as a link when !OK
+	// Advisory rows are shown but never counted as failing: suite runs do not need
+	// them, so they must not reopen the auto-Doctor modal on every launch.
+	Advisory bool `json:"advisory"`
 }
 
 // runToolFull runs a command against the GUI-augmented PATH (so a Finder-launched
@@ -2105,6 +2110,12 @@ func runToolFullTimeout(timeout time.Duration, name string, args ...string) (str
 	defer cancel()
 	cmd := exec.CommandContext(ctx, guiResolve(name), args...)
 	cmd.Env = withGuiPath()
+	// `claude -p` starts the user's MCP servers (npx trees) that inherit the output
+	// pipe. Killing only claude leaves them holding CombinedOutput open past the
+	// deadline and orphaned, so kill the whole process group and bound the wait.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	trimmed := strings.TrimSpace(string(out))
 	if err != nil {
@@ -2467,6 +2478,13 @@ var nodeVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.`)
 // repo, and the keyring identity. The Settings "Setup Doctor" modal renders one
 // row per check with a ✓/✗ and any error.
 func (a *App) RunDoctor() []DoctorCheck {
+	return a.runDoctor(true)
+}
+
+// runDoctor with probeSeat=false leaves the Figma seat row out entirely: a bug report
+// must not hang on a 60s probe, spend a metered Figma MCP call, or embed the user's
+// Figma email in an issue body.
+func (a *App) runDoctor(probeSeat bool) []DoctorCheck {
 	checks := []DoctorCheck{}
 
 	// Required CLIs (presence + version).
@@ -2582,7 +2600,7 @@ func (a *App) RunDoctor() []DoctorCheck {
 		checks = append(checks, mcp)
 		// The seat probe needs a connected figma server; skip it (rather than add a
 		// second red row with the same cause) when the MCP row already failed.
-		if mcp.OK {
+		if mcp.OK && probeSeat {
 			checks = append(checks, figmaSeatRow(connectedFigmaServer(out)))
 		}
 	}
@@ -2980,6 +2998,16 @@ func saveSeatCache(path, out string, now time.Time) error {
 // run, and on those seats each run may spend one of the 6 MCP calls a month. Only a
 // probe that produced no answer (timeout, transport, unparseable) is retried.
 func figmaSeatRow(server string) DoctorCheck {
+	check := probeFigmaSeat(server)
+	check.Advisory = true
+	return check
+}
+
+// A probe that produced no answer is retried, but not on every launch: with an expired
+// Figma login that would add up to 60s to each one.
+const seatMissTTL = 10 * time.Minute
+
+func probeFigmaSeat(server string) DoctorCheck {
 	now := time.Now()
 	cachePath := figmaSeatCachePath()
 	if out, at, ok := loadSeatCache(cachePath, now); ok {
@@ -2990,6 +3018,13 @@ func figmaSeatRow(server string) DoctorCheck {
 		}
 		return check
 	}
+	missPath := figmaSeatMissPath()
+	if info, err := os.Stat(missPath); err == nil && now.Sub(info.ModTime()) < seatMissTTL {
+		if detail, readErr := os.ReadFile(missPath); readErr == nil {
+			return DoctorCheck{Name: "Figma seat", OK: false, Detail: string(detail) + " (not re-checked for " + seatMissTTL.String() + ")",
+				Hint: "Start a `claude` session and run `/mcp` to check the figma server, then re-run the doctor."}
+		}
+	}
 	out, err := runToolFullTimeout(60*time.Second, "claude", "-p", "Call the whoami tool and stop.",
 		"--allowedTools", mcpToolName(server, "whoami"),
 		"--output-format", "stream-json", "--verbose")
@@ -2998,6 +3033,8 @@ func figmaSeatRow(server string) DoctorCheck {
 		if saveErr := saveSeatCache(cachePath, out, now); saveErr != nil {
 			logDiag("tool", "figma seat cache write failed: %v", saveErr)
 		}
+	} else if writeErr := os.WriteFile(missPath, []byte(check.Detail), 0o600); writeErr != nil {
+		logDiag("tool", "figma seat miss marker write failed: %v", writeErr)
 	}
 	return check
 }

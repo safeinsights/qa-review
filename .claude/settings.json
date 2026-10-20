@@ -1,57 +1,53 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(pnpm qar:*)",
-      "Bash(qar:*)",
-      "Bash(gh:*)",
-      "Bash(git checkout:*)",
-      "Bash(git merge:*)",
-      "Bash(git branch:*)",
-      "Bash(git stash:*)"
-    ]
-  },
-  "sandbox": {
-    "enabled": true,
-    "filesystem": {
-      "allowWrite": [
-        "config"
-      ],
-      "denyWrite": [
-        "config/age-identity.txt",
-        "config/settings.local.json"
-      ]
-    },
-    "network": {
-      "allowedDomains": [
-        "openstax.atlassian.net",
-        "*.qa.safeinsights.org",
-        "*.staging.safeinsights.org",
-        "*.*.staging.safeinsights.org",
-        "app.staging.safeinsights.org",
-        "app.safeinsights.org",
-        "api.github.com",
-        "api.media.atlassian.com",
-        "api.mail.tm"
-      ]
-    },
-    "enableWeakerNetworkIsolation": true,
-    "excludedCommands": [
-      "pnpm qar",
-      "qar",
-      "gh"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "^mcp__.+__use_figma$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${QAR_NODE:-node}\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/figma-readonly.mjs\""
-          }
+    "permissions": {
+        "allow": [
+            "Bash(pnpm qar:*)",
+            "Bash(qar:*)",
+            "Bash(gh:*)",
+            "Bash(git checkout:*)",
+            "Bash(git merge:*)",
+            "Bash(git branch:*)",
+            "Bash(git stash:*)"
         ]
-      }
-    ]
-  }
+    },
+    "sandbox": {
+        "enabled": true,
+        "filesystem": {
+            "allowWrite": ["config"],
+            "denyWrite": [
+                "config/age-identity.txt",
+                "config/settings.local.json"
+            ]
+        },
+        "network": {
+            "allowedDomains": [
+                "openstax.atlassian.net",
+                "*.qa.safeinsights.org",
+                "*.demo.safeinsights.org",
+                "*.staging.safeinsights.org",
+                "*.*.staging.safeinsights.org",
+                "app.staging.safeinsights.org",
+                "app.demo.safeinsights.org",
+                "app.safeinsights.org",
+                "api.github.com",
+                "api.media.atlassian.com",
+                "api.mail.tm"
+            ]
+        },
+        "enableWeakerNetworkIsolation": true,
+        "excludedCommands": ["pnpm qar", "qar", "gh"]
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "^mcp__.+__use_figma$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"${QAR_NODE:-node}\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/figma-readonly.mjs\""
+                    }
+                ]
+            }
+        ]
+    }
 }

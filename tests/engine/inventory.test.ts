@@ -61,6 +61,33 @@ describe('summarize', () => {
     })
 })
 
+describe('renderInventoryHtml hostile input', () => {
+    const hostile: Inventory = {
+        card: 'X-1',
+        target: 'qa',
+        lines: [
+            {
+                id: 'H.1',
+                title: 't',
+                kind: '"><img src=x onerror=alert(1)>' as never,
+                text: 't',
+                source: {
+                    type: '"><script>1</script>' as never,
+                    ref: 'r',
+                    url: 'javascript:alert(1)',
+                },
+            },
+        ],
+    }
+
+    it('escapes enum fields and does not link non-http URLs', () => {
+        const html = renderInventoryHtml(hostile)
+        expect(html).not.toContain('<img src=x')
+        expect(html).not.toContain('<script>1')
+        expect(html).not.toContain('javascript:')
+    })
+})
+
 describe('renderInventoryHtml', () => {
     const html = renderInventoryHtml(inventory)
 

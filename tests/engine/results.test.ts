@@ -103,6 +103,29 @@ describe('checkResults', () => {
         expect(problems(good)).toEqual([])
     })
 
+    it('rejects duplicate inventory ids so one result cannot cover two lines', () => {
+        const dup = {
+            ...inventory,
+            lines: [...inventory.lines, { ...inventory.lines[5], kind: 'check' as const }],
+        }
+        expect(checkResults(dup, good).problems).toContain('OBS.1: duplicate inventory id')
+    })
+
+    it('rejects an observed line that is context', () => {
+        const ctx = {
+            ...inventory,
+            lines: inventory.lines.map(l =>
+                l.id === 'OBS.1' ? { ...l, kind: 'context' as const } : l
+            ),
+        }
+        expect(
+            checkResults(
+                ctx,
+                good.filter(r => r.id !== 'OBS.1')
+            ).problems
+        ).toEqual(['OBS.1: an observed line cannot be context (it can only be a FAIL)'])
+    })
+
     it('rejects a result for an id that is not in the inventory', () => {
         const extra = [...good, { id: 'ZZ.9', result: 'PASS' as const, evidence: 'x' }]
         expect(problems(extra)).toEqual(['ZZ.9: not in the inventory'])

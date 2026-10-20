@@ -377,6 +377,51 @@ describe('splitExpands', () => {
     })
 })
 
+describe('fenced code', () => {
+    it('does not split on {expand} quoted inside a fence', () => {
+        const text = 'how to write it:\n```\n{expand:Passed (N)}\n{expand}\n```\n'
+        expect(splitExpands(text)).toEqual([{ kind: 'markdown', text }])
+    })
+
+    it('leaves {{mention}} alone inside a code block and inline code', () => {
+        const doc = buildCommentAdf(
+            [{ type: 'text', text: '```\n{{mention}}\n```\n\nuse `{{mention}}`' }],
+            {
+                mention: 'abc',
+            }
+        )
+        const json = JSON.stringify(doc)
+        expect(json.match(/"type":"mention"/g)).toHaveLength(1)
+        expect(JSON.stringify((doc.content as unknown[]).at(-1))).not.toContain('mention"')
+    })
+})
+
+describe('buildCommentAdf footer', () => {
+    it('ends with the footer even when an expand is never closed', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '{expand:Passed}\n- a' }], {
+            footer: 'Posted by qa-review',
+        })
+        const last = (doc.content as { type: string }[]).at(-1)
+        expect(last?.type).toBe('paragraph')
+        expect(JSON.stringify(last)).toContain('Posted by qa-review')
+    })
+
+    it('puts the footer after trailing media', () => {
+        const doc = buildCommentAdf(
+            [
+                { type: 'text', text: 'body' },
+                { type: 'media', mediaId: 'id-1' },
+            ],
+            { footer: 'v1' }
+        )
+        expect((doc.content as { type: string }[]).map(n => n.type)).toEqual([
+            'paragraph',
+            'mediaSingle',
+            'paragraph',
+        ])
+    })
+})
+
 describe('buildCommentAdf expand and mention', () => {
     it('emits an ADF expand node with the title and inner blocks', () => {
         const doc = buildCommentAdf([

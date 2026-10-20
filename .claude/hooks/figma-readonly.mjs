@@ -9,6 +9,7 @@
 // Anything else is denied here — use_figma is deliberately NOT pre-approved in
 // gui/app.go; this hook's explicit allow is what makes the fixed script prompt-free,
 // and its deny is what keeps the session read-only.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +19,24 @@ const SCRIPT_PATH = path.resolve(
     '../skills/qa-validate/figma-notes.js'
 )
 const MODES = new Set(['pages', 'locate', 'page', 'frame'])
-const NODE_LIST = /^\d+:\d+(,\d+:\d+)*$/
+// The validation session can Edit files, so the on-disk script is not trusted by
+// itself: its body (everything below the two header lines) must hash to this value.
+// Changing figma-notes.js means updating this hash, which is a change to the hook.
+const SCRIPT_BODY_SHA256 = '4b95085849a56df85de6afb66b90fcb9f106528729904338eb72127079cc8f60'
+// `I123:456;789:10` is the form get_metadata returns for a node inside an instance.
+const NODE_ID = String.raw`I?\d+:\d+(?:;\d+:\d+)*`
+const TARGET_PATTERNS = {
+    pages: /^$/,
+    locate: new RegExp(`^${NODE_ID}(,${NODE_ID})*$`),
+    page: /^\d+:\d+$/,
+    frame: new RegExp(`^${NODE_ID}(#\\d+)?$`),
+}
+const TARGET_HINTS = {
+    pages: 'empty',
+    locate: 'comma-separated node ids like 123:456',
+    page: 'one page id like 123:456',
+    frame: 'one node id like 123:456, optionally followed by #offset',
+}
 const HEADER = /^const (MODE|TARGET) = '([^'\\]*)'\s*$/
 
 function normalize(text) {
@@ -39,6 +57,10 @@ function splitHeader(text) {
     return { mode: mode[2], target: target[2], body: lines.slice(2).join('\n') }
 }
 
+function sha256(text) {
+    return crypto.createHash('sha256').update(text).digest('hex')
+}
+
 export function checkFigmaCode(code, script) {
     const deny = (reason) => ({ allow: false, reason })
     if (!script) {
@@ -48,7 +70,13 @@ export function checkFigmaCode(code, script) {
     }
     const sent = splitHeader(code)
     const fixed = splitHeader(script)
-    if (!sent || !fixed || sent.body !== fixed.body) {
+    if (!fixed || sha256(fixed.body) !== SCRIPT_BODY_SHA256) {
+        return deny(
+            'figma-notes.js does not match the hash pinned in figma-readonly.mjs — it was ' +
+                'edited. Sync the repo (QA Runner Sync button) to restore it.'
+        )
+    }
+    if (!sent || sent.body !== fixed.body) {
         return deny(
             'use_figma may only run .claude/skills/qa-validate/figma-notes.js unchanged ' +
                 '(MODE and TARGET lines only).'
@@ -57,9 +85,9 @@ export function checkFigmaCode(code, script) {
     if (!MODES.has(sent.mode)) {
         return deny(`MODE must be one of pages, locate, page, frame (got '${sent.mode}')`)
     }
-    if (sent.mode === 'pages' ? sent.target !== '' : !NODE_LIST.test(sent.target)) {
+    if (!TARGET_PATTERNS[sent.mode].test(sent.target)) {
         return deny(
-            `TARGET must be empty for 'pages', else node ids like 123:456 (got '${sent.target}')`
+            `TARGET for '${sent.mode}' must be ${TARGET_HINTS[sent.mode]} (got '${sent.target}')`
         )
     }
     return { allow: true }
@@ -71,7 +99,9 @@ function emit(decision) {
     )
 }
 
+// On exit 2 Claude Code ignores stdout and feeds stderr back as the block reason.
 function deny(reason) {
+    process.stderr.write(`${reason}\n`)
     emit({ permissionDecision: 'deny', permissionDecisionReason: reason })
 }
 

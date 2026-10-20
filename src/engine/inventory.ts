@@ -85,12 +85,23 @@ function plural(n: number, word: string): string {
     return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
+// URLs come from Jira and Figma text, so `javascript:` and friends render as text.
+function isSafeUrl(url: string): boolean {
+    try {
+        return ['http:', 'https:'].includes(new URL(url).protocol)
+    } catch {
+        return false
+    }
+}
+
 function sourceCell(source: LineSource): string {
     const label = escapeHtml(source.ref)
-    const text = source.url
-        ? `<a href="${escapeHtml(source.url)}" target="_blank">${label}</a>`
-        : label
-    return `<span class="src src-${source.type}">${source.type}</span> ${text}`
+    const text =
+        source.url && isSafeUrl(source.url)
+            ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+            : label
+    const type = escapeHtml(source.type)
+    return `<span class="src src-${type}">${type}</span> ${text}`
 }
 
 function row(line: InventoryLine): string {
@@ -102,10 +113,10 @@ function row(line: InventoryLine): string {
         ? `<div class="conflict">conflicts with ${escapeHtml(line.conflictWith)}</div>`
         : ''
     return (
-        `<tr data-line="${escapeHtml(line.id)}" data-kind="${line.kind}" data-source="${line.source.type}"${conflict}>` +
+        `<tr data-line="${escapeHtml(line.id)}" data-kind="${escapeHtml(line.kind)}" data-source="${escapeHtml(line.source.type)}"${conflict}>` +
         `<td class="id">${escapeHtml(line.id)}</td>` +
         `<td class="title">${escapeHtml(line.title ?? '')}</td>` +
-        `<td class="kind">${line.kind}</td>` +
+        `<td class="kind">${escapeHtml(line.kind)}</td>` +
         `<td class="text">${escapeHtml(line.text)}${conflictNote}</td>` +
         `<td class="source">${sourceCell(line.source)}</td>` +
         `<td class="category">${category}</td>` +

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
-import { splitBodyIntoSegments } from '@/cli/commands/jira'
+import { assertUploadable, splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
+    assertIssueExists,
     buildCommentAdf,
     createIssue,
     issueTypeNames,
@@ -46,11 +47,11 @@ export async function jiraCreateIssueCommand(
     const body = fs.readFileSync(bodyFile, 'utf8')
     const type = opts.type || DEFAULT_TYPE
     const link = (opts.link ?? '').trim()
+    // A bare `--link` parses to 'true'; catch it before the card exists.
+    if (link === 'true') throw new Error('jira-create-issue: --link needs an issue key')
     const linkType = opts['link-type'] || DEFAULT_LINK_TYPE
     const images = splitList(opts.images)
-    for (const image of images) {
-        if (!fs.existsSync(image)) throw new Error(`Image not found: ${image}`)
-    }
+    for (const image of images) assertUploadable(image)
 
     const config = jiraConfig(vars)
     const types = await issueTypeNames(config, project)
@@ -66,6 +67,7 @@ export async function jiraCreateIssueCommand(
                 `Link type "${linkType}" does not exist. Valid: ${linkTypes.join(', ')}`
             )
         }
+        await assertIssueExists(config, link)
     }
 
     const created = await createIssue(config, { project, type, summary })
@@ -74,7 +76,10 @@ export async function jiraCreateIssueCommand(
             return await run()
         } catch (cause) {
             const reason = cause instanceof Error ? cause.message : String(cause)
-            throw new Error(`Created ${created.key}, but ${what} failed: ${reason}`, { cause })
+            throw new Error(
+                `Created ${created.key}, but ${what} failed: ${reason}. Fix ${created.key} by hand; do not re-run, that files a duplicate.`,
+                { cause }
+            )
         }
     }
 

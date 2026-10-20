@@ -14,6 +14,7 @@ import {
     resolveMediaId,
     uploadAttachment,
 } from '@/engine/jira'
+import { repoDir } from '@/engine/paths'
 import type { Vars } from '@/engine/settings'
 import { toolVersion, versionLine } from '@/engine/version'
 
@@ -47,6 +48,18 @@ export function splitBodyIntoSegments(body: string, mediaIds: string[]): Comment
     return segments
 }
 
+// Uploads go to a card anyone can read, and `qar` runs unprompted, so a prompt-injected
+// "attach config/age-identity.txt" must not work: only files under <repo>/.tmp/ (the
+// session scratch dir) may be uploaded. realpath defeats `..` and symlinks.
+export function assertUploadable(file: string): void {
+    if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`)
+    const scratch = fs.realpathSync(path.join(repoDir(), '.tmp'))
+    const real = fs.realpathSync(file)
+    if (!real.startsWith(`${scratch}${path.sep}`)) {
+        throw new Error(`Refusing to upload ${file}: only files under ${scratch} may be uploaded.`)
+    }
+}
+
 function splitList(value: string | undefined): string[] {
     return (value ?? '')
         .split(',')
@@ -74,9 +87,11 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
     const config = jiraConfig(vars)
     const images = splitList(opts.images)
     const attachments = splitList(opts.attach)
-    for (const file of [...images, ...attachments]) {
-        if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`)
-    }
+    for (const file of [...images, ...attachments]) assertUploadable(file)
+    // A bare `--mention` parses to 'true'. Reject it before any upload, which a
+    // rejected body would leave behind as orphan attachments.
+    const mention = (opts.mention ?? '').trim() || undefined
+    if (mention === 'true') throw new Error('jira-comment: --mention needs an account id')
 
     const mediaIds: string[] = []
     for (const image of images) {
@@ -94,10 +109,9 @@ export async function jiraCommentCommand(opts: Record<string, string>, vars: Var
     const footer = [attachmentsLine(uploaded), `_${versionLine(toolVersion())}_`]
         .filter(Boolean)
         .join('\n')
-    const fullBody = `${body.trimEnd()}\n\n${footer}\n`
-
-    const adf = buildCommentAdf(splitBodyIntoSegments(fullBody, mediaIds), {
-        mention: opts.mention || undefined,
+    const adf = buildCommentAdf(splitBodyIntoSegments(body, mediaIds), {
+        mention,
+        footer,
     })
     const created = await addCommentAdf(config, issue, adf)
     process.stdout.write(`${JSON.stringify(created)}\n`)

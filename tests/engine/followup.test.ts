@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { recommendFollowUp, type Severity } from '@/engine/followup'
 
 describe('recommendFollowUp', () => {
+    it('names a FAIL that has no area instead of crashing', () => {
+        expect(() => recommendFollowUp([{ id: 'a', severity: 'minor' } as never])).toThrow(
+            /missing area on a/
+        )
+    })
+
     it('sends back when any FAIL is a blocker', () => {
         const r = recommendFollowUp([
             { id: 'a', severity: 'minor', area: 'copy' },

@@ -48,6 +48,28 @@ describe('checkFigmaCode', () => {
         expect(checkFigmaCode(extra, script).allow).toBe(false)
     })
 
+    // The session can Edit the script, so sending an edited script that matches the
+    // edited file must still be denied: the trusted copy is the pinned hash.
+    it('denies when the on-disk script itself was edited', () => {
+        const edited = `${script}\nfigma.currentPage.children[0].remove()\n`
+        const result = checkFigmaCode(edited, edited)
+        expect(result.allow).toBe(false)
+        expect(result.reason).toContain('hash')
+    })
+
+    it('accepts instance-internal ids for locate and frame only', () => {
+        expect(checkFigmaCode(withHeader('locate', 'I123:456;789:10'), script).allow).toBe(true)
+        expect(checkFigmaCode(withHeader('frame', 'I123:456;789:10'), script).allow).toBe(true)
+        expect(checkFigmaCode(withHeader('page', 'I123:456;789:10'), script).allow).toBe(false)
+    })
+
+    it('takes a single id for page and frame, with an optional frame offset', () => {
+        expect(checkFigmaCode(withHeader('page', '1:2,3:4'), script).allow).toBe(false)
+        expect(checkFigmaCode(withHeader('frame', '1:2,3:4'), script).allow).toBe(false)
+        expect(checkFigmaCode(withHeader('frame', '1:2#40'), script).allow).toBe(true)
+        expect(checkFigmaCode(withHeader('frame', '1:2#x'), script).allow).toBe(false)
+    })
+
     it('denies a bad MODE', () => {
         expect(checkFigmaCode(withHeader('write', ''), script).allow).toBe(false)
     })

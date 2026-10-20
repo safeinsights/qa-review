@@ -124,17 +124,48 @@ export function splitExpands(text: string): BodyPart[] {
     const parts: BodyPart[] = []
     let rest = text
     for (;;) {
-        const open = rest.match(EXPAND_OPEN)
-        if (!open || open.index === undefined) break
-        if (open.index > 0) parts.push({ kind: 'markdown', text: rest.slice(0, open.index) })
-        rest = rest.slice(open.index + open[0].length)
-        const close = rest.match(EXPAND_CLOSE)
+        const open = findOutsideFence(rest, EXPAND_OPEN)
+        const openAt = open?.index
+        if (!open || openAt === undefined) break
+        if (openAt > 0) parts.push({ kind: 'markdown', text: rest.slice(0, openAt) })
+        rest = rest.slice(openAt + open[0].length)
+        const close = findOutsideFence(rest, EXPAND_CLOSE)
         const end = close?.index ?? rest.length
         parts.push({ kind: 'expand', title: open[1].trim(), text: rest.slice(0, end) })
         rest = close ? rest.slice(end + close[0].length) : ''
     }
     if (rest) parts.push({ kind: 'markdown', text: rest })
     return parts
+}
+
+// First match of `pattern` that is not inside a fenced code block, so a comment that
+// quotes the `{expand}` syntax is not split mid-fence.
+function findOutsideFence(text: string, pattern: RegExp): RegExpMatchArray | null {
+    const fences = fencedRanges(text)
+    const global = new RegExp(pattern.source, `${pattern.flags}g`)
+    for (const match of text.matchAll(global)) {
+        const at = match.index ?? 0
+        if (!fences.some(([start, end]) => at >= start && at < end)) return match
+    }
+    return null
+}
+
+function fencedRanges(text: string): [number, number][] {
+    const ranges: [number, number][] = []
+    let start = -1
+    let offset = 0
+    for (const line of text.split('\n')) {
+        if (line.trimStart().startsWith('```')) {
+            if (start < 0) start = offset
+            else {
+                ranges.push([start, offset + line.length])
+                start = -1
+            }
+        }
+        offset += line.length + 1
+    }
+    if (start >= 0) ranges.push([start, text.length])
+    return ranges
 }
 
 const MENTION_TOKEN = '{{mention}}'
@@ -174,11 +205,18 @@ function markdownBlocks(text: string): Record<string, unknown>[] {
     return doc.content ?? []
 }
 
+function isCode(node: Record<string, unknown>): boolean {
+    const marks = node.marks as Array<{ type: string }> | undefined
+    return Boolean(marks?.some(mark => mark.type === 'code'))
+}
+
 // Walks inline text nodes and splits `{{mention}}` into a mention node, which is
 // what makes Jira notify the PM — a typed @name in markdown is just text.
 function injectMentions(nodes: Record<string, unknown>[], accountId: string): boolean {
     let found = false
     for (const node of nodes) {
+        // ADF allows only plain text inside a codeBlock; a mention node there is a 400.
+        if (node.type === 'codeBlock') continue
         const children = node.content as Record<string, unknown>[] | undefined
         if (!children) continue
         const next: Record<string, unknown>[] = []
@@ -186,6 +224,7 @@ function injectMentions(nodes: Record<string, unknown>[], accountId: string): bo
             if (
                 child.type === 'text' &&
                 typeof child.text === 'string' &&
+                !isCode(child) &&
                 child.text.includes(MENTION_TOKEN)
             ) {
                 found = true
@@ -214,7 +253,7 @@ function injectMentions(nodes: Record<string, unknown>[], accountId: string): bo
 // `{expand:…}` blocks and `{{mention}}` are handled here too — see `splitExpands` / `injectMentions`.
 export function buildCommentAdf(
     segments: CommentSegment[],
-    options: { mention?: string } = {}
+    options: { mention?: string; footer?: string } = {}
 ): Record<string, unknown> {
     const content: Record<string, unknown>[] = []
     for (const segment of segments) {
@@ -251,6 +290,9 @@ export function buildCommentAdf(
             })
         }
     }
+    // Appended after the segments and outside any `{expand}`, so an unclosed expand or
+    // trailing screenshots can neither swallow nor precede it.
+    if (options.footer) content.push(...markdownBlocks(options.footer))
     // An ADF doc must contain at least one node.
     if (!content.length) content.push({ type: 'paragraph', content: [] })
     return { version: 1, type: 'doc', content }
@@ -433,6 +475,17 @@ export async function linkTypeNames(config: JiraConfig): Promise<string[]> {
     await assertOk(response, 'Reading issue link types')
     const body = (await response.json()) as { issueLinkTypes?: Array<{ name: string }> }
     return (body.issueLinkTypes ?? []).map(t => t.name)
+}
+
+// Checked before a card is created: a typo'd --link target would otherwise fail AFTER
+// the card exists, and re-running the command to "fix" it files a duplicate.
+export async function assertIssueExists(config: JiraConfig, key: string): Promise<void> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    if (response.status === 404) throw new Error(`Issue ${key} does not exist`)
+    await assertOk(response, `Reading ${key}`)
 }
 
 // Created with summary only: the description needs media ids, and media can only

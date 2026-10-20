@@ -45,7 +45,13 @@ export async function fetchDeployedRelease(
     try {
         response = await fetch(aboutUrl)
     } catch (cause) {
-        const reason = cause instanceof Error ? cause.message : String(cause)
+        // undici's own message is always "fetch failed"; the real reason is one level down.
+        const inner =
+            cause instanceof Error ? (cause.cause as NodeJS.ErrnoException | undefined) : undefined
+        const reason =
+            inner?.code ??
+            inner?.message ??
+            (cause instanceof Error ? cause.message : String(cause))
         throw new Error(
             `Could not reach ${new URL(aboutUrl).host} (${reason}). Either you are offline, the ` +
                 'preview is not deployed, or the command sandbox is blocking the host.',

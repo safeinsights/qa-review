@@ -840,7 +840,7 @@ figma tools by name (`whoami`, `get_screenshot`, `get_metadata`,
 `get_variable_defs`); `use_figma` is allowed only through the hook's explicit allow
 (a pre-approval would fail open if the hook could not run), and the server's other
 write tools are deliberately NOT pre-approved. So the only code a session may send is
-`.claude/skills/qa-validate/figma-notes.js` (modes `pages` / `locate` / `page`),
+`.claude/skills/qa-validate/figma-notes.js` (modes `pages` / `locate` / `page` / `frame`; only `frame` returns annotation text),
 and the `PreToolUse` hook `.claude/hooks/figma-readonly.mjs` (wired in
 `.claude/settings.json`) denies any `use_figma` call whose code differs from that
 file in anything but its `MODE`/`TARGET` header.

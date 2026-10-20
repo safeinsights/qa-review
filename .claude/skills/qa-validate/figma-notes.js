@@ -6,9 +6,12 @@ const TARGET = ''
 //   pages  → every page {id, name}
 //   locate → for each id in TARGET (comma-separated): {id, name, type, page}
 //   page   → TARGET is a page id: top-level frames with their annotation counts
-//   frame  → TARGET is a top-level frame id: every annotation inside that frame
+//   frame  → TARGET is a top-level frame id, optionally `id#offset`: that frame's
+//            annotations, starting at `offset`
 // `page` no longer returns the notes themselves: use_figma caps a result at 20 KB
-// and one annotated page blew past it, so notes are read one frame at a time.
+// and one annotated page blew past it, so notes are read one frame at a time. A
+// frame that is itself too big stops at ~15 KB and returns `nextOffset`; call again
+// with `id#nextOffset` until it is absent.
 const cats = await figma.annotations.getAnnotationCategoriesAsync()
 const catName = Object.fromEntries(cats.map(c => [c.id, c.label]))
 const hasNotes = n => Array.isArray(n.annotations) && n.annotations.length > 0
@@ -54,8 +57,10 @@ if (MODE === 'page') {
 }
 
 if (MODE === 'frame') {
-    const top = await figma.getNodeByIdAsync(TARGET)
-    if (!top) return { error: `not found: ${TARGET}` }
+    const [frameId, offsetText = '0'] = TARGET.split('#')
+    const offset = Number(offsetText)
+    const top = await figma.getNodeByIdAsync(frameId)
+    if (!top) return { error: `not found: ${frameId}` }
     const page = pageOf(top)
     if (!page) return { error: `not on a page: ${TARGET}` }
     if (page !== figma.currentPage) await figma.setCurrentPageAsync(page)
@@ -78,7 +83,18 @@ if (MODE === 'frame') {
             })
         }
     }
-    return { page: { id: page.id, name: page.name }, frame: { id: top.id, name: top.name }, notes }
+    const BUDGET = 15000
+    const window = []
+    let size = 0
+    for (const note of notes.slice(offset)) {
+        size += JSON.stringify(note).length
+        if (window.length > 0 && size > BUDGET) break
+        window.push(note)
+    }
+    const next = offset + window.length
+    const result = { page: { id: page.id, name: page.name }, frame: { id: top.id, name: top.name }, total: notes.length, notes: window }
+    if (next < notes.length) result.nextOffset = next
+    return result
 }
 
 return { error: `unknown MODE: ${MODE}` }

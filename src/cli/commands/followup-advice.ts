@@ -4,7 +4,8 @@ import { type Fail, recommendFollowUp } from '@/engine/followup'
 // `qar followup-advice --input <path.json>` — reads the validation's results file
 // (or a bare list of FAILs) and returns the routing suggestion.
 export async function followupAdviceCommand(opts: Record<string, string>): Promise<void> {
-    // A bare `--input` with no value parses to 'true', which is not a path.
+    // `--input` is not listed valueless in args.ts, so a bare one is empty or swallows
+    // the next flag; 'true' is kept as a guard in case that listing changes.
     const input = (opts.input ?? '').trim()
     if (!input || input === 'true') throw new Error('followup-advice requires --input <path.json>')
     const parsed = JSON.parse(fs.readFileSync(input, 'utf8')) as {

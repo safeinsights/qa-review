@@ -49,6 +49,31 @@ function isBlank(value: unknown): boolean {
     return typeof value !== 'string' || value.trim() === ''
 }
 
+// The inventory-side rules: ids, titles, results present, observed lines, conflicts.
+function inventoryProblems(
+    inventory: Inventory,
+    lines: Map<string, InventoryLine>,
+    seen: Set<string>
+): string[] {
+    const problems: string[] = []
+    // `lines` keeps the last duplicate, which would let one result cover two lines.
+    const ids = new Set<string>()
+    for (const line of inventory.lines) {
+        if (ids.has(line.id)) problems.push(`${line.id}: duplicate inventory id`)
+        ids.add(line.id)
+    }
+    for (const line of inventory.lines) {
+        if (isBlank(line.title)) problems.push(`${line.id}: no title`)
+        // Context lines need no result, so this would be a finding that never has to FAIL.
+        if (line.source.type === 'observed' && line.kind === 'context') {
+            problems.push(`${line.id}: an observed line cannot be context (it can only be a FAIL)`)
+        }
+        if (line.kind !== 'context' && !seen.has(line.id)) problems.push(`${line.id}: no result`)
+        problems.push(...conflictProblems(line, lines))
+    }
+    return problems
+}
+
 export function checkResults(inventory: Inventory, results: ResultEntry[]): ResultsReport {
     const problems: string[] = []
     const counts = Object.fromEntries(RESULT_VALUES.map(v => [v, 0])) as Record<ResultValue, number>
@@ -104,11 +129,7 @@ export function checkResults(inventory: Inventory, results: ResultEntry[]): Resu
         }
     }
 
-    for (const line of inventory.lines) {
-        if (isBlank(line.title)) problems.push(`${line.id}: no title`)
-        if (line.kind !== 'context' && !seen.has(line.id)) problems.push(`${line.id}: no result`)
-        problems.push(...conflictProblems(line, lines))
-    }
+    problems.push(...inventoryProblems(inventory, lines, seen))
 
     return { ok: problems.length === 0, counts, problems }
 }
