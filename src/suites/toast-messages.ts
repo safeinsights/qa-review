@@ -155,43 +155,57 @@ async function openModal(page: Page, buttonName: string, dialogName: string): Pr
     return dialog
 }
 
-// The two invitation notices, raised by useInvitationNotices() straight off these query
-// params — no invitation, no org and no second account needed. Reused per role because it
-// is the one toast pair every signed-in user can reach, so it doubles as "this role's shell
-// mounts the tray at all".
+// Mirrors management-app's INVITATION_NOTICE_STORAGE_KEY (src/lib/invitation-notice.ts).
+// Since OTTER-736 (management-app #1176) the join-team page's Skip/Decline hand the notice to
+// the dashboard through this key; the old ?skip=/?decline= params are ignored.
+const INVITATION_NOTICE_KEY = 'si:invitation-notice'
+
+type InvitationNotice = { kind: 'skip' | 'decline'; orgName: string }
+
+// Plants exactly what Skip/Decline write, then reloads so useInvitationNotices() reads it on
+// mount — no invitation, no org and no second account needed. The key holds ONE notice, so
+// each toast needs its own round.
+async function raiseInvitationNotice(ctx: RunContext, notice: InvitationNotice): Promise<void> {
+    await ctx.page.goto(`${ctx.baseURL}/dashboard`, { waitUntil: 'domcontentloaded' })
+    await ctx.page.getByRole('navigation', { name: 'Main' }).waitFor({ state: 'visible' })
+    await ctx.page.evaluate(([key, value]) => sessionStorage.setItem(key, value), [
+        INVITATION_NOTICE_KEY,
+        JSON.stringify(notice),
+    ] as const)
+    await ctx.page.reload({ waitUntil: 'domcontentloaded' })
+}
+
+// The hook removes the key BEFORE showing the toast, so once the toast is up the key must be
+// gone. That is the deterministic form of OTTER-736's "a reload must not re-fire it" — unlike
+// the old URL-cleanup check, which raced the dashboard's own router.replace and was reverted.
+async function expectNoticeConsumed(page: Page): Promise<void> {
+    const remaining = await page.evaluate(key => sessionStorage.getItem(key), INVITATION_NOTICE_KEY)
+    expect(remaining).toBeNull()
+}
+
+// Reused per role because it is the one toast pair every signed-in user can reach, so it
+// doubles as "this role's shell mounts the tray at all".
 async function expectInvitationNotices(ctx: RunContext): Promise<void> {
-    const skipped = `Skip Org ${ctx.tag}`
+    const skipped = `Skip Org & Co + #${ctx.tag}`
     const declined = `Decline Lab ${ctx.tag}`
-    const params = new URLSearchParams({ skip: skipped, decline: declined })
-    await ctx.page.goto(`${ctx.baseURL}/dashboard?${params}`, { waitUntil: 'domcontentloaded' })
+
+    await raiseInvitationNotice(ctx, { kind: 'skip', orgName: skipped })
     await expectToast(ctx.page, {
         title: `You have opted to skip the invitation to ${skipped}. The invitation can be found in your inbox and is valid for 7 days.`,
         color: 'green',
     })
+    // The app pins ids on these two so it can address them later.
+    await expect(ctx.page.locator('#skip-invitation')).toBeVisible()
+    await expectNoticeConsumed(ctx.page)
+    await dismissToasts(ctx.page)
+
+    await raiseInvitationNotice(ctx, { kind: 'decline', orgName: declined })
     await expectToast(ctx.page, {
         title: `You've declined ${declined}'s invitation.`,
         color: 'green',
     })
-    // The app pins ids on these two so it can address them later.
-    await expect(ctx.page.locator('#skip-invitation')).toBeVisible()
     await expect(ctx.page.locator('#decline-invitation')).toBeVisible()
-    // The hook is also meant to router.replace() the params away once the toasts are up. On
-    // qa that often does NOT happen: ?skip=/?decline= survive, so a reload re-fires the
-    // toast — OTTER-736.
-    //
-    // Not asserted here, and please don't add it back without reading this first. An
-    // assertion for it WAS written and then reverted, because it is not deterministic under
-    // automation: it failed as intended on one run and passed on the very next run of a
-    // byte-identical file, while the bug still reproduced 3/3 by hand in a real browser
-    // (toast at ~460ms, the param present at the toast and 2.5s later, with and without a
-    // second param alongside it). A check that goes green while the defect is present is
-    // worse than no check — and it may have been passing for an unrelated reason, since
-    // user-studies.tsx runs its OWN router.replace for the audience tab, which could strip
-    // `skip` without the cleanup ever running.
-    //
-    // What it would take to assert this honestly: work out why a Playwright context and a
-    // hand-driven browser disagree, then write a check that fails reliably while the bug is
-    // there. Until then this stays a ticket, not a test.
+    await expectNoticeConsumed(ctx.page)
     await dismissToasts(ctx.page)
 }
 
