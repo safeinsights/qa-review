@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { resolveEnv, resolveEnvForRole, resolvePrEnv, resolvePrEnvForRole } from '@/engine/env'
+import {
+    resolveBaseUrl,
+    resolveEnv,
+    resolveEnvForRole,
+    resolvePrEnv,
+    resolvePrEnvForRole,
+} from '@/engine/env'
 import { totp } from '@/engine/totp'
 
 // All account fields are per-env (email, password, MFA code/seed). qa is the
@@ -310,5 +316,23 @@ describe('resolveEnvForRole', () => {
     it('resolves one role for a PR preview off the QA vars', () => {
         expect(resolvePrEnvForRole(839, 'reviewer', ENV_VARS).account.email).toBe('v@example.com')
         expect(() => resolvePrEnvForRole(0, 'reviewer', ENV_VARS)).toThrow(/invalid pr number/i)
+    })
+})
+
+// deployed-release never signs in, so it must not need any account configured.
+describe('resolveBaseUrl', () => {
+    it('reads a stable env base URL with no accounts configured', () => {
+        expect(resolveBaseUrl({ env: 'staging' }, { STAGING_BASE_URL: 'https://s.example' })).toBe(
+            'https://s.example'
+        )
+    })
+
+    it('derives a PR preview URL and rejects a bad PR number', () => {
+        expect(resolveBaseUrl({ pr: '42' }, {})).toBe('https://pr42.qa.safeinsights.org')
+        expect(() => resolveBaseUrl({ pr: 'abc' }, {})).toThrow('Invalid PR number "abc"')
+    })
+
+    it('rejects an unknown env', () => {
+        expect(() => resolveBaseUrl({ env: 'nope' }, {})).toThrow('Unknown environment "nope"')
     })
 })

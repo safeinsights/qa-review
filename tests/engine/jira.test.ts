@@ -1,11 +1,24 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
+    attachmentsLine,
     buildCommentAdf,
+    createIssue,
+    downloadAttachment,
     extractMediaId,
+    issueTypeNames,
+    isTextAttachment,
     jiraConfig,
     jiraConfigFromEnv,
     jiraFetch,
+    linkIssues,
+    linkTypeNames,
+    listAttachments,
+    splitExpands,
+    updateDescriptionAdf,
 } from '@/engine/jira'
 
 const UUID = '0f8b4e2a-1c3d-4f5a-9b7e-2d6c8a1f3b5d'
@@ -30,6 +43,13 @@ describe('extractMediaId', () => {
 })
 
 describe('buildCommentAdf', () => {
+    it('skips an expand block with no content', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '{expand:Passed (0)}\n{expand}' }])
+        const nodes = doc.content as { type: string }[]
+        expect(nodes.some(n => n.type === 'expand')).toBe(false)
+        expect(nodes.length).toBeGreaterThan(0)
+    })
+
     it('renders an image as a mediaSingle node keyed by the media uuid', () => {
         const doc = buildCommentAdf([{ type: 'media', mediaId: UUID }])
         const media = (doc.content as Record<string, never>[])[0]
@@ -56,6 +76,32 @@ describe('buildCommentAdf', () => {
     it('splits blank-line-separated prose into separate paragraphs', () => {
         const doc = buildCommentAdf([{ type: 'text', text: 'one\n\ntwo' }])
         expect(doc.content).toHaveLength(2)
+    })
+
+    // A QA report is line-oriented, not prose: a single newline is a line break,
+    // not a soft wrap. Markdown's default folds it into a space, which turned the
+    // "Decisions needed" block into one run-on paragraph.
+    it('keeps a single newline as a hard line break inside a paragraph', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'Decisions:\nA: one\nB: two' }])
+        const para = (doc.content as { content: Record<string, unknown>[] }[])[0]
+        expect(para.content.map(n => n.type)).toEqual([
+            'text',
+            'hardBreak',
+            'text',
+            'hardBreak',
+            'text',
+        ])
+        expect(doc.content).toHaveLength(1)
+    })
+
+    it('does not add a line break before a list item or heading, or inside a code fence', () => {
+        const doc = buildCommentAdf([
+            { type: 'text', text: 'intro\n- a\n- b\n## h\n```\nx\ny\n```' },
+        ])
+        const nodes = doc.content as { type: string; content?: Record<string, unknown>[] }[]
+        expect(nodes.map(n => n.type)).toEqual(['paragraph', 'bulletList', 'heading', 'codeBlock'])
+        expect(JSON.stringify(nodes)).not.toContain('hardBreak')
+        expect(nodes[3].content?.[0]).toMatchObject({ text: 'x\ny' })
     })
 
     it('always emits at least one node, since ADF rejects an empty doc', () => {
@@ -201,5 +247,309 @@ describe('jiraConfig (from merged settings vars)', () => {
 
     it('still fails loudly when the username is absent from settings and env', () => {
         expect(() => jiraConfig({ JIRA_API_TOKEN: 'tok' })).toThrow(/JIRA_USERNAME/)
+    })
+})
+
+describe('listAttachments', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    it('requests only the attachment field and maps the rows', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    fields: {
+                        attachment: [
+                            {
+                                id: '10',
+                                filename: 'manualtest617.md',
+                                mimeType: 'text/markdown',
+                                size: 1200,
+                            },
+                            { id: '11', filename: 'shot.png', mimeType: 'image/png', size: 90000 },
+                        ],
+                    },
+                }),
+                { status: 200 }
+            )
+        )
+        vi.stubGlobal('fetch', fetchMock)
+        const rows = await listAttachments(
+            { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' },
+            'OTTER-617'
+        )
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/OTTER-617?fields=attachment'
+        )
+        expect(rows).toEqual([
+            { id: '10', filename: 'manualtest617.md', mimeType: 'text/markdown', size: 1200 },
+            { id: '11', filename: 'shot.png', mimeType: 'image/png', size: 90000 },
+        ])
+    })
+})
+
+describe('isTextAttachment', () => {
+    it('accepts text mime types and md/txt/csv names, rejects images', () => {
+        expect(
+            isTextAttachment({
+                id: '1',
+                filename: 'a.md',
+                mimeType: 'application/octet-stream',
+                size: 1,
+            })
+        ).toBe(true)
+        expect(
+            isTextAttachment({ id: '1', filename: 'a.bin', mimeType: 'text/plain', size: 1 })
+        ).toBe(true)
+        expect(
+            isTextAttachment({ id: '1', filename: 'a.png', mimeType: 'image/png', size: 1 })
+        ).toBe(false)
+    })
+})
+
+describe('downloadAttachment', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    const config = { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' }
+    const media = 'https://api.media.atlassian.com/file/u/binary?token=t'
+
+    function tmpDest(): { dir: string; dest: string } {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-att-'))
+        return { dir, dest: path.join(dir, 'plan.md') }
+    }
+
+    it('follows the content redirect by hand, without the Jira credentials', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, { status: 302, headers: { location: media } })
+            )
+            .mockResolvedValueOnce(new Response('# plan', { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const { dir, dest } = tmpDest()
+        await downloadAttachment(config, '10', dest)
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/attachment/content/10'
+        )
+        expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
+        expect(fetchMock.mock.calls[1][0]).toBe(media)
+        expect(fetchMock.mock.calls[1][1].headers).toBeUndefined()
+        expect(fs.readFileSync(dest, 'utf8')).toBe('# plan')
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    // The sandbox blocks a host it does not list; the error must name THAT host,
+    // not the Jira site that is already allowlisted.
+    it('names the media host when the redirect target is unreachable', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, { status: 302, headers: { location: media } })
+            )
+            .mockRejectedValueOnce(new TypeError('fetch failed'))
+        vi.stubGlobal('fetch', fetchMock)
+        const { dir, dest } = tmpDest()
+        await expect(downloadAttachment(config, '10', dest)).rejects.toThrow(
+            /Could not reach api\.media\.atlassian\.com/
+        )
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+})
+
+describe('splitExpands', () => {
+    it('splits an expand block out of surrounding markdown', () => {
+        expect(splitExpands('intro\n\n{expand:Passed (2)}\n- a\n- b\n{expand}\n\nafter')).toEqual([
+            { kind: 'markdown', text: 'intro\n\n' },
+            { kind: 'expand', title: 'Passed (2)', text: '- a\n- b\n' },
+            { kind: 'markdown', text: '\n\nafter' },
+        ])
+    })
+
+    it('treats a missing closing tag as "to the end"', () => {
+        expect(splitExpands('{expand:T}\nbody')).toEqual([
+            { kind: 'expand', title: 'T', text: 'body' },
+        ])
+    })
+})
+
+describe('fenced code', () => {
+    it('does not split on {expand} quoted inside a fence', () => {
+        const text = 'how to write it:\n```\n{expand:Passed (N)}\n{expand}\n```\n'
+        expect(splitExpands(text)).toEqual([{ kind: 'markdown', text }])
+    })
+
+    it('leaves {{mention}} alone inside a code block and inline code', () => {
+        const doc = buildCommentAdf(
+            [{ type: 'text', text: '```\n{{mention}}\n```\n\nuse `{{mention}}`' }],
+            {
+                mention: 'abc',
+            }
+        )
+        const json = JSON.stringify(doc)
+        expect(json.match(/"type":"mention"/g)).toHaveLength(1)
+        expect(JSON.stringify((doc.content as unknown[]).at(-1))).not.toContain('mention"')
+    })
+})
+
+describe('buildCommentAdf footer', () => {
+    it('ends with the footer even when an expand is never closed', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: '{expand:Passed}\n- a' }], {
+            footer: 'Posted by qa-review',
+        })
+        const last = (doc.content as { type: string }[]).at(-1)
+        expect(last?.type).toBe('paragraph')
+        expect(JSON.stringify(last)).toContain('Posted by qa-review')
+    })
+
+    it('puts the footer after trailing media', () => {
+        const doc = buildCommentAdf(
+            [
+                { type: 'text', text: 'body' },
+                { type: 'media', mediaId: 'id-1' },
+            ],
+            { footer: 'v1' }
+        )
+        expect((doc.content as { type: string }[]).map(n => n.type)).toEqual([
+            'paragraph',
+            'mediaSingle',
+            'paragraph',
+        ])
+    })
+})
+
+describe('buildCommentAdf expand and mention', () => {
+    it('emits an ADF expand node with the title and inner blocks', () => {
+        const doc = buildCommentAdf([
+            { type: 'text', text: '{expand:Passed (2)}\n- a\n- b\n{expand}' },
+        ])
+        const node = (doc.content as Record<string, unknown>[])[0]
+        expect(node.type).toBe('expand')
+        expect(node.attrs).toEqual({ title: 'Passed (2)' })
+        expect((node.content as { type: string }[])[0].type).toBe('bulletList')
+    })
+
+    it('replaces {{mention}} with a mention node inline', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'Decisions for {{mention}}:' }], {
+            mention: '62a8e164bfade2006964f268',
+        })
+        const para = (doc.content as Record<string, unknown>[])[0]
+        const inline = para.content as Record<string, unknown>[]
+        expect(inline.map(n => n.type)).toEqual(['text', 'mention', 'text'])
+        expect(inline[1].attrs).toEqual({ id: '62a8e164bfade2006964f268' })
+    })
+
+    it('prepends a mention paragraph when the body has no placeholder', () => {
+        const doc = buildCommentAdf([{ type: 'text', text: 'hello' }], { mention: 'abc' })
+        const first = (doc.content as Record<string, unknown>[])[0]
+        expect((first.content as { type: string }[])[0].type).toBe('mention')
+    })
+})
+
+const cfg = { baseUrl: 'https://x.atlassian.net', email: 'a', apiToken: 'b' }
+
+describe('issue creation endpoints', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+    })
+
+    it('issueTypeNames reads createmeta for the project', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ issueTypes: [{ name: 'Task' }, { name: 'Bug' }] }), {
+                status: 200,
+            })
+        )
+        vi.stubGlobal('fetch', fetchMock)
+        expect(await issueTypeNames(cfg, 'OTTER')).toEqual(['Task', 'Bug'])
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes'
+        )
+    })
+
+    it('issueTypeNames surfaces a 403 instead of guessing', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue(new Response('forbidden', { status: 403 }))
+        )
+        await expect(issueTypeNames(cfg, 'OTTER')).rejects.toThrow('403')
+    })
+
+    it('linkTypeNames reads the global link types', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue(
+                new Response(
+                    JSON.stringify({
+                        issueLinkTypes: [{ name: 'Blocks' }, { name: 'Relates' }],
+                    }),
+                    { status: 200 }
+                )
+            )
+        )
+        expect(await linkTypeNames(cfg)).toEqual(['Blocks', 'Relates'])
+    })
+
+    it('createIssue posts project, type and summary and returns the key', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(
+                new Response(JSON.stringify({ id: '99', key: 'OTTER-901' }), { status: 201 })
+            )
+        vi.stubGlobal('fetch', fetchMock)
+        expect(await createIssue(cfg, { project: 'OTTER', type: 'Bug', summary: 'S' })).toEqual({
+            id: '99',
+            key: 'OTTER-901',
+        })
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+        expect(body).toEqual({
+            fields: { project: { key: 'OTTER' }, issuetype: { name: 'Bug' }, summary: 'S' },
+        })
+    })
+
+    it('updateDescriptionAdf PUTs the ADF as fields.description', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const adf = { version: 1, type: 'doc', content: [] }
+        await updateDescriptionAdf(cfg, 'OTTER-901', adf)
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            'https://x.atlassian.net/rest/api/3/issue/OTTER-901'
+        )
+        expect(fetchMock.mock.calls[0][1].method).toBe('PUT')
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            fields: { description: adf },
+        })
+    })
+
+    it('linkIssues posts the named link between the two keys', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 201 }))
+        vi.stubGlobal('fetch', fetchMock)
+        await linkIssues(cfg, { type: 'Relates', inward: 'OTTER-901', outward: 'OTTER-617' })
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            type: { name: 'Relates' },
+            inwardIssue: { key: 'OTTER-901' },
+            outwardIssue: { key: 'OTTER-617' },
+        })
+    })
+})
+
+describe('attachmentsLine', () => {
+    it('lists each uploaded file as a link on one line', () => {
+        expect(
+            attachmentsLine([
+                { filename: 'OTTER-1-inventory.html', url: 'https://x/a/1' },
+                { filename: 'OTTER-1-results.json', url: 'https://x/a/2' },
+            ])
+        ).toBe(
+            '**Attachments:** [OTTER-1-inventory.html](https://x/a/1) · [OTTER-1-results.json](https://x/a/2)'
+        )
+    })
+
+    it('is empty with nothing to list', () => {
+        expect(attachmentsLine([])).toBe('')
     })
 })

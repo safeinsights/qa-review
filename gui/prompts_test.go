@@ -49,3 +49,40 @@ func TestPromptTarget(t *testing.T) {
 		t.Fatalf("blank PR should fall back to env: %q", got)
 	}
 }
+
+// A newline INSIDE a template is as bad as a trailing one: claude's TUI treats the
+// text before it as a submitted message, so the session sees only the tail. The
+// validation prompt shipped multi-line once and the session asked for the card it
+// had already been given.
+func TestPromptTemplatesAreSingleLine(t *testing.T) {
+	entries, err := promptFS.ReadDir("prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := promptFS.ReadFile("prompts/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsAny(strings.TrimRight(string(data), "\r\n"), "\r\n") {
+			t.Errorf("%s contains a line break inside the prompt", e.Name())
+		}
+	}
+}
+
+// The user's own text comes from a textarea, so a composed prompt must stay on one
+// line even when the template, the PR caveat and the instructions are all joined.
+func TestComposedPromptsAreSingleLine(t *testing.T) {
+	multiLine := "first line\r\nsecond line\nthird\rfourth"
+	for name, p := range map[string]string{
+		"authoring":          composeAuthoringPrompt("qa", "42", "researcher", multiLine),
+		"validation with PR": composeValidationPrompt("qa", "42", "OTTER-1", multiLine),
+		"validation by PR":   composeValidationPrompt("qa", "42", "", multiLine),
+		"validation, no PR":  composeValidationPrompt("qa", "", "OTTER-1", multiLine),
+		"companion":          composeCompanionPrompt("create-study"),
+	} {
+		if strings.ContainsAny(p, "\r\n") {
+			t.Errorf("%s prompt contains a line break: %q", name, p)
+		}
+	}
+}

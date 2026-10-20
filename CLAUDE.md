@@ -394,8 +394,9 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   host from `prBaseUrl()` — a bare `app.qa.safeinsights.org` entry would make QA
   runs work while PR-preview runs fail with the same unnamed transport error. The
   list also carries every non-Jira host the engine reaches via Node `fetch`
-  (currently `api.mail.tm`, the signup suite's disposable-inbox API) — a new
-  outbound host in the engine needs a matching entry here.
+  (currently `api.mail.tm`, the signup suite's disposable-inbox API, and
+  `api.media.atlassian.com`, where `jira-attachments --download` is redirected for
+  the bytes) — a new outbound host in the engine needs a matching entry here.
 - **`sandbox.excludedCommands` did NOT take effect.** The key is schema-valid and has
   listed `qar`/`pnpm qar`/`gh` since the file was created, yet sandboxed `gh` still
   failed the keychain check while its host WAS allowlisted — proof the command ran
@@ -798,6 +799,13 @@ POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
   posts ONE comment with the images embedded. Images append after the body by
   default; put a `{{image:N}}` placeholder (1-based) in the body to position one
   inline instead. Prints `{"id","url"}`.
+- Every comment ends with `Posted by qa-review <version>`, linked to the GitHub
+  release or commit (`src/engine/version.ts`, `git describe --tags --always --dirty`
+  on `repoDir()`), so a reader knows which build of the validator wrote it. In the
+  packaged app that is the CLONE's commit: the engine itself runs from the bundle
+  in `Resources/engine`, and only suites, skills and config come from the clone.
+  The clone can be ahead of the bundle, so the footer names the skill text that
+  drove the session, not necessarily the engine code that posted.
 - `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
   has no delete tool, so this is the only way to clean up a bad post). 404 = already
   gone = success.
@@ -818,6 +826,65 @@ Deliberately NOT implemented: an "upload any absolute path" helper. That's the
 arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
 [PR #1402](https://github.com/sooperset/mcp-atlassian/pull/1402); uploads here go
 through the issue attachment endpoint only.
+
+## Figma annotations are Plugin-API-only (and the validator may only READ)
+
+Dev Mode annotations — where a design's per-column rules, states and "not ready
+for engineering" markers live — are not returned by `get_screenshot`,
+`get_metadata`, `get_variable_defs`, or the Figma REST API. Only the Plugin API
+(the server's `use_figma` tool) exposes `node.annotations`. OTTER-617 was
+validated twice against rendered frames alone and missed seven annotated rules.
+
+`use_figma` can also WRITE to a design file. `gui/app.go` pre-approves only four
+figma tools by name (`whoami`, `get_screenshot`, `get_metadata`,
+`get_variable_defs`); `use_figma` is allowed only through the hook's explicit allow
+(a pre-approval would fail open if the hook could not run), and the server's other
+write tools are deliberately NOT pre-approved. So the only code a session may send is
+`.claude/skills/qa-validate/figma-notes.js` (modes `pages` / `locate` / `page` / `frame`; only `frame` returns annotation text),
+and the `PreToolUse` hook `.claude/hooks/figma-readonly.mjs` (wired in
+`.claude/settings.json`) denies any `use_figma` call whose code differs from that
+file in anything but its `MODE`/`TARGET` header.
+
+**The Figma tool names depend on how the server was added.** The plugin exposes
+`mcp__plugin_figma_figma__*`, `claude mcp add … figma` (the Doctor's own hint)
+`mcp__figma__*`, and the claude.ai connector `mcp__claude_ai_Figma__*`. So the hook
+matcher is the regex `^mcp__.+__use_figma$`: a matcher naming one prefix left the
+read-only guard silently OFF for the others, while the Doctor still showed a green
+Figma row. The read tools are pre-approved under all three known names
+(`knownFigmaServers`, `gui/app.go`), and the Doctor's whoami probe uses the name of
+the server `claude mcp list` reported as connected (`mcpToolName`). `tests/skills/` pins both the
+hook and the script's write-API-free body. The hook runs `"${QAR_NODE:-node}"`,
+so the packaged app's node is used.
+
+Reading needs a **Dev or Full seat on the SafeInsights plan**: View/Collab seats
+get 6 MCP calls a month. The Setup Doctor's "Figma seat" row probes `whoami`
+through `claude -p` and caches any answer whoami gave (whatever the seat — a
+failing seat re-probed on every launch could spend those 6 calls) for 24 h in
+`~/Library/Application Support/qa-runner/figma-seat.json`; delete that file to
+force a re-check.
+
+Follow-up cards go through `qar jira-create-issue` (ADF description, inline
+screenshots, a Relates link to the parent) — the MCP's `jira_create_issue` can do
+none of those three. `qar followup-advice` is the routing rule (blocker → send
+back; few/same-area → one card; else several), kept in code so it is testable.
+
+**The report is gated by code, not by prose.** Two runs filed real bugs under
+"also noted" and named lines by inventory id, which nobody can read without the
+inventory open. So: every inventory line has a plain-language `title` (the only
+name the report uses); the session writes `.tmp/<CARD>-results.json`; and
+`qar results-check` (`src/engine/results.ts`) refuses a set with a line missing a
+result, a result missing evidence, a FAIL missing severity/area, a NOT TESTED
+missing the approver, or an `observed`-source line that is not a FAIL. There is
+no "also observed" section: something seen outside the inventory is added as an
+`observed` line and can only FAIL. **The card is the spec**: in a card-vs-Figma
+conflict the card line is PASS or FAIL against the app and the Figma line is
+CONFLICT, listed under "Unclear requirements" for information. A PM is asked
+only for results carrying `decision` (a card-vs-Figma conflict in user-visible
+behaviour, an UNCLEAR line whose readings change the verdict, or a scope
+conflict), one per root cause; every decision is shown in full, never collapsed.
+Reports are written in the conversational voice. `qar jira-comment` keeps a single newline as a
+hard line break (`hardBreaks()`), since a report is line-oriented and markdown's
+soft wrap had folded "Decisions needed" into one paragraph.
 
 ## Useful commands
 
@@ -845,5 +912,17 @@ through the issue attachment endpoint only.
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)
 - `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
+- `pnpm qar jira-attachments --issue OTTER-617 --download`
+- `pnpm qar jira-create-issue --project OTTER --summary "…" --body-file f.md --link OTTER-617`
+- `pnpm qar inventory-render --input .tmp/OTTER-617-inventory.json` — the requirement
+  inventory as one self-contained HTML page the session opens in its browser
+- `pnpm qar results-check --inventory .tmp/OTTER-617-inventory.json --results .tmp/OTTER-617-results.json`
+  — the gate before a verdict: every line has one evidenced result, observed
+  findings are FAILs; lists every gap
+- `pnpm qar followup-advice --input .tmp/OTTER-617-results.json`
+- `pnpm qar clock --file .tmp/OTTER-617-clock.json --mark tested` / `--report` — phase
+  timing for the report summary
+- `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
+  files and link them from the comment
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

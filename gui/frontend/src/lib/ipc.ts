@@ -40,6 +40,7 @@ export interface DoctorCheck {
     detail: string
     hint: string
     docURL: string
+    advisory: boolean
 }
 
 export type AccessState =

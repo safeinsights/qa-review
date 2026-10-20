@@ -65,6 +65,10 @@ function authHeader(config: JiraConfig): string {
     return `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')}`
 }
 
+function jsonHeaders(config: JiraConfig): Record<string, string> {
+    return { Authorization: authHeader(config), 'Content-Type': 'application/json' }
+}
+
 // `fetch` rejects with a bare `TypeError: fetch failed` for every transport-level
 // failure — offline, DNS, or (the one that actually bites here) the Claude command
 // sandbox blocking the host. That message names neither the host nor the cause, so a
@@ -102,18 +106,166 @@ export function extractMediaId(location: string): string | null {
     return location.match(MEDIA_UUID_RE)?.[1] ?? null
 }
 
+export type BodyPart =
+    | { kind: 'markdown'; text: string }
+    | { kind: 'expand'; title: string; text: string }
+
+const EXPAND_OPEN = /^\{expand:([^}]*)\}[ \t]*\n?/m
+const EXPAND_CLOSE = /^\{expand\}[ \t]*/m
+
+// A long validation comment buries the three lines a PM needs under forty PASS
+// rows, so PASS rows go inside a collapsed `{expand:Passed (N)}…{expand}` block.
+// marklassian has no syntax for ADF's expand node, so the block is split out
+// HERE and each part converted separately. A block with no closing tag runs to
+// the end rather than being dropped.
+// Limitation: the body is split on `{{image:N}}` BEFORE this runs, so an image
+// placeholder inside an expand block breaks it; the qa-validate skill forbids that.
+export function splitExpands(text: string): BodyPart[] {
+    const parts: BodyPart[] = []
+    let rest = text
+    for (;;) {
+        const open = findOutsideFence(rest, EXPAND_OPEN)
+        const openAt = open?.index
+        if (!open || openAt === undefined) break
+        if (openAt > 0) parts.push({ kind: 'markdown', text: rest.slice(0, openAt) })
+        rest = rest.slice(openAt + open[0].length)
+        const close = findOutsideFence(rest, EXPAND_CLOSE)
+        const end = close?.index ?? rest.length
+        parts.push({ kind: 'expand', title: open[1].trim(), text: rest.slice(0, end) })
+        rest = close ? rest.slice(end + close[0].length) : ''
+    }
+    if (rest) parts.push({ kind: 'markdown', text: rest })
+    return parts
+}
+
+// First match of `pattern` that is not inside a fenced code block, so a comment that
+// quotes the `{expand}` syntax is not split mid-fence.
+function findOutsideFence(text: string, pattern: RegExp): RegExpMatchArray | null {
+    const fences = fencedRanges(text)
+    const global = new RegExp(pattern.source, `${pattern.flags}g`)
+    for (const match of text.matchAll(global)) {
+        const at = match.index ?? 0
+        if (!fences.some(([start, end]) => at >= start && at < end)) return match
+    }
+    return null
+}
+
+function fencedRanges(text: string): [number, number][] {
+    const ranges: [number, number][] = []
+    let start = -1
+    let offset = 0
+    for (const line of text.split('\n')) {
+        if (line.trimStart().startsWith('```')) {
+            if (start < 0) start = offset
+            else {
+                ranges.push([start, offset + line.length])
+                start = -1
+            }
+        }
+        offset += line.length + 1
+    }
+    if (start >= 0) ranges.push([start, text.length])
+    return ranges
+}
+
+const MENTION_TOKEN = '{{mention}}'
+
+// Lines that start a markdown block of their own; a hard-break marker on the line
+// BEFORE one of these would leave a stray trailing space or break the block.
+const BLOCK_START = /^(\s*([-*+]|\d+[.)])\s|#{1,6}\s|\||>|```|\{expand)/
+// Lines whose own syntax a trailing marker would corrupt (a list item is fine:
+// a break inside the item is what a continuation line means).
+const NO_MARKER = /^(\s*#{1,6}\s|\||```|\{expand)/
+
+// A validation report is line-oriented, not prose. Markdown folds a single
+// newline into a space, so "Decisions needed" posted as one run-on paragraph.
+// Every newline that joins two plain lines becomes a markdown hard break
+// (two trailing spaces → ADF hardBreak); fenced code is left untouched.
+export function hardBreaks(text: string): string {
+    const lines = text.split('\n')
+    let inFence = false
+    return lines
+        .map((line, i) => {
+            if (line.trimStart().startsWith('```')) inFence = !inFence
+            if (inFence) return line
+            const next = lines[i + 1]
+            const joinable =
+                next !== undefined &&
+                line.trim() !== '' &&
+                next.trim() !== '' &&
+                !BLOCK_START.test(next)
+            return joinable && !NO_MARKER.test(line) ? `${line.trimEnd()}  ` : line
+        })
+        .join('\n')
+}
+
+function markdownBlocks(text: string): Record<string, unknown>[] {
+    if (!text.trim()) return []
+    const doc = markdownToAdf(hardBreaks(text)) as { content?: Record<string, unknown>[] }
+    return doc.content ?? []
+}
+
+function isCode(node: Record<string, unknown>): boolean {
+    const marks = node.marks as Array<{ type: string }> | undefined
+    return Boolean(marks?.some(mark => mark.type === 'code'))
+}
+
+// Walks inline text nodes and splits `{{mention}}` into a mention node, which is
+// what makes Jira notify the PM — a typed @name in markdown is just text.
+function injectMentions(nodes: Record<string, unknown>[], accountId: string): boolean {
+    let found = false
+    for (const node of nodes) {
+        // ADF allows only plain text inside a codeBlock; a mention node there is a 400.
+        if (node.type === 'codeBlock') continue
+        const children = node.content as Record<string, unknown>[] | undefined
+        if (!children) continue
+        const next: Record<string, unknown>[] = []
+        for (const child of children) {
+            if (
+                child.type === 'text' &&
+                typeof child.text === 'string' &&
+                !isCode(child) &&
+                child.text.includes(MENTION_TOKEN)
+            ) {
+                found = true
+                const pieces = child.text.split(MENTION_TOKEN)
+                pieces.forEach((piece, i) => {
+                    if (piece) next.push({ ...child, text: piece })
+                    if (i < pieces.length - 1) {
+                        next.push({ type: 'mention', attrs: { id: accountId } })
+                    }
+                })
+            } else {
+                next.push(child)
+            }
+        }
+        node.content = next
+        if (injectMentions(next, accountId)) found = true
+    }
+    return found
+}
+
 // Builds the ADF document for a comment interleaving text and inline images.
 // Jira renders ADF, not markdown, so each text segment is converted from markdown
 // to ADF (headings, bold/italic, inline code, lists, links) via marklassian and its
 // block nodes are spliced in — this is what preserves the formatting Claude writes.
 // Media segments become mediaSingle nodes in place, keeping the text/image order.
-export function buildCommentAdf(segments: CommentSegment[]): Record<string, unknown> {
+// `{expand:…}` blocks and `{{mention}}` are handled here too — see `splitExpands` / `injectMentions`.
+export function buildCommentAdf(
+    segments: CommentSegment[],
+    options: { mention?: string; footer?: string } = {}
+): Record<string, unknown> {
     const content: Record<string, unknown>[] = []
     for (const segment of segments) {
         if (segment.type === 'text') {
-            if (!segment.text.trim()) continue
-            const doc = markdownToAdf(segment.text) as { content?: Record<string, unknown>[] }
-            for (const node of doc.content ?? []) content.push(node)
+            for (const part of splitExpands(segment.text)) {
+                if (part.kind === 'markdown') content.push(...markdownBlocks(part.text))
+                else {
+                    const inner = markdownBlocks(part.text)
+                    if (inner.length === 0) continue
+                    content.push({ type: 'expand', attrs: { title: part.title }, content: inner })
+                }
+            }
         } else {
             const attrs: Record<string, unknown> = {
                 id: segment.mediaId,
@@ -129,6 +281,18 @@ export function buildCommentAdf(segments: CommentSegment[]): Record<string, unkn
             })
         }
     }
+    if (options.mention) {
+        const found = injectMentions(content, options.mention)
+        if (!found) {
+            content.unshift({
+                type: 'paragraph',
+                content: [{ type: 'mention', attrs: { id: options.mention } }],
+            })
+        }
+    }
+    // Appended after the segments and outside any `{expand}`, so an unclosed expand or
+    // trailing screenshots can neither swallow nor precede it.
+    if (options.footer) content.push(...markdownBlocks(options.footer))
     // An ADF doc must contain at least one node.
     if (!content.length) content.push({ type: 'paragraph', content: [] })
     return { version: 1, type: 'doc', content }
@@ -160,6 +324,24 @@ export async function uploadAttachment(
     return id
 }
 
+export interface UploadedFile {
+    filename: string
+    url: string
+}
+
+// The line appended to a comment body for non-image attachments (the inventory
+// page, the results JSON), so a reader can find the files the verdict rests on.
+export function attachmentsLine(files: UploadedFile[]): string {
+    if (files.length === 0) return ''
+    const links = files.map(f => `[${f.filename}](${f.url})`).join(' · ')
+    return `**Attachments:** ${links}`
+}
+
+// Where a browser with a Jira session can open an uploaded attachment.
+export function attachmentUrl(config: JiraConfig, attachmentId: string): string {
+    return `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`
+}
+
 // Resolves an attachment's Media Services UUID from the content endpoint's redirect.
 export async function resolveMediaId(config: JiraConfig, attachmentId: string): Promise<string> {
     const response = await jiraFetch(
@@ -184,10 +366,7 @@ export async function addCommentAdf(
 ): Promise<{ id: string; url: string }> {
     const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
         method: 'POST',
-        headers: {
-            Authorization: authHeader(config),
-            'Content-Type': 'application/json',
-        },
+        headers: jsonHeaders(config),
         body: JSON.stringify({ body: adf }),
     })
     await assertOk(response, 'Adding comment')
@@ -210,4 +389,152 @@ export async function deleteComment(
     // A comment that's already gone is a success for our purposes.
     if (response.status === 404) return
     await assertOk(response, `Deleting comment ${commentId}`)
+}
+
+export interface JiraAttachment {
+    id: string
+    filename: string
+    mimeType: string
+    size: number
+}
+
+const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv'])
+
+// Text attachments (a developer's test plan, a CSV of cases) add requirements the
+// card text leaves out. Images are listed but never downloaded — the validator can't
+// read them, and a binary "text" file would just be garbage under .tmp/.
+export function isTextAttachment(attachment: JiraAttachment): boolean {
+    return (
+        attachment.mimeType.startsWith('text/') ||
+        TEXT_EXTENSIONS.has(path.extname(attachment.filename).toLowerCase())
+    )
+}
+
+// The MCP's jira_get_issue omits attachments unless `fields` names them, and even
+// then returns metadata only — this is the path to their CONTENT.
+export async function listAttachments(
+    config: JiraConfig,
+    issueKey: string
+): Promise<JiraAttachment[]> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/${issueKey}?fields=attachment`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    await assertOk(response, `Listing attachments on ${issueKey}`)
+    const body = (await response.json()) as { fields?: { attachment?: JiraAttachment[] } }
+    return (body.fields?.attachment ?? []).map(a => ({
+        id: String(a.id),
+        filename: a.filename,
+        mimeType: a.mimeType ?? '',
+        size: a.size,
+    }))
+}
+
+// Same endpoint resolveMediaId uses, but following the redirect to the bytes. The
+// redirect leaves the Jira site for the Media Services host, so it is followed by
+// hand: an automatic follow that fails would be reported as "could not reach
+// <Jira host>", naming a host that is already allowlisted instead of the one that
+// is not. The Location carries its own token, and fetch would drop the Jira
+// Authorization header on that cross-origin hop anyway, so none is sent.
+export async function downloadAttachment(
+    config: JiraConfig,
+    attachmentId: string,
+    destPath: string
+): Promise<void> {
+    let response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/attachment/content/${attachmentId}`,
+        { method: 'GET', headers: { Authorization: authHeader(config) }, redirect: 'manual' }
+    )
+    const location = response.headers.get('location')
+    if (response.status >= 300 && response.status < 400 && location) {
+        const target = new URL(location, config.baseUrl).toString()
+        response = await jiraFetch(target, { method: 'GET' })
+    }
+    await assertOk(response, `Downloading attachment ${attachmentId}`)
+    fs.mkdirSync(path.dirname(destPath), { recursive: true })
+    fs.writeFileSync(destPath, Buffer.from(await response.arrayBuffer()))
+}
+
+// Issue-type and link-type NAMES are per-site configuration. A wrong name is a
+// Jira 400 naming nothing useful, so both are checked before a card is created.
+export async function issueTypeNames(config: JiraConfig, projectKey: string): Promise<string[]> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    await assertOk(response, `Reading issue types for ${projectKey}`)
+    const body = (await response.json()) as { issueTypes?: Array<{ name: string }> }
+    return (body.issueTypes ?? []).map(t => t.name)
+}
+
+export async function linkTypeNames(config: JiraConfig): Promise<string[]> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issueLinkType`, {
+        method: 'GET',
+        headers: { Authorization: authHeader(config) },
+    })
+    await assertOk(response, 'Reading issue link types')
+    const body = (await response.json()) as { issueLinkTypes?: Array<{ name: string }> }
+    return (body.issueLinkTypes ?? []).map(t => t.name)
+}
+
+// Checked before a card is created: a typo'd --link target would otherwise fail AFTER
+// the card exists, and re-running the command to "fix" it files a duplicate.
+export async function assertIssueExists(config: JiraConfig, key: string): Promise<void> {
+    const response = await jiraFetch(
+        `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`,
+        { method: 'GET', headers: { Authorization: authHeader(config) } }
+    )
+    if (response.status === 404) throw new Error(`Issue ${key} does not exist`)
+    await assertOk(response, `Reading ${key}`)
+}
+
+// Created with summary only: the description needs media ids, and media can only
+// be uploaded to an issue that already exists, so the description is PUT afterwards.
+export async function createIssue(
+    config: JiraConfig,
+    fields: { project: string; type: string; summary: string }
+): Promise<{ key: string; id: string }> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue`, {
+        method: 'POST',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({
+            fields: {
+                project: { key: fields.project },
+                issuetype: { name: fields.type },
+                summary: fields.summary,
+            },
+        }),
+    })
+    await assertOk(response, 'Creating issue')
+    const created = (await response.json()) as { id: string; key: string }
+    return { key: created.key, id: created.id }
+}
+
+export async function updateDescriptionAdf(
+    config: JiraConfig,
+    issueKey: string,
+    adf: Record<string, unknown>
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}`, {
+        method: 'PUT',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({ fields: { description: adf } }),
+    })
+    await assertOk(response, `Setting description on ${issueKey}`)
+}
+
+export async function linkIssues(
+    config: JiraConfig,
+    link: { type: string; inward: string; outward: string }
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issueLink`, {
+        method: 'POST',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({
+            type: { name: link.type },
+            inwardIssue: { key: link.inward },
+            outwardIssue: { key: link.outward },
+        }),
+    })
+    await assertOk(response, `Linking ${link.inward} to ${link.outward}`)
 }

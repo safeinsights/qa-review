@@ -87,6 +87,28 @@ export function resolveEnv(name: string, vars: Vars = process.env): EnvConfig {
     }
 }
 
+// The base URL alone, for commands that never sign in (`qar deployed-release`), so
+// an env with no accounts configured yet still resolves.
+export function resolveBaseUrl(
+    target: { env?: string; pr?: string },
+    vars: Vars = process.env
+): string {
+    if (target.pr) {
+        const prNumber = Number(target.pr)
+        if (!Number.isInteger(prNumber) || prNumber <= 0) {
+            throw new Error(`Invalid PR number "${target.pr}". Expected a positive integer.`)
+        }
+        return prBaseUrl(prNumber)
+    }
+    const name = target.env ?? 'qa'
+    const decl = ENVIRONMENTS.find(e => e.name === name)
+    if (!decl) {
+        const known = ENVIRONMENTS.map(e => e.name).join(', ')
+        throw new Error(`Unknown environment "${name}". Known environments: ${known}`)
+    }
+    return read(vars, decl.baseUrlVar)
+}
+
 // Resolve the base URL plus ONE role's account, for commands that genuinely need
 // only that role (`qar totp --role`). Note `fix-account` is NOT one of them: it also
 // signs in as `admin` to get the token the QA API authorizes with, so it keeps
