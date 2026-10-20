@@ -3021,8 +3021,8 @@ func probeFigmaSeat(server string) DoctorCheck {
 	missPath := figmaSeatMissPath()
 	if info, err := os.Stat(missPath); err == nil && now.Sub(info.ModTime()) < seatMissTTL {
 		if detail, readErr := os.ReadFile(missPath); readErr == nil {
-			return DoctorCheck{Name: "Figma seat", OK: false, Detail: string(detail) + " (not re-checked for " + seatMissTTL.String() + ")",
-				Hint: "Start a `claude` session and run `/mcp` to check the figma server, then re-run the doctor."}
+			return DoctorCheck{Name: "Figma seat", OK: false, Detail: string(detail) + fmt.Sprintf(" (not re-checked for %d min)", int(seatMissTTL.Minutes())),
+				Hint: "Start a `claude` session and run `/mcp` to check the figma server, then delete " + missPath + " and re-run the doctor."}
 		}
 	}
 	out, err := runToolFullTimeout(60*time.Second, "claude", "-p", "Call the whoami tool and stop.",
