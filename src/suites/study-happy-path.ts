@@ -127,6 +127,34 @@ function ideMainFile(ctx: RunContext): string {
     return captured
 }
 
+// The status-bar item vscode-R shows once an R session is attached ("R 4.6.0: 3758").
+// Unattached it reads "R: (not attached)", which this deliberately does not match.
+const R_SESSION_ATTACHED = /^R \d+\.\d+\.\d+: \d+/
+
+// Clicks "Run Source" and answers vscode-R's first-run prompts until an R session is
+// attached. Newer vscode-R in the Coder image puts two gates in front of the run, and
+// an unanswered one leaves the code silently unsent, so results.csv never appears:
+//   1. a "Run R code" picker. Its "New R Interactive window" option needs the `arf`
+//      session provider, which the image lacks ("executable unavailable"), so pick
+//      "Create R terminal".
+//   2. an "Install bundled sess" notification. Declining it leaves the session
+//      unattached ("R session did not attach, so code was not sent"); accepting it
+//      attaches the session, and vscode-R then sends the queued source by itself.
+// Both are conditional: an image that predates them, or a workspace that already has
+// a terminal and sess, attaches straight away.
+async function sourceInRTerminal(page: Page) {
+    const terminalChoice = page.getByRole('option', { name: /Create R terminal/i })
+    const installSess = page.getByRole('button', { name: 'Install bundled sess' })
+    const attached = page.getByRole('button', { name: R_SESSION_ATTACHED })
+
+    await page.getByRole('button', { name: /Run Source/i }).click()
+    await terminalChoice.or(installSess).or(attached).first().waitFor({ state: 'visible' })
+    if (await terminalChoice.isVisible()) await terminalChoice.click()
+    await installSess.or(attached).first().waitFor({ state: 'visible' })
+    if (await installSess.isVisible()) await installSess.click()
+    await attached.waitFor({ state: 'visible' })
+}
+
 // Uploaded with round 2 only to give Semgrep something to find; never starred, never
 // run. One per language because Semgrep picks its R and Python rules by extension.
 const VULNERABLE_FILES = ['vulnerable.r', 'vulnerable.py']
@@ -489,7 +517,8 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             // contains a numeric value.
             //   - The Explorer shows the file as `main.R`; the toolbar action is an
             //     <a role=button> with aria-label "Run Source (⇧⌘S)".
-            //   - Sourcing runs the file in an "R Interactive" terminal and writes
+            //   - Sourcing (see sourceInRTerminal for the first-run prompts it has to
+            //     answer) runs the file in an "R Interactive" terminal and writes
             //     results.csv to the workspace root (via write.csv). The Explorer doesn't
             //     auto-refresh for files the extension writes, so we click "Refresh
             //     Explorer" and poll until it appears.
@@ -534,12 +563,16 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await ctx.page
                         .getByRole('tab', { name: ideMainFile(ctx) })
                         .waitFor({ state: 'visible' })
-                    await ctx.page.getByRole('button', { name: /Run Source/i }).click()
-                    // Sourcing spins up (or reuses) the R Interactive terminal; require it.
-                    await ctx.page.getByText('R Interactive').first().waitFor({ state: 'visible' })
+                    await sourceInRTerminal(ctx.page)
 
                     const resultsFile = ctx.page.getByRole('treeitem', { name: 'results.csv' })
+                    // Refresh Explorer is a pane-title action, rendered display:none unless
+                    // the Explorer is hovered or focused, and the R terminal takes focus
+                    // when it opens. Clicking it blind waits forever on a hidden button,
+                    // so hover the pane first, and skip the refresh once the file is in.
                     await expect(async () => {
+                        if (await resultsFile.isVisible()) return
+                        await workspaceMain.hover()
                         await ctx.page.getByRole('button', { name: 'Refresh Explorer' }).click()
                         await expect(resultsFile).toBeVisible()
                     }).toPass()
