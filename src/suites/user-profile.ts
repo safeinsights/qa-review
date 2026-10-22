@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { clickUntil } from '../engine/flows/interactions'
 import { dismissToasts, TOAST } from '../engine/flows/toasts'
 import type { RunContext, Suite } from './types'
 
@@ -29,7 +30,7 @@ import type { RunContext, Suite } from './types'
 // them (institutional) sits OUTSIDE its own <form>, so scoping by form does not
 // work uniformly.
 
-const PROFILE_HEADING = 'Researcher Profile'
+const PROFILE_HEADING = 'Researcher profile'
 
 const SECTION = {
     personal: 'Personal information',
@@ -227,8 +228,11 @@ async function originalName(
 
 async function gotoProfile(ctx: RunContext): Promise<void> {
     const { page } = ctx
-    await page.getByRole('button', { name: 'Toggle profile menu' }).click()
-    await page.getByRole('menuitem', { name: 'Profile', exact: true }).click()
+    // The account menu is a dialog of plain links, not a role=menu, so its entries
+    // carry no menuitem role. The toggle is server-rendered, hence clickUntil.
+    const profileLink = page.getByRole('link', { name: 'Professional profile', exact: true })
+    await clickUntil(page.getByRole('button', { name: 'Toggle profile menu' }), profileLink)
+    await profileLink.click()
     // Wait on the destination heading, never the URL — the SPA router can swap the
     // path before this card tree is interactive.
     await expect(page.getByRole('heading', { level: 1, name: PROFILE_HEADING })).toBeVisible()
@@ -259,19 +263,9 @@ export const userProfileSuite: Suite = {
                             ctx.page.getByRole('heading', { level: 3, name: heading, exact: true })
                         ).toBeVisible()
                     }
-                    // There is no SECOND route to this page to cover. The "Profile" row in
-                    // the sidebar is not a link of its own — it is the account menu above,
-                    // rendered inline in the sidebar while expanded, which is exactly what
-                    // gotoProfile already drives. A dump of every anchor on the loaded page
-                    // returns five ('/', '/dashboard' twice, one empty) and no element
-                    // anywhere carries the text 'Profile' while the menu is closed.
-                    //
-                    // Worth stating because the obvious selectors fail in a MISLEADING way:
-                    // getByRole('link', { name: 'Profile' }) and a[href$="/profile"] both
-                    // find nothing, which reads like a control with bad semantics. It isn't
-                    // one — the element simply is not rendered until the menu opens, and
-                    // gotoProfile's getByRole('menuitem', { name: 'Profile' }) matching on
-                    // every run is proof it has both a role and an accessible name.
+                    // There is no SECOND route to this page to cover: the only link to
+                    // it is "Professional profile" in the account menu, which is not
+                    // rendered until the menu opens — exactly what gotoProfile drives.
                 }),
         },
         {
