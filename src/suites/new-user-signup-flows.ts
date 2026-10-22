@@ -118,8 +118,8 @@ async function freshTotp(secret: string): Promise<string> {
 // Mirrors management-app's fillPinInput: the test-id group when it is present, the
 // role=group boxes otherwise (the account screens render the same 6-box Mantine
 // PinInput without the test id).
-async function fillPin(page: Page, code: string): Promise<void> {
-    let inputs = page.getByTestId('sms-pin-input').locator('input')
+async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
+    let inputs = page.getByTestId(testId).locator('input')
     if ((await inputs.count()) === 0) {
         inputs = page.locator('[role="group"] input[placeholder="0"]')
     }
@@ -562,7 +562,9 @@ export const newUserSignupFlowsSuite: Suite = {
                         INVITE_EMAIL_TIMEOUT_MS
                     )
                     const code = (message.subject + message.text).match(VERIFICATION_CODE)?.[1]
-                    await fillPin(page, code as string)
+                    // The link screen's boxes carry their own test id, and the focused first box has
+                    // no placeholder, so the placeholder fallback would find only five.
+                    await fillPin(page, code as string, 'link-email-pin-input')
                     await page.getByRole('button', { name: 'Verify and link' }).click()
                     // No new account, and straight onto the org dashboard rather than back
                     // into enrolment; the banner names the address that was linked.
@@ -633,23 +635,28 @@ export const newUserSignupFlowsSuite: Suite = {
                         if (clerk?.signOut) await clerk.signOut()
                     })
                     // Both acceptance paths are checked, because they consume an invitation
-                    // by different routes: the Research Lab link was spent by creating an
-                    // account, the second by signing in to an existing one. A link that
-                    // still worked after being used would let anyone holding a forwarded
-                    // invite email join the org.
+                    // by different routes: the Research Lab link by creating an account, the
+                    // second by signing in to an existing one. A link that still worked after
+                    // being used would let anyone holding a forwarded invite email join the org.
+                    //
+                    // A used invite stays CLAIMED rather than deleted, so its claimer can
+                    // come back through the emailed link to finish linking the address; the
+                    // server re-checks the claimer and sends anyone else to "Invite not
+                    // found". Signed out, a used link may therefore only lead to sign-in —
+                    // never to an invitation page that offers a way into the org.
                     for (const url of [
                         ctx.state.rlInviteUrl as string,
                         ctx.state.mergeInviteUrl as string,
                     ]) {
                         await page.goto(url, { waitUntil: 'domcontentloaded' })
-                        await page.getByText('Invite not found').waitFor(VISIBLE)
+                        await page.getByLabel('Password').waitFor(VISIBLE)
+                        await expect(page.getByText(/invited to join/i)).toHaveCount(0)
                         await expect(
-                            page.getByText(
-                                'The invitation link you followed is invalid or has already been used.'
-                            )
-                        ).toBeVisible()
-                        // Bounced to sign-in rather than left on a dead invitation page.
-                        await expect(page.getByLabel('Email')).toBeVisible()
+                            page.getByRole('link', { name: /login with existing account/i })
+                        ).toHaveCount(0)
+                        await expect(
+                            page.getByRole('link', { name: /create new account/i })
+                        ).toHaveCount(0)
                     }
                 }),
         },
