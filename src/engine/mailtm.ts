@@ -145,6 +145,12 @@ async function listMessages(token: string): Promise<{ id: string }[]> {
     return body['hydra:member'] ?? []
 }
 
+// The ids already in an inbox, so a caller can wait for a message that arrives AFTER
+// this point rather than one left over from an earlier attempt.
+export async function listMessageIds(inbox: Inbox): Promise<string[]> {
+    return (await listMessages(inbox.token)).map(m => m.id)
+}
+
 async function getMessage(token: string, id: string): Promise<Message> {
     const res = await api(`/messages/${id}`, { headers: { Authorization: `Bearer ${token}` } })
     if (!res.ok) throw new Error(`mail.tm GET /messages/${id} failed: ${res.status}`)

@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
-import { clickUntil } from '../engine/flows/interactions'
+import { clickUntil, waitForHydration } from '../engine/flows/interactions'
 import { inviteUser } from '../engine/flows/signup'
 import {
     beginProposal,
@@ -168,6 +168,10 @@ type InvitationNotice = { kind: 'skip' | 'decline'; orgName: string }
 async function raiseInvitationNotice(ctx: RunContext, notice: InvitationNotice): Promise<void> {
     await ctx.page.goto(`${ctx.baseURL}/dashboard`, { waitUntil: 'domcontentloaded' })
     await ctx.page.getByRole('navigation', { name: 'Main' }).waitFor({ state: 'visible' })
+    // The hook reads the key once, on mount. Planting it before THIS page hydrates lets
+    // the mount consume it here, and the reload below then discards that toast along with
+    // the page — which is how the second of two back-to-back notices went missing.
+    await waitForHydration(ctx.page)
     await ctx.page.evaluate(([key, value]) => sessionStorage.setItem(key, value), [
         INVITATION_NOTICE_KEY,
         JSON.stringify(notice),

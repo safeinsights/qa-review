@@ -9,8 +9,14 @@ import {
     ORG_FOR_ROLE,
     SIGNUP_PASSWORD,
 } from '../engine/flows/signup'
-import type { Inbox } from '../engine/mailtm'
-import { activeDomain, createInbox, extractSignupUrl, waitForMessage } from '../engine/mailtm'
+import type { Inbox, Message } from '../engine/mailtm'
+import {
+    activeDomain,
+    createInbox,
+    extractSignupUrl,
+    listMessageIds,
+    waitForMessage,
+} from '../engine/mailtm'
 import { totp } from '../engine/totp'
 import type { RunContext, Suite } from './types'
 
@@ -39,24 +45,26 @@ import type { RunContext, Suite } from './types'
 // used is dead for good — by BOTH acceptance routes, since a still-live invite link
 // would let anyone holding a forwarded invite email into the org.
 //
-// KNOWN DEFECT — see "the merge does not carry the email over" below. Two steps
-// ("Settings lists the account emails after the merge" and "Signing in with the second
-// address") assert what staging does TODAY, not what it should do; each carries a
-// TODO(merge-email) naming the expected behaviour so the suite flips to the
-// requirement in one edit.
+// Accepting through "Login with existing account" also LINKS the invited address to the
+// account (OTTER-788): the invitee verifies a code Clerk emails to that address, after
+// which Settings lists both addresses and the second one signs in to the same account.
 
 const DP_ORG = 'Openstax'
 
-// Straight apostrophes here, curly ones in the invitation copy — match either rather
-// than pinning a character that is one content edit away from changing.
-const RESEARCHER_EMPTY = /You haven['’]t yet participated in a study/
-const REVIEWER_EMPTY = /You haven['’]t yet participated in reviewing a study/
+// The studies table's empty-state copy, one sentence per audience. Each is unique to its
+// audience, so seeing it also proves which audience the table rendered for.
+const RESEARCHER_EMPTY = /Every study follows four steps/
+const REVIEWER_EMPTY = /Studies submitted to your organization will appear here/
 const SIGNED_OUT_GATE = /You must be signed out to accept invitations/
 // The whole sentence, date included — captured once and compared after every later
 // milestone. A second enrolment on the same day would leave the date equal, which is
 // why the real "only once" evidence is that key GENERATION never renders again.
 const KEY_GENERATED_ON = /You generated a security key on [^.]+\./
-const SIGNIN_REJECTED = /Invalid login credentials\. Please double-check your email and password\./
+// Clerk's email-verification code, sent to the invited address by the link-email screen.
+const VERIFICATION_CODE = /\b(\d{6})\b/
+const isVerificationEmail = (m: Message): boolean =>
+    /verification code/i.test(`${m.subject} ${m.text}`) &&
+    VERIFICATION_CODE.test(m.subject + m.text)
 
 const originOf = (baseURL: string): string => new URL(baseURL).origin
 
@@ -110,8 +118,8 @@ async function freshTotp(secret: string): Promise<string> {
 // Mirrors management-app's fillPinInput: the test-id group when it is present, the
 // role=group boxes otherwise (the account screens render the same 6-box Mantine
 // PinInput without the test id).
-async function fillPin(page: Page, code: string): Promise<void> {
-    let inputs = page.getByTestId('sms-pin-input').locator('input')
+async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
+    let inputs = page.getByTestId(testId).locator('input')
     if ((await inputs.count()) === 0) {
         inputs = page.locator('[role="group"] input[placeholder="0"]')
     }
@@ -226,14 +234,13 @@ async function sidebarOrgName(page: Page, orgSlug: string): Promise<string> {
 
 async function gotoMyDashboard(page: Page, baseURL: string): Promise<void> {
     await page.goto(`${originOf(baseURL)}/dashboard`, { waitUntil: 'domcontentloaded' })
-    // The studies card's "My studies" heading renders only once the studies query
-    // settles, so waiting for it is what makes a following empty-state assertion
-    // meaningful rather than a race against an unpopulated list. It is scoped to the
-    // card and not pinned to a level: builds differ on the page title (some say
-    // "My dashboard", newer ones a second "My studies") and on heading levels.
+    // The studies card's heading renders only once the studies query settles, so waiting
+    // for it is what makes a following empty-state assertion meaningful rather than a
+    // race against an unpopulated list. It is scoped to the card because the page title
+    // above it is "My studies"; the card itself is titled per audience.
     await page
         .locator('.mantine-Paper-root')
-        .getByRole('heading', { name: 'My studies' })
+        .getByRole('heading', { name: /^(All studies|Studies for review)$/ })
         .waitFor(VISIBLE)
 }
 
@@ -467,16 +474,17 @@ export const newUserSignupFlowsSuite: Suite = {
                     // Joining the data partner raises its participation agreement over the
                     // dashboard; the research lab's was ticked on the signup form instead.
                     await acknowledgeAgreement(page, 'Data Organization Participation Agreement')
-                    await expect(page.getByRole('radio', { name: 'Researcher' })).toBeChecked()
-                    await expect(page.getByText(RESEARCHER_EMPTY)).toBeVisible()
+                    // A user in both org types opens on Reviewer by design.
+                    await expect(page.getByRole('radio', { name: 'Reviewer' })).toBeChecked()
+                    await expect(page.getByText(REVIEWER_EMPTY)).toBeVisible()
 
                     // Mantine renders the segmented control as a zero-size radio behind a
                     // label, so the label is the only clickable half.
-                    await audienceTab(page, 'Reviewer').click()
-                    await expect(page.getByRole('radio', { name: 'Reviewer' })).toBeChecked()
+                    await audienceTab(page, 'Researcher').click()
+                    await expect(page.getByRole('radio', { name: 'Researcher' })).toBeChecked()
                     // Switching audience refetches, so this is a fresh render rather than
                     // a check against something already on screen.
-                    await page.getByText(REVIEWER_EMPTY).waitFor(VISIBLE)
+                    await page.getByText(RESEARCHER_EMPTY).waitFor(VISIBLE)
                 }),
         },
         {
@@ -515,29 +523,57 @@ export const newUserSignupFlowsSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const page = ctx.page
+                    // Snapshotted before the invite is opened: reaching the link screen is
+                    // what sends the code, so a code from an earlier attempt is never used.
+                    const merge = mergeInbox(ctx)
+                    const earlier = new Set(await listMessageIds(merge))
                     // Admin is signed in again, so the same signed-out gate stands between
-                    // us and the invitation.
+                    // us and the invitation. On a retry the primary account is already
+                    // signed in and the invite goes straight to the link screen instead.
                     await page.goto(ctx.state.mergeInviteUrl as string, {
                         waitUntil: 'domcontentloaded',
                     })
-                    await page.getByText(SIGNED_OUT_GATE).waitFor(VISIBLE)
-                    const existing = page.getByRole('link', {
-                        name: /login with existing account/i,
+                    const linkHeading = page.getByRole('heading', {
+                        name: 'Link your email addresses',
                     })
-                    await clickUntil(
-                        page.getByRole('button', { name: /sign out to continue/i }),
-                        existing
+                    const gate = page.getByText(SIGNED_OUT_GATE)
+                    await gate.or(linkHeading).first().waitFor(VISIBLE)
+                    if (await gate.isVisible()) {
+                        const existing = page.getByRole('link', {
+                            name: /login with existing account/i,
+                        })
+                        await clickUntil(
+                            page.getByRole('button', { name: /sign out to continue/i }),
+                            existing
+                        )
+                        await clickUntil(existing, page.getByLabel('Password'))
+                        await signInWithTotp(
+                            page,
+                            primaryInbox(ctx).address,
+                            ctx.state.mfaSecret as string
+                        )
+                    }
+                    // The invited address is not on the account yet, so the app asks to
+                    // verify it before folding the invite in.
+                    await linkHeading.waitFor(VISIBLE)
+                    const message = await waitForMessage(
+                        merge,
+                        m => !earlier.has(m.id) && isVerificationEmail(m),
+                        INVITE_EMAIL_TIMEOUT_MS
                     )
-                    await clickUntil(existing, page.getByLabel('Password'))
-                    await signInWithTotp(
-                        page,
-                        primaryInbox(ctx).address,
-                        ctx.state.mfaSecret as string
-                    )
-                    // The invite is folded into the account that signed in — no new account,
-                    // and straight onto the org dashboard rather than back into enrolment.
+                    const code = (message.subject + message.text).match(VERIFICATION_CODE)?.[1]
+                    // The link screen's boxes carry their own test id, and the focused first box has
+                    // no placeholder, so the placeholder fallback would find only five.
+                    await fillPin(page, code as string, 'link-email-pin-input')
+                    await page.getByRole('button', { name: 'Verify and link' }).click()
+                    // No new account, and straight onto the org dashboard rather than back
+                    // into enrolment; the banner names the address that was linked.
                     const labName = await sidebarOrgName(page, ORG_FOR_ROLE.researcher)
-                    await page.getByText(`You have been added to ${labName}.`).waitFor(VISIBLE)
+                    await page
+                        .getByText(
+                            `You have been added to ${labName} and ${merge.address} is now linked to your account.`
+                        )
+                        .waitFor(VISIBLE)
                 }),
         },
         {
@@ -550,7 +586,8 @@ export const newUserSignupFlowsSuite: Suite = {
                 ctx.step(async () => {
                     const page = ctx.page
                     await gotoMyDashboard(page, ctx.baseURL)
-                    await expect(page.getByText(RESEARCHER_EMPTY)).toBeVisible()
+                    // Still in both org types, so the dashboard opens on Reviewer.
+                    await expect(page.getByText(REVIEWER_EMPTY)).toBeVisible()
                     const dbId = await page.evaluate(() => {
                         const clerk = (
                             window as unknown as {
@@ -583,16 +620,7 @@ export const newUserSignupFlowsSuite: Suite = {
                     await account.getByText('Email addresses').waitFor(VISIBLE)
                     await expect(account.getByText(primaryInbox(ctx).address)).toBeVisible()
 
-                    // TODO(merge-email): asserts CURRENT behaviour. Accepting an invitation
-                    // through "Login with existing account" merges the ORG membership but
-                    // never adds the invited address to the account, so Settings still shows
-                    // a single email. Confirmed on staging 2026-09-08, and not an
-                    // already-a-member short-circuit: a control run against an org the
-                    // account did NOT belong to added the org and still dropped the address.
-                    // The invitation page recommends this path precisely because "merging
-                    // accounts later is not supported", so the address is expected to land
-                    // here. When that is fixed, flip this to a toBeVisible().
-                    await expect(account.getByText(mergeInbox(ctx).address)).toHaveCount(0)
+                    await expect(account.getByText(mergeInbox(ctx).address)).toBeVisible()
                 }),
         },
         {
@@ -607,23 +635,28 @@ export const newUserSignupFlowsSuite: Suite = {
                         if (clerk?.signOut) await clerk.signOut()
                     })
                     // Both acceptance paths are checked, because they consume an invitation
-                    // by different routes: the Research Lab link was spent by creating an
-                    // account, the second by signing in to an existing one. A link that
-                    // still worked after being used would let anyone holding a forwarded
-                    // invite email join the org.
+                    // by different routes: the Research Lab link by creating an account, the
+                    // second by signing in to an existing one. A link that still worked after
+                    // being used would let anyone holding a forwarded invite email join the org.
+                    //
+                    // A used invite stays CLAIMED rather than deleted, so its claimer can
+                    // come back through the emailed link to finish linking the address; the
+                    // server re-checks the claimer and sends anyone else to "Invite not
+                    // found". Signed out, a used link may therefore only lead to sign-in —
+                    // never to an invitation page that offers a way into the org.
                     for (const url of [
                         ctx.state.rlInviteUrl as string,
                         ctx.state.mergeInviteUrl as string,
                     ]) {
                         await page.goto(url, { waitUntil: 'domcontentloaded' })
-                        await page.getByText('Invite not found').waitFor(VISIBLE)
+                        await page.getByLabel('Password').waitFor(VISIBLE)
+                        await expect(page.getByText(/invited to join/i)).toHaveCount(0)
                         await expect(
-                            page.getByText(
-                                'The invitation link you followed is invalid or has already been used.'
-                            )
-                        ).toBeVisible()
-                        // Bounced to sign-in rather than left on a dead invitation page.
-                        await expect(page.getByLabel('Email')).toBeVisible()
+                            page.getByRole('link', { name: /login with existing account/i })
+                        ).toHaveCount(0)
+                        await expect(
+                            page.getByRole('link', { name: /create new account/i })
+                        ).toHaveCount(0)
                     }
                 }),
         },
@@ -641,16 +674,15 @@ export const newUserSignupFlowsSuite: Suite = {
                     await page.goto(`${originOf(ctx.baseURL)}/account/signin`, {
                         waitUntil: 'domcontentloaded',
                     })
-                    await page.getByLabel('Email').fill(mergeInbox(ctx).address)
-                    await page.getByLabel('Password').fill(SIGNUP_PASSWORD)
-                    await page.getByRole('button', { name: 'Login' }).click()
-
-                    // TODO(merge-email): asserts CURRENT behaviour — the second address never
-                    // reached the account (see the step above), so the app answers "Couldn't
-                    // find your account". It is expected to sign in to the MERGED account and
-                    // land on the Research Lab dashboard; when the merge is fixed, replace
-                    // this with signInWithTotp + a dashboard assertion.
-                    await page.getByText(SIGNIN_REJECTED).waitFor(VISIBLE)
+                    // The linked address signs in to the SAME account: same authenticator,
+                    // same lab, no enrolment.
+                    await signInWithTotp(
+                        page,
+                        mergeInbox(ctx).address,
+                        ctx.state.mfaSecret as string
+                    )
+                    await sidebarOrgName(page, ORG_FOR_ROLE.researcher)
+                    await expectEnrolledExactlyOnce(ctx)
                 }),
         },
         {

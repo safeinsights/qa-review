@@ -127,6 +127,34 @@ function ideMainFile(ctx: RunContext): string {
     return captured
 }
 
+// The status-bar item vscode-R shows once an R session is attached ("R 4.6.0: 3758").
+// Unattached it reads "R: (not attached)", which this deliberately does not match.
+const R_SESSION_ATTACHED = /^R \d+\.\d+\.\d+: \d+/
+
+// Clicks "Run Source" and answers vscode-R's first-run prompts until an R session is
+// attached. Newer vscode-R in the Coder image puts two gates in front of the run, and
+// an unanswered one leaves the code silently unsent, so results.csv never appears:
+//   1. a "Run R code" picker. Its "New R Interactive window" option needs the `arf`
+//      session provider, which the image lacks ("executable unavailable"), so pick
+//      "Create R terminal".
+//   2. an "Install bundled sess" notification. Declining it leaves the session
+//      unattached ("R session did not attach, so code was not sent"); accepting it
+//      attaches the session, and vscode-R then sends the queued source by itself.
+// Both are conditional: an image that predates them, or a workspace that already has
+// a terminal and sess, attaches straight away.
+async function sourceInRTerminal(page: Page) {
+    const terminalChoice = page.getByRole('option', { name: /Create R terminal/i })
+    const installSess = page.getByRole('button', { name: 'Install bundled sess' })
+    const attached = page.getByRole('button', { name: R_SESSION_ATTACHED })
+
+    await page.getByRole('button', { name: /Run Source/i }).click()
+    await terminalChoice.or(installSess).or(attached).first().waitFor({ state: 'visible' })
+    if (await terminalChoice.isVisible()) await terminalChoice.click()
+    await installSess.or(attached).first().waitFor({ state: 'visible' })
+    if (await installSess.isVisible()) await installSess.click()
+    await attached.waitFor({ state: 'visible' })
+}
+
 // Uploaded with round 2 only to give Semgrep something to find; never starred, never
 // run. One per language because Semgrep picks its R and Python rules by extension.
 const VULNERABLE_FILES = ['vulnerable.r', 'vulnerable.py']
@@ -225,15 +253,18 @@ export interface StudyLifecycleOptions {
     afterResearcherReturns?: Step[]
     // Run once the researcher has landed on /code, before the IDE launch.
     onCodeStepReached?: Step[]
-    // Run once the reviewer is signed in for the first code review, before the review
-    // form is touched — the reviewer's copy of that modal covers /review.
-    beforeCodeReview?: Step[]
+    // Stop once the researcher has reached /code: run these steps, then end as admin
+    // and delete the study. For a variant whose subject is settled before any code
+    // exists, so it need not repeat the IDE, the enclave run and the results review.
+    endAtCodeStep?: Step[]
 }
 
-// The steps as a builder rather than a literal so a variant (a different lab, an
-// agreement gate) reuses every lifecycle step instead of forking ~1200 lines.
-export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
-    const RESEARCHER_ORG = opts.researcherOrg
+// Researcher creates and submits a proposal, leaving its id in ctx.state.studyId. Shared
+// by every suite that needs a freshly submitted proposal to review.
+export function proposalSubmissionSteps(
+    researcherOrg: string,
+    principalInvestigator?: string
+): Step[] {
     return [
         // ---- Researcher: create + submit the proposal (mirrors create-study) ----
         {
@@ -243,7 +274,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                 // ctx.tag stays in the title so the row is findable and traceable.
                 ctx.state.study = generateStudyContent(ctx.tag)
                 await ctx.step(async () => {
-                    await openProposalDashboard(ctx.page, ctx.baseURL, RESEARCHER_ORG)
+                    await openProposalDashboard(ctx.page, ctx.baseURL, researcherOrg)
                 })
             },
         },
@@ -279,16 +310,16 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             run: ctx =>
                 ctx.step(async () => {
                     await fillProposal(ctx.page, content(ctx))
-                    if (opts.principalInvestigator) {
+                    if (principalInvestigator) {
                         await ctx.page
                             .getByRole('textbox', { name: 'Principal Investigator' })
                             .click()
                         await ctx.page
-                            .getByRole('option', { name: opts.principalInvestigator, exact: true })
+                            .getByRole('option', { name: principalInvestigator, exact: true })
                             .click()
                         await expect(
                             ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
-                        ).toHaveValue(opts.principalInvestigator)
+                        ).toHaveValue(principalInvestigator)
                     }
                 }),
         },
@@ -308,6 +339,15 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     ])
                 }),
         },
+    ]
+}
+
+// The steps as a builder rather than a literal so a variant (a different lab, an
+// agreement gate) reuses every lifecycle step instead of forking ~1200 lines.
+export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
+    const RESEARCHER_ORG = opts.researcherOrg
+    const throughCodeStep: Step[] = [
+        ...proposalSubmissionSteps(RESEARCHER_ORG, opts.principalInvestigator),
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
         {
             name: 'Switch to the reviewer account',
@@ -317,22 +357,12 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Reviewer approves the proposal',
             run: ctx =>
                 ctx.step(async () => {
-                    await gotoReview(ctx, id(ctx))
-                    const feedback = ctx.page
-                        .getByTestId('review-feedback-section')
-                        .locator('[contenteditable="true"]')
-                    await feedback.click()
-                    await ctx.page.keyboard.type(content(ctx).proposalFeedback)
-                    await ctx.page
-                        .getByTestId('review-decision-section')
-                        .getByRole('radio', { name: /^Approve$/i })
-                        .check()
-                    // The decision UI is one "Submit decision" button plus a confirm modal
-                    // whose wording is keyed to the selected decision, so the confirm label
-                    // ("Approve proposal") is what distinguishes a real approval from a
-                    // revision request or a decline.
-                    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
-                    await confirmDialog(ctx, /^Approve proposal$/i)
+                    await submitProposalDecision(
+                        ctx,
+                        /^Approve$/i,
+                        /^Approve proposal$/i,
+                        content(ctx).proposalFeedback
+                    )
                     // Submitting re-renders this page with the reviewer's decision banner in
                     // place of the decision form. Its title is "Proposal approved by
                     // <reviewer> • <date>", so there is no "Approved on <date>" stamp left to
@@ -395,6 +425,10 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                 }),
         },
         ...(opts.onCodeStepReached ?? []),
+    ]
+    if (opts.endAtCodeStep) return [...throughCodeStep, ...opts.endAtCodeStep, ...finishingSteps()]
+    return [
+        ...throughCodeStep,
         {
             name: 'Launch the IDE',
             // Click "Launch IDE" and require the external Coder IDE to open and load the
@@ -489,7 +523,8 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             // contains a numeric value.
             //   - The Explorer shows the file as `main.R`; the toolbar action is an
             //     <a role=button> with aria-label "Run Source (⇧⌘S)".
-            //   - Sourcing runs the file in an "R Interactive" terminal and writes
+            //   - Sourcing (see sourceInRTerminal for the first-run prompts it has to
+            //     answer) runs the file in an "R Interactive" terminal and writes
             //     results.csv to the workspace root (via write.csv). The Explorer doesn't
             //     auto-refresh for files the extension writes, so we click "Refresh
             //     Explorer" and poll until it appears.
@@ -534,12 +569,16 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await ctx.page
                         .getByRole('tab', { name: ideMainFile(ctx) })
                         .waitFor({ state: 'visible' })
-                    await ctx.page.getByRole('button', { name: /Run Source/i }).click()
-                    // Sourcing spins up (or reuses) the R Interactive terminal; require it.
-                    await ctx.page.getByText('R Interactive').first().waitFor({ state: 'visible' })
+                    await sourceInRTerminal(ctx.page)
 
                     const resultsFile = ctx.page.getByRole('treeitem', { name: 'results.csv' })
+                    // Refresh Explorer is a pane-title action, rendered display:none unless
+                    // the Explorer is hovered or focused, and the R terminal takes focus
+                    // when it opens. Clicking it blind waits forever on a hidden button,
+                    // so hover the pane first, and skip the refresh once the file is in.
                     await expect(async () => {
+                        if (await resultsFile.isVisible()) return
+                        await workspaceMain.hover()
                         await ctx.page.getByRole('button', { name: 'Refresh Explorer' }).click()
                         await expect(resultsFile).toBeVisible()
                     }).toPass()
@@ -646,7 +685,6 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Switch to the reviewer account',
             run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
-        ...(opts.beforeCodeReview ?? []),
         {
             name: 'Reviewer requests code changes',
             run: ctx =>
@@ -915,6 +953,14 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await expect(keyForm).toHaveCount(0)
                 }),
         },
+        ...finishingSteps(),
+    ]
+}
+
+// End as admin and delete the study, asserting the delete. Every lifecycle variant ends
+// here, however far through the lifecycle it went.
+function finishingSteps(): Step[] {
+    return [
         {
             name: 'Switch to the admin account for cleanup authority',
             // End as admin so guaranteed teardown cleanup runs with delete
@@ -1162,7 +1208,7 @@ async function downloadOutputFile(ctx: RunContext, fileName: string): Promise<vo
     if (!size) throw new Error(`Downloaded ${fileName} is empty (0 bytes)`)
 }
 
-async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
+export async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
     await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, {
         waitUntil: 'domcontentloaded',
     })
@@ -1171,7 +1217,7 @@ async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
 // Confirm in the modal and wait for it to close. On the live preview the confirm
 // click can land before the dialog's handler is wired, leaving it open — retry
 // the click until the dialog hides.
-async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void> {
+export async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void> {
     const dialog = ctx.page.getByRole('dialog')
     await dialog.waitFor({ state: 'visible' })
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1187,6 +1233,29 @@ async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void
     }
     // Surface the real error if it genuinely never closed.
     await dialog.waitFor({ state: 'hidden', timeout: 10_000 })
+}
+
+// The decision UI is one "Submit decision" button plus a confirm modal whose wording is
+// keyed to the selected decision, so the confirm label is what tells an approval from a
+// revision request or a decline. It differs from the radio label for "Approve".
+export async function submitProposalDecision(
+    ctx: RunContext,
+    radioName: RegExp,
+    confirmName: RegExp,
+    feedback: string
+): Promise<void> {
+    await gotoReview(ctx, id(ctx))
+    const editor = ctx.page
+        .getByTestId('review-feedback-section')
+        .locator('[contenteditable="true"]')
+    await editor.click()
+    await ctx.page.keyboard.type(feedback)
+    await ctx.page
+        .getByTestId('review-decision-section')
+        .getByRole('radio', { name: radioName })
+        .check()
+    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
+    await confirmDialog(ctx, confirmName)
 }
 
 // /review renders the code-review editor directly: the reviewer agreements page it once

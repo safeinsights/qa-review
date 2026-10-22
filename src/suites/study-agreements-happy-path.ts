@@ -12,7 +12,11 @@ import type { RunContext, Step, Suite } from './types'
 // Agreement gate entirely. Agreements Lab is not a Test Lab, so its approved study is
 // held at "Study agreements are being prepared" until an SI admin publishes a signed
 // agreement — which this suite asserts from both sides, then publishes, then has the
-// researcher and the reviewer each acknowledge before the rest of the lifecycle runs.
+// researcher and the reviewer each acknowledge.
+//
+// It stops there. Everything after the gate (IDE, code review, the enclave run, results)
+// is identical to study-happy-path, which already covers it, and repeating it here cost
+// about half an hour per run.
 //
 // Requires the shared researcher account to be a member of Agreements Lab (added via
 // /agreements/admin/team on qa, Sep 24 2026). Without that the dashboard step 404s.
@@ -54,8 +58,7 @@ const agreementSteps: Step[] = [
         // and the IDE can be launched. The gate is a notice on /code that blocks
         // SUBMITTING code. It is asserted by its copy rather than by the disabled
         // "Submit code for review" button, which is disabled anyway until a main file is
-        // chosen. Its removal needs no step of its own: round 1's submit, later in the
-        // lifecycle, cannot succeed while the gate is up.
+        // chosen. Its removal is asserted after the researcher acknowledges.
         run: ctx =>
             ctx.step(async () => {
                 await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${studyId(ctx)}/code`, {
@@ -112,14 +115,21 @@ const gateClearedSteps: Step[] = [
         run: ctx =>
             ctx.step(async () => {
                 await expect(ctx.page.getByText(AGREEMENT_GATE_COPY)).toHaveCount(0)
+                await expect(
+                    ctx.page.getByText(/You cannot submit code until the required/i)
+                ).toHaveCount(0)
             }),
     },
 ]
 
 const reviewerAcknowledgementSteps: Step[] = [
     {
-        // The reviewer's first look at the submitted code is the first time they reach
-        // the study since the agreement was published, so the modal is raised there.
+        name: 'Switch to the reviewer account',
+        run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
+    },
+    {
+        // The reviewer's first visit to the study since the agreement was published, so
+        // the modal is raised on the review page.
         name: 'Reviewer acknowledges the study agreement',
         run: ctx =>
             ctx.step(async () => {
@@ -207,7 +217,7 @@ function minimalPdf(text: string): string {
 export const studyAgreementsHappyPathSuite: Suite = {
     name: 'study-agreements-happy-path',
     description:
-        'Full study lifecycle from Agreements Lab (a non-test lab): the agreement gate holds the study until an SI admin publishes a signed Study Agreement',
+        'Study Agreement gate from Agreements Lab (a non-test lab): the study is held until an SI admin publishes a signed agreement and both sides acknowledge it',
     roles: ['researcher'],
     steps: studyLifecycleSteps({
         researcherOrg: RESEARCHER_ORG,
@@ -215,6 +225,6 @@ export const studyAgreementsHappyPathSuite: Suite = {
         afterProposalApproval: agreementSteps,
         afterResearcherReturns: researcherAcknowledgementSteps,
         onCodeStepReached: gateClearedSteps,
-        beforeCodeReview: reviewerAcknowledgementSteps,
+        endAtCodeStep: reviewerAcknowledgementSteps,
     }),
 }
