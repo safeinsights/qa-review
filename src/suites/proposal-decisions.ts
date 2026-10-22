@@ -2,7 +2,12 @@ import { expect } from '@playwright/test'
 import { clickUntil } from '../engine/flows/interactions'
 import type { StudyContent } from '../engine/flows/study'
 import { DEFAULT_RESEARCHER_ORG, fillLexical } from '../engine/flows/study'
-import { confirmDialog, gotoReview, proposalSubmissionSteps } from './study-happy-path'
+import {
+    confirmDialog,
+    gotoReview,
+    proposalSubmissionSteps,
+    submitProposalDecision,
+} from './study-happy-path'
 import type { RunContext, Suite } from './types'
 
 // The two proposal decisions study-happy-path never takes. It always approves, so the
@@ -46,26 +51,6 @@ async function gotoSubmitted(ctx: RunContext): Promise<void> {
     })
 }
 
-async function submitProposalDecision(
-    ctx: RunContext,
-    decision: RegExp,
-    feedback: string
-): Promise<void> {
-    await gotoReview(ctx, id(ctx))
-    const editor = ctx.page
-        .getByTestId('review-feedback-section')
-        .locator('[contenteditable="true"]')
-    await editor.click()
-    await ctx.page.keyboard.type(feedback)
-    await ctx.page
-        .getByTestId('review-decision-section')
-        .getByRole('radio', { name: decision })
-        .check()
-    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
-    // The confirm button repeats the radio's label, so it is scoped to the dialog.
-    await confirmDialog(ctx, decision)
-}
-
 export const proposalDecisionsSuite: Suite = {
     name: 'proposal-decisions',
     description:
@@ -83,6 +68,7 @@ export const proposalDecisionsSuite: Suite = {
                 ctx.step(async () => {
                     await submitProposalDecision(
                         ctx,
+                        /^Request revision$/i,
                         /^Request revision$/i,
                         content(ctx).changeRequestFeedback
                     )
@@ -172,6 +158,7 @@ export const proposalDecisionsSuite: Suite = {
                 ctx.step(async () => {
                     await submitProposalDecision(
                         ctx,
+                        /^Decline and end study$/i,
                         /^Decline and end study$/i,
                         declineFeedback(ctx)
                     )

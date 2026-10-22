@@ -253,9 +253,6 @@ export interface StudyLifecycleOptions {
     afterResearcherReturns?: Step[]
     // Run once the researcher has landed on /code, before the IDE launch.
     onCodeStepReached?: Step[]
-    // Run once the reviewer is signed in for the first code review, before the review
-    // form is touched — the reviewer's copy of that modal covers /review.
-    beforeCodeReview?: Step[]
     // Stop once the researcher has reached /code: run these steps, then end as admin
     // and delete the study. For a variant whose subject is settled before any code
     // exists, so it need not repeat the IDE, the enclave run and the results review.
@@ -360,22 +357,12 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Reviewer approves the proposal',
             run: ctx =>
                 ctx.step(async () => {
-                    await gotoReview(ctx, id(ctx))
-                    const feedback = ctx.page
-                        .getByTestId('review-feedback-section')
-                        .locator('[contenteditable="true"]')
-                    await feedback.click()
-                    await ctx.page.keyboard.type(content(ctx).proposalFeedback)
-                    await ctx.page
-                        .getByTestId('review-decision-section')
-                        .getByRole('radio', { name: /^Approve$/i })
-                        .check()
-                    // The decision UI is one "Submit decision" button plus a confirm modal
-                    // whose wording is keyed to the selected decision, so the confirm label
-                    // ("Approve proposal") is what distinguishes a real approval from a
-                    // revision request or a decline.
-                    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
-                    await confirmDialog(ctx, /^Approve proposal$/i)
+                    await submitProposalDecision(
+                        ctx,
+                        /^Approve$/i,
+                        /^Approve proposal$/i,
+                        content(ctx).proposalFeedback
+                    )
                     // Submitting re-renders this page with the reviewer's decision banner in
                     // place of the decision form. Its title is "Proposal approved by
                     // <reviewer> • <date>", so there is no "Approved on <date>" stamp left to
@@ -698,7 +685,6 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
             name: 'Switch to the reviewer account',
             run: ctx => ctx.step(() => ctx.loginAs('reviewer')),
         },
-        ...(opts.beforeCodeReview ?? []),
         {
             name: 'Reviewer requests code changes',
             run: ctx =>
@@ -1247,6 +1233,29 @@ export async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promi
     }
     // Surface the real error if it genuinely never closed.
     await dialog.waitFor({ state: 'hidden', timeout: 10_000 })
+}
+
+// The decision UI is one "Submit decision" button plus a confirm modal whose wording is
+// keyed to the selected decision, so the confirm label is what tells an approval from a
+// revision request or a decline. It differs from the radio label for "Approve".
+export async function submitProposalDecision(
+    ctx: RunContext,
+    radioName: RegExp,
+    confirmName: RegExp,
+    feedback: string
+): Promise<void> {
+    await gotoReview(ctx, id(ctx))
+    const editor = ctx.page
+        .getByTestId('review-feedback-section')
+        .locator('[contenteditable="true"]')
+    await editor.click()
+    await ctx.page.keyboard.type(feedback)
+    await ctx.page
+        .getByTestId('review-decision-section')
+        .getByRole('radio', { name: radioName })
+        .check()
+    await ctx.page.getByRole('button', { name: /^Submit decision$/i }).click()
+    await confirmDialog(ctx, confirmName)
 }
 
 // /review renders the code-review editor directly: the reviewer agreements page it once

@@ -58,7 +58,7 @@ const agreementSteps: Step[] = [
         // and the IDE can be launched. The gate is a notice on /code that blocks
         // SUBMITTING code. It is asserted by its copy rather than by the disabled
         // "Submit code for review" button, which is disabled anyway until a main file is
-        // chosen. Its removal is asserted once both sides have acknowledged.
+        // chosen. Its removal is asserted after the researcher acknowledges.
         run: ctx =>
             ctx.step(async () => {
                 await ctx.page.goto(`${ctx.baseURL}/${RESEARCHER_ORG}/study/${studyId(ctx)}/code`, {
@@ -115,6 +115,9 @@ const gateClearedSteps: Step[] = [
         run: ctx =>
             ctx.step(async () => {
                 await expect(ctx.page.getByText(AGREEMENT_GATE_COPY)).toHaveCount(0)
+                await expect(
+                    ctx.page.getByText(/You cannot submit code until the required/i)
+                ).toHaveCount(0)
             }),
     },
 ]
