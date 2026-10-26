@@ -264,6 +264,38 @@ export const COMMANDS = [
             'Fails listing every gap; prints {"ok","counts"} when clean.',
     },
     {
+        name: 'release-list',
+        usage: 'qar release-list',
+        summary: 'List management-app release tags, newest first.',
+    },
+    {
+        name: 'release-prs',
+        usage: 'qar release-prs --tag <tag>',
+        summary:
+            'Write the PR set of a release (from the tag compare) to .tmp/release/<tag>/prs.json.',
+        details:
+            'The set comes from compare/<previous>...<tag>, never from the release body alone: ' +
+            'the body is generated and has missed a third of a release. notesMissing lists ' +
+            'PRs the body omits. Each PR carries its Jira keys, files, and body.',
+    },
+    {
+        name: 'release-status',
+        usage: 'qar release-status --tag <tag>',
+        summary: 'Report the assets on a release, upload rights, and the local plan/results files.',
+    },
+    {
+        name: 'release-download',
+        usage: 'qar release-download --tag <tag> [--asset regression-plan.md]',
+        summary: 'Download one release asset into .tmp/release/<tag>/ (the plan lands as plan.md).',
+    },
+    {
+        name: 'release-upload',
+        usage: 'qar release-upload --tag <tag> --file <path> [--as <asset name>]',
+        summary:
+            'Upload a file under .tmp/release/<tag>/ as a release asset (replaces a same-named one).',
+        details: 'Refuses any file outside the release dir. Prints {"tag","asset","url"}.',
+    },
+    {
         name: 'clock',
         usage: 'qar clock --file <path.json> (--mark <phase> | --report)',
         summary: 'Record validation phase times and print the durations for the report.',

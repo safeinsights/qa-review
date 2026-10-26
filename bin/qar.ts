@@ -21,6 +21,13 @@ import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
 import { rekeyCommand } from '@/cli/commands/rekey'
+import {
+    releaseDownloadCommand,
+    releaseListCommand,
+    releasePrsCommand,
+    releaseStatusCommand,
+    releaseUploadCommand,
+} from '@/cli/commands/release'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { resultsCheckCommand } from '@/cli/commands/results-check'
 import { runCommand } from '@/cli/commands/run'
@@ -126,6 +133,16 @@ async function main() {
             return inventoryRenderCommand(opts)
         case 'results-check':
             return resultsCheckCommand(opts)
+        case 'release-list':
+            return releaseListCommand(opts, await loadSettings())
+        case 'release-prs':
+            return releasePrsCommand(opts, await loadSettings())
+        case 'release-status':
+            return releaseStatusCommand(opts, await loadSettings())
+        case 'release-download':
+            return releaseDownloadCommand(opts, await loadSettings())
+        case 'release-upload':
+            return releaseUploadCommand(opts, await loadSettings())
         case 'clock':
             return clockCommand(opts)
         default:
