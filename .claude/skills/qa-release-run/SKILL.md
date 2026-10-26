@@ -31,8 +31,9 @@ line, record one result per line, and upload the results as a release asset.
 ## Phase 1: the plan
 1. `qar release-download --tag <tag>` — lands as `.tmp/release/<tag>/plan.md`.
 2. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must print
-   `ok`. If it fails, the saved plan is broken: show the problems and stop.
-3. Report the counts and wait for the user's go.
+   `"ok":true`. If it fails, the saved plan is broken: show the problems and stop.
+3. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
+   output, and wait for the user's go.
 
 ## Phase 2: the baseline
 `qar run --suite release-happy-path --role researcher --env <env>`. It prints a
@@ -41,7 +42,10 @@ evidence, or FAIL with `severity`, `area`, and the failed step name. **A failed
 baseline does not stop the run**; the other lines still need results.
 
 ## Phase 3: the lines
-For each line in `plan-lines.json`, in order:
+After the user's go, run `qar session-login --role researcher` first. The lines
+say when another role is needed; switch with the same command.
+
+For each line in `plan-lines.json`, in order, skip `BASELINE` (Phase 2 recorded it):
 - On **production**, a `stagingOnly` line is `NOT TESTED` with
   `approvedBy: "plan"` and evidence `"staging only"`. Do not run its probe.
 - Otherwise follow the line's steps in the browser. Take a screenshot of the
@@ -54,9 +58,12 @@ For each line in `plan-lines.json`, in order:
 ## Phase 4: gate, render, upload
 1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`.
 2. `qar results-check --inventory .tmp/release/<tag>/plan-lines.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
-   — must print `ok`. Fix every listed gap first.
+   — must print `"ok":true`. Fix every listed gap first.
 3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/plan-lines.json --results .tmp/release/<tag>/results-<env>.json`
    — prints `{"output","asset"}`.
-4. `qar release-upload --tag <tag> --file <output>`
-5. `qar release-saved --tag <tag> --asset <asset> --url <url>`
+4. `qar release-upload --tag <tag> --file <output>` — `<output>` is the `output`
+   key printed by `results-render`.
+5. `qar release-saved --tag <tag> --asset <asset> --url <url>` — `<asset>` is the
+   `asset` key printed by `results-render`; `<url>` is the `url` key printed by
+   `release-upload`.
 6. Report the counts and the asset URL. Then stop.
