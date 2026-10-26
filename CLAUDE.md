@@ -807,20 +807,32 @@ Builds and runs a regression plan for one management-app release. Spec:
   never leaves the machine.** The plan asset is `testing-plan.md`: `release-upload`
   writes `stripSecurity(plan.md)` (`src/engine/public-plan.ts`) to
   `public/testing-plan.md` and uploads that, and `uploadAsset` refuses any file in
-  which `hasSecurityContent` finds an `- [S-n]` bullet, a `## Security` heading or a
-  `| S-n |` row. `--as` must be `testing-plan.md` or
-  `regression-results-<env>-<stamp>.md`, so no other file in the release dir
-  (`security-results-*.md` included) can be published under any name. Only
-  `testing-plan.md` is replaced (`--clobber`); results are never overwritten. Only
-  files under `.tmp/release/<tag>/` are accepted (symlinks resolved).
+  which `hasSecurityContent` finds an `S-<n>` token anywhere, a `-`/`*`/`+` or
+  indented `[S-n]` bullet, a Security heading at any `#` depth in any case, or a
+  `| S-n |` row. A false refusal costs one edit; a false pass makes a probe public.
+  The sources are pinned too (`assertAssetSource`): `testing-plan.md` comes only
+  from `<dir>/plan.md`, and a results asset is only the root-level file of that
+  name — a name-only check let `plan-lines.json` or `pr-<n>.json` go public under a
+  permitted name. Only `testing-plan.md` is replaced (`--clobber`); results are
+  never overwritten. Only files under `.tmp/release/<tag>/` are accepted (symlinks
+  resolved). `release-summary` refuses a Summary with security content and an
+  `--input` outside the release dir: the description is as public as the assets.
   `release-status`'s `planDiffers` compares the local plan WITHOUT its Security
   section, or every local plan would read as unsaved.
+- Release sessions pass `--disallowedTools` for `gh release/api/pr merge/pr
+  close/issue` and for the Jira write tools under every name in
+  `knownJiraServers`. The allowlist is not a write boundary in auto mode — the
+  classifier can approve a tool that is not listed — but a deny rule outranks it.
+  qar's own gh and Jira calls are child processes, not Bash tool calls, so the
+  two permitted writes (`gh release upload`, `gh release edit`) still work.
 - `release-download` lands the asset in `remote/`, then places the plan as
   `plan.md` only when there is none, it equals the asset, or `--force`. A local plan
   that differs from the asset only by its Security section is kept as is.
   `--remote-only` never touches `plan.md`: a run uses it, so it neither replaces nor
-  reads a plan someone is editing. `DiscardLocalPlan` passes `--force`, which also
-  drops the local Security lines.
+  reads a plan someone is editing. `DiscardLocalPlan` passes `--force`, which
+  splices the local Security section back into the downloaded plan
+  (`extractSecurity`/`spliceSecurity`, after Changes): the asset never holds that
+  section, so the local plan is its only copy. The Discard button confirms first.
 - Security lines run **on staging only, from the machine that holds the local
   plan**. The run skill builds `run-plan-lines-<env>.json` from the downloaded asset
   and, on staging, merges the local S- lines with `plan-lines --security-from`.
