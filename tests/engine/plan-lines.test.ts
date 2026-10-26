@@ -70,6 +70,22 @@ describe('parsePlanLines', () => {
         expect(() => parsePlanLines(bare, 'v')).toThrow(/S-2: needs "<title> — <steps>"/)
     })
 
+    it.each([
+        ['an indented bullet', '- [S-2]', '  - [S-2]'],
+        ['a * bullet', '- [S-2]', '* [S-2]'],
+        ['a lowercase id', '- [S-2]', '- [s-2]'],
+    ])('rejects %s instead of dropping it', (_name, from, to) => {
+        const bad = PLAN.replace(from, to)
+        expect(() => parsePlanLines(bad, 'v')).toThrow(/a test line is/)
+    })
+
+    it('reads CRLF input the same as LF', () => {
+        const crlf = PLAN.replace(/\n/g, '\r\n')
+        expect(parsePlanLines(crlf, 'v').lines.map(l => l.id)).toEqual(
+            parsePlanLines(PLAN, 'v').lines.map(l => l.id)
+        )
+    })
+
     it('collects every problem into the error', () => {
         const bad = PLAN.replace('[R-1110-2]', '[R-1110-1]').replace(
             '- [S-2] No secrets in Sentry — read the Sentry scrubbing config',

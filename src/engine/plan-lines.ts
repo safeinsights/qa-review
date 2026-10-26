@@ -18,6 +18,8 @@ export class PlanLinesError extends Error {
 const SECTION_HEADING = /^## (.+?)\s*$/
 const PR_HEADING = /^### #(\d+)\b/
 const TAGGED_LINE = /^- \[([A-Z]+(?:-\d+)*)\]\s*(.*)$/
+const BULLET_WITH_TOKEN = /^\s*[-*+]\s*\[([^\]]+)\]/
+const TEST_SECTIONS: readonly (SectionName | null)[] = ['Baseline', 'Changes', 'Security']
 const STAGING_ONLY = /\s*\(staging only\)\s*$/i
 
 function lineKindFor(id: string): 'baseline' | 'changes' | 'security' | null {
@@ -37,7 +39,7 @@ export function parsePlanLines(markdown: string, tag: string): Inventory {
     let pr: number | undefined
     const ids = new Set<string>()
 
-    for (const raw of markdown.split('\n')) {
+    for (const raw of markdown.split(/\r?\n/)) {
         const heading = SECTION_HEADING.exec(raw)
         if (heading) {
             const name = heading[1]
@@ -54,7 +56,16 @@ export function parsePlanLines(markdown: string, tag: string): Inventory {
             continue
         }
         const tagged = TAGGED_LINE.exec(raw)
-        if (!tagged) continue
+        if (!tagged) {
+            // A test line that fails the strict form would otherwise vanish from the
+            // inventory, and results-check could never ask for its result.
+            if (TEST_SECTIONS.includes(section) && BULLET_WITH_TOKEN.test(raw)) {
+                problems.push(
+                    `${raw.trim()}: a test line is "- [ID] <title> — <steps>" at column 0`
+                )
+            }
+            continue
+        }
         const id = tagged[1]
         let rest = tagged[2]
         if (ids.has(id)) {
