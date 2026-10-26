@@ -8,6 +8,8 @@ const KIND_LABEL: Record<SessionKind, string> = {
     authoring: 'Author a Suite',
     validation: 'Validation',
     companion: 'run companion',
+    'release-plan': 'Release plan',
+    'release-run': 'Release run',
 }
 
 export function SessionUnavailable({
