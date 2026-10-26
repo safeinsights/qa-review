@@ -26,6 +26,7 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
     const [text, setTextState] = useState('')
     const [dirty, setDirty] = useState(false)
     const [uploaded, setUploaded] = useState(false)
+    const [exists, setExists] = useState(false)
     const [conflict, setConflictState] = useState(false)
     const [error, setError] = useState('')
     const [lineCheck, setLineCheck] = useState<PlanLinesCheck | null>(null)
@@ -79,6 +80,7 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
         try {
             const p = await readPlan(tag)
             loadedHash.current = p.exists ? p.hash : null
+            setExists(p.exists)
             textRef.current = p.text
             setTextState(p.text)
             markDirty(false)
@@ -223,6 +225,7 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
         setText,
         dirty,
         uploaded,
+        exists,
         conflict,
         error,
         lineCheck,

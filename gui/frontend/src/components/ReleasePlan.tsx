@@ -42,6 +42,80 @@ export function ReleasePlan({
 
     return (
         <div>
+            <GeneratingNote isVisible={!plan.exists} />
+            <EditorPane
+                isVisible={plan.exists}
+                plan={plan}
+                status={status}
+                preview={preview}
+                onPreview={setPreview}
+                badge={badge}
+                canSave={canSave}
+                sessionLive={sessionLive}
+                runLive={runLive}
+                starting={starting}
+                onRegenerate={onRegenerate}
+                onStartSession={onStartSession}
+                onRun={onRun}
+                onStop={onStop}
+            />
+            <StopOnlyRow isVisible={!plan.exists} disabled={!sessionLive} onStop={onStop} />
+            <PlanError message={plan.error} />
+            <section
+                style={{
+                    background: '#0f1419',
+                    border: '1px solid var(--line)',
+                    borderRadius: 10,
+                    overflow: 'hidden',
+                    height: 'min(40vh, 480px)',
+                    padding: 8,
+                    marginTop: 12,
+                }}
+            >
+                <Terminal />
+            </section>
+        </div>
+    )
+}
+
+type ReleasePlanState = ReturnType<typeof useReleasePlan>
+
+// Mounting the editor before plan.md exists showed an empty box for the whole
+// ~10 minutes Claude spends writing it.
+function EditorPane({
+    isVisible,
+    plan,
+    status,
+    preview,
+    onPreview,
+    badge,
+    canSave,
+    sessionLive,
+    runLive,
+    starting,
+    onRegenerate,
+    onStartSession,
+    onRun,
+    onStop,
+}: {
+    isVisible: boolean
+    plan: ReleasePlanState
+    status: ReleaseStatus
+    preview: boolean
+    onPreview: (value: boolean) => void
+    badge: { color: string; label: string }
+    canSave: boolean
+    sessionLive: boolean
+    runLive: boolean
+    starting: boolean
+    onRegenerate: () => void
+    onStartSession: () => void
+    onRun: () => void
+    onStop: () => void
+}) {
+    if (!isVisible) return null
+    return (
+        <>
             <PlanEditor value={plan.text} onChange={plan.setText} preview={preview} />
             <ConflictBanner
                 isVisible={plan.conflict}
@@ -52,7 +126,7 @@ export function ReleasePlan({
                 <Switch
                     label="Preview"
                     checked={preview}
-                    onChange={e => setPreview(e.currentTarget.checked)}
+                    onChange={e => onPreview(e.currentTarget.checked)}
                 />
                 <Badge variant="light" color={badge.color}>
                     {badge.label}
@@ -99,21 +173,45 @@ export function ReleasePlan({
                     Stop session
                 </Button>
             </Group>
-            <PlanError message={plan.error} />
-            <section
-                style={{
-                    background: '#0f1419',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    overflow: 'hidden',
-                    height: 'min(40vh, 480px)',
-                    padding: 8,
-                    marginTop: 12,
-                }}
-            >
-                <Terminal />
-            </section>
+        </>
+    )
+}
+
+function GeneratingNote({ isVisible }: { isVisible: boolean }) {
+    if (!isVisible) return null
+    return (
+        <div
+            className="st-dim"
+            style={{
+                border: '1px dashed var(--line)',
+                borderRadius: 10,
+                padding: '18px',
+                fontStyle: 'italic',
+            }}
+        >
+            Generating the plan — the editor opens when Claude writes plan.md.
         </div>
+    )
+}
+
+// The full status row is hidden while generating, but the user must still be
+// able to end the session.
+function StopOnlyRow({
+    isVisible,
+    disabled,
+    onStop,
+}: {
+    isVisible: boolean
+    disabled: boolean
+    onStop: () => void
+}) {
+    if (!isVisible) return null
+    return (
+        <Group mt="sm">
+            <Button onClick={onStop} variant="outline" color="red" radius="md" disabled={disabled}>
+                Stop session
+            </Button>
+        </Group>
     )
 }
 
