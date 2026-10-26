@@ -251,6 +251,7 @@ function PhaseView({
                 tag={tag}
                 status={status}
                 sessionLive={session.live === 'release-plan' && session.tag === tag}
+                runLive={session.live === 'release-run' && session.tag === tag}
                 starting={session.starting}
                 onRegenerate={onRegenerate}
                 onStartSession={onStartSession}

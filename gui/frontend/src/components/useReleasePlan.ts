@@ -42,6 +42,7 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
     // window carries hashes we do not know yet, so it is held until the reply.
     const inFlight = useRef(false)
     const pendingEvent = useRef<PlanChanged | null>(null)
+    const queuedText = useRef<string | null>(null)
     const staleCb = useRef(onStatusStale)
     staleCb.current = onStatusStale
 
@@ -108,12 +109,20 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
         [load, setConflict, clearTimer]
     )
 
-    const write = async (next: string) => {
+    // One write at a time: plan-lines runs inside the window, so a second autosave
+    // would otherwise start while the first is open and steal its pending event.
+    const write = async (next: string): Promise<void> => {
+        if (inFlight.current) {
+            queuedText.current = next
+            return
+        }
         inFlight.current = true
+        let ok = false
         try {
             const hash = await writePlan(tag, next)
             lastWrittenHash.current = hash
             loadedHash.current = hash
+            ok = true
             setError('')
             await recheck()
             scheduleStale()
@@ -122,7 +131,15 @@ export function useReleasePlan(tag: string, active: boolean, onStatusStale: () =
         } finally {
             inFlight.current = false
         }
-        if (textRef.current === next) {
+        const queued = queuedText.current
+        queuedText.current = null
+        if (!ok) {
+            // Still unsaved: stay dirty and retry.
+            if (!conflictRef.current) arm(textRef.current)
+        } else if (queued !== null) {
+            await write(queued)
+            return
+        } else if (textRef.current === next) {
             markDirty(false)
         } else if (!conflictRef.current) {
             arm(textRef.current)

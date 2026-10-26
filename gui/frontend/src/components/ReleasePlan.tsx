@@ -11,6 +11,7 @@ export function ReleasePlan({
     tag,
     status,
     sessionLive,
+    runLive,
     starting,
     onRegenerate,
     onStartSession,
@@ -21,6 +22,7 @@ export function ReleasePlan({
     tag: string
     status: ReleaseStatus
     sessionLive: boolean
+    runLive: boolean
     starting: boolean
     onRegenerate: () => void
     onStartSession: () => void
@@ -68,13 +70,16 @@ export function ReleasePlan({
                     Save to release
                 </Button>
                 <StartSessionButton
-                    isVisible={!sessionLive}
+                    isVisible={!sessionLive && !runLive}
                     disabled={starting}
                     onStart={onStartSession}
                 />
-                <Button onClick={onRegenerate} variant="outline" radius="md" disabled={starting}>
-                    Regenerate
-                </Button>
+                <RegenerateButton
+                    isVisible={!runLive}
+                    disabled={starting}
+                    onRegenerate={onRegenerate}
+                />
+                <RunLiveNote isVisible={runLive} />
                 <Button
                     onClick={onRun}
                     variant="outline"
@@ -203,5 +208,31 @@ function PlanError({ message }: { message: string }) {
         <Alert color="red" mt="sm" style={{ whiteSpace: 'pre-wrap' }}>
             {message}
         </Alert>
+    )
+}
+
+function RegenerateButton({
+    isVisible,
+    disabled,
+    onRegenerate,
+}: {
+    isVisible: boolean
+    disabled: boolean
+    onRegenerate: () => void
+}) {
+    if (!isVisible) return null
+    return (
+        <Button onClick={onRegenerate} variant="outline" radius="md" disabled={disabled}>
+            Regenerate
+        </Button>
+    )
+}
+
+function RunLiveNote({ isVisible }: { isVisible: boolean }) {
+    if (!isVisible) return null
+    return (
+        <span className="st-dim" style={{ fontSize: 12 }}>
+            A run is live for this release — stop it from the Run phase first.
+        </span>
     )
 }
