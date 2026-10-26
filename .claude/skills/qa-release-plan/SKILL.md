@@ -107,6 +107,7 @@ print `"ok":true`. If it lists problems, fix the plan and run it again. Do not s
 ## Phase 4: edit together
 - The user may edit `plan.md` in the editor; **Read it again before any edit**.
 - After every edit you make, run `qar plan-lines` again and report the result.
+- Never upload or edit the release unless the user says "save the plan".
 - A request you cannot satisfy inside the five sections: explain why, do not
   add a sixth section.
 
@@ -114,6 +115,7 @@ print `"ok":true`. If it lists problems, fix the plan and run it again. Do not s
 When the user says "save the plan" (the GUI's Save button sends exactly that):
 1. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must print `"ok":true`.
 2. `qar release-upload --tag <tag> --file .tmp/release/<tag>/plan.md --as regression-plan.md`
-3. `qar release-saved --tag <tag> --asset regression-plan.md --url <url>` (the `url` key of the JSON step 2 printed)``
-4. Show the asset URL.
+3. `qar release-summary --tag <tag>` — copies the Summary section into the release description so the release page says what changed; prints `placement`.
+4. `qar release-saved --tag <tag> --asset regression-plan.md --url <url>` (the `url` key of the JSON step 2 printed)
+5. Show the asset URL.
 If step 1 fails, show the problems and stop; nothing is uploaded.

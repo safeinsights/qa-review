@@ -318,6 +318,14 @@ export const COMMANDS = [
         summary: 'Tell the GUI a release asset was uploaded (clears the unsaved badge).',
     },
     {
+        name: 'release-summary',
+        usage: 'qar release-summary --tag <tag> [--input <plan.md>]',
+        summary:
+            "Write the plan's Summary section into the release description, above the PR table.",
+        details:
+            'Inserts a <!-- regression-summary --> block before the "------" separator (or replaces the existing block). Nothing else in the description changes.',
+    },
+    {
         name: 'clock',
         usage: 'qar clock --file <path.json> (--mark <phase> | --report)',
         summary: 'Record validation phase times and print the durations for the report.',
