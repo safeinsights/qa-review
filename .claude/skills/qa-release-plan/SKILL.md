@@ -16,7 +16,7 @@ when unsure.
 - The prompt names the **tag** (e.g. `v1.6.9`). Everything for it lives under
   **`.tmp/release/<tag>/`**. The GUI editor shows `plan.md` from that directory
   and reloads it when you write it.
-- **`gh`** is available (pre-approved) for PR diffs.
+- **`gh pr view` and `gh pr diff`** are pre-approved for reading PRs.
 
 ## Plan already exists
 If the opening prompt says the plan already exists, skip Phases 1–3 and begin at
@@ -25,10 +25,15 @@ Phase 4 after running `qar plan-lines` and reporting its counts.
 ## Keeping the session smooth
 - **Never prefix a command with `cd`.**
 - **Write every scratch file under `.tmp/release/<tag>/`.**
-- **One command per Bash call.** Pre-approved: `qar …`, `gh …`, and read-only
-  `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit and the Agent tool.
+- **One command per Bash call.** Pre-approved: every `qar` command whose name
+  starts with `release-`, `qar plan-lines`, `qar results-check`,
+  `qar results-render`, `gh pr view`, `gh pr diff`, the Jira MCP's
+  `jira_get_issue`, read-only `mkdir`/`ls`/`cat`/`date`/`echo`, plus
+  Read/Write/Edit and the Agent tool.
 - **Never post to Jira** and never write to management-app except through
-  `qar release-upload`.
+  `qar release-upload` and `qar release-summary`.
+- **management-app is public, and so is every release asset.** The Security
+  section stays in the local `plan.md`; `release-upload` strips it.
 - **Re-read `plan.md` before every edit.** The user edits the same file.
 
 ## Phase 1: the PR set
@@ -83,7 +88,7 @@ sections, in this order, as `##` headings:
 <plain language, by feature, for PMs — from the plainSummary fields, grouped; high-impact items first>
 
 ## Baseline
-- [BASELINE] Run release-happy-path — qar run --suite release-happy-path --env <env>
+- [BASELINE] Run release-happy-path — the QA Runner runs it when a run starts
 
 ## Changes
 ### #<n> <title> (<jira keys>) [<impact>]
@@ -105,14 +110,17 @@ Every test line is `- [ID] <title> — <steps>` with an em dash. IDs: `R-<pr>-<n
 under its own `### #<pr>` heading, `S-<n>` in Security. A line that writes data
 or sends bad input ends with **`(staging only)`**. An `R-` line whose
 `stagingOnly` is true also ends with `(staging only)`. Write the Baseline line
-literally, with `--env <env>`; the run skill substitutes the env it runs against. The Summary lists feature groups with the high-impact items first. The Changes
+literally. The Summary lists feature groups with the high-impact items first. The Changes
 section is ordered by impact (high, medium, low), then by PR number within an
 impact; each `### #<pr>` heading ends with the impact in brackets, e.g.
 `### #1110 OTTER-794: migrations … [high]`. The Technical appendix stays in
 PR-number order.
 
 Then `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>`. It must
-print `"ok":true`. If it lists problems, fix the plan and run it again. Do not say
+print `"ok":true`. It reads `prs.json` beside the plan and enforces completeness:
+every PR in `prs.json` needs at least one `R-<n>-*` line (`PR #n has no test
+line`), and every `R-` line needs its PR in the release (`R-<n>-k: PR #n is not
+in the release`). If it lists problems, fix the plan and run it again. Do not say
 "ready" before it passes. Then report: PRs, plus `lines`, `security` and `stagingOnly` from that JSON, and
 `notesMissing` from `release-prs` — and wait.
 
@@ -126,8 +134,13 @@ print `"ok":true`. If it lists problems, fix the plan and run it again. Do not s
 ## Phase 5: save
 When the user says "save the plan" (the GUI's Save button sends exactly that):
 1. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must print `"ok":true`.
-2. `qar release-upload --tag <tag> --file .tmp/release/<tag>/plan.md --as regression-plan.md`
-3. `qar release-summary --tag <tag>` — copies the Summary section into the release description so the release page says what changed; prints `placement`.
-4. `qar release-saved --tag <tag> --asset regression-plan.md --url <url>` (the `url` key of the JSON step 2 printed)
+2. `qar release-upload --tag <tag> --file .tmp/release/<tag>/plan.md --as testing-plan.md`
+   — the asset is `testing-plan.md`. The Security section is stripped on upload,
+   because management-app is public; `plan.md` keeps it. `stripped` in the output
+   says whether there was one.
+3. `qar release-summary --tag <tag>` — copies the Summary section into the
+   release description so the release page says what changed. It prints `placement`.
+4. `qar release-saved --tag <tag> --asset testing-plan.md --url <url>` — `<url>`
+   is the `url` key printed by step 2.
 5. Show the asset URL.
 If step 1 fails, show the problems and stop; nothing is uploaded.

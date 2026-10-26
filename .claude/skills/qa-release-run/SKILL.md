@@ -5,9 +5,10 @@ description: Execute a saved regression plan for a management-app release agains
 
 # qa-release-run
 
-You execute a **regression plan** that is already on the GitHub release. You run
-the baseline suite, then drive a **live browser** through every `[R-…]`/`[S-…]`
-line, record one result per line, and upload the results as a release asset.
+You execute a **regression plan** that is already on the GitHub release. The GUI
+has already run the baseline suite; you record its result, drive a **live
+browser** through every `[R-…]`/`[S-…]` line, record one result per line, and
+upload the results as a release asset.
 
 ## The environment you're in
 - A browser is **already launched but NOT logged in**. Drive it with the
@@ -21,33 +22,49 @@ line, record one result per line, and upload the results as a release asset.
 - **Never open a new chrome instance or page.**
 - **Never prefix a command with `cd`.**
 - **Write every scratch file under `.tmp/release/<tag>/`.**
-- **One command per Bash call.** Pre-approved: `qar …`, `gh …`, and read-only
-  `mkdir`/`ls`/`cat`/`date`/`echo`, plus Read/Write/Edit and the chrome-devtools
-  MCP tools.
-- **Never post to Jira.** The results go to the release only.
+- **One command per Bash call.** Pre-approved: every `qar` command whose name
+  starts with `release-`, `qar plan-lines`, `qar results-check`,
+  `qar results-render`, `qar session-login`, `gh pr view`/`gh pr diff`, read-only
+  `mkdir`/`ls`/`cat`/`date`/`echo`, Read/Write/Edit, the chrome-devtools MCP tools
+  and the Jira MCP's `jira_get_issue`.
+- **Never run `qar run`.** The GUI ran the baseline before this session started.
+- **Never post to Jira on your own.** The results go to the release only.
 - **Production is real.** Create nothing there except what the baseline suite
   creates and deletes. A line marked `(staging only)` is NOT TESTED on production.
+- **management-app is public, and so is every release asset.** Security lines and
+  their results never leave this machine.
 
 ## Phase 1: the plan
-1. `qar release-download --tag <tag>` — lands as `.tmp/release/<tag>/plan.md`.
-2. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must print
-   `"ok":true`. If it fails, the saved plan is broken: show the problems and stop.
+1. `qar release-download --tag <tag> --remote-only` — lands as
+   `.tmp/release/<tag>/remote/testing-plan.md`. It never touches `plan.md`, which
+   someone may be editing.
+2. On **staging**, check whether the local plan exists: `ls .tmp/release/<tag>/plan.md`.
+   The asset has no Security section; the S- lines are only in that local file.
+   - It exists: `qar plan-lines --input .tmp/release/<tag>/remote/testing-plan.md --tag <tag> --security-from .tmp/release/<tag>/plan.md --output .tmp/release/<tag>/run-plan-lines-<env>.json`
+   - It does not exist, or the env is **production**: `qar plan-lines --input .tmp/release/<tag>/remote/testing-plan.md --tag <tag> --output .tmp/release/<tag>/run-plan-lines-<env>.json`
+   It must print `"ok":true`. If it fails, show the problems and stop.
 3. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
-   output, and wait for the user's go.
+   output. On staging with no local plan, say that the security lines cannot run
+   from this machine. Wait for the user's go.
 
 ## Phase 2: the baseline
-`qar run --suite release-happy-path --role researcher --env <env>`. It prints a
-`report:` path. Record the `BASELINE` line: PASS with the report path as
-evidence, or FAIL with `severity`, `area`, and the failed step name. **A failed
-baseline does not stop the run**; the other lines still need results.
+Read `.tmp/release/<tag>/baseline-<env>.json`
+(`{passed, steps, failedStep, error, reportPath, finishedAt}`). Record the
+`BASELINE` line: PASS with `reportPath` as evidence when `passed` is true;
+otherwise FAIL with `severity`, `area`, and `failedStep` and `error` in the
+evidence. If the file is missing, record `NOT TESTED` with `approvedBy: "gui"`
+and evidence "the baseline did not run". **A failed baseline does not stop the
+run**; the other lines still need results.
 
 ## Phase 3: the lines
 After the user's go, run `qar session-login --role researcher` first. The lines
 say when another role is needed; switch with the same command.
 
-For each line in `plan-lines.json`, in order, skip `BASELINE` (Phase 2 recorded it):
+For each line in `run-plan-lines-<env>.json`, in order, skip `BASELINE` (Phase 2 recorded it):
 - On **production**, a `stagingOnly` line is `NOT TESTED` with
   `approvedBy: "plan"` and evidence `"staging only"`. Do not run its probe.
+- S- lines run on **staging only**, and only when Phase 1 merged them from the local
+  `plan.md`.
 - Otherwise follow the line's steps in the browser. Take a screenshot of the
   decisive screen into `.tmp/release/<tag>/shots/<id>.png`.
 - One result per line: `PASS`, `FAIL` (with `severity` blocker|major|minor and
@@ -57,13 +74,16 @@ For each line in `plan-lines.json`, in order, skip `BASELINE` (Phase 2 recorded 
 
 ## Phase 4: gate, render, upload
 1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`.
-2. `qar results-check --inventory .tmp/release/<tag>/plan-lines.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
+2. `qar results-check --inventory .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
    — must print `"ok":true`. Fix every listed gap first.
-3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/plan-lines.json --results .tmp/release/<tag>/results-<env>.json`
-   — prints `{"output","asset"}`.
+3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json`
+   — prints `{"output","asset","securityOutput"}`. `output` has no S- line.
 4. `qar release-upload --tag <tag> --file <output>` — `<output>` is the `output`
-   key printed by `results-render`.
+   key printed by `results-render`. Never upload `securityOutput`.
 5. `qar release-saved --tag <tag> --asset <asset> --url <url>` — `<asset>` is the
    `asset` key printed by `results-render`; `<url>` is the `url` key printed by
    `release-upload`.
-6. Report the counts and the asset URL. Then stop.
+6. If `securityOutput` is not empty, `cat` it and show the security results to the
+   runner here in the terminal. It stays on this machine.
+   Only if the runner asks for it, file one Jira card with them: `qar jira-create-issue --project <board> --summary "<tag> security results" --body-file <securityOutput>`.
+7. Report the counts and the asset URL. Then stop.
