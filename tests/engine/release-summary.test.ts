@@ -40,4 +40,25 @@ describe('spliceSummary', () => {
         const b = 'a\n--------\nb\n'
         expect(spliceSummary(b, 'S')).toBe(`a\n--------\nb\n\n${BLOCK('S')}\n`)
     })
+
+    it('throws on an orphan open or close marker instead of guessing', () => {
+        const msg = /unmatched regression-summary marker/
+        expect(() => spliceSummary(`<!-- regression-summary -->\n${BODY}`, 'S')).toThrow(msg)
+        expect(() => spliceSummary(`${BODY}<!-- /regression-summary -->\n`, 'S')).toThrow(msg)
+        expect(() =>
+            spliceSummary('<!-- /regression-summary -->\nx\n<!-- regression-summary -->', 'S')
+        ).toThrow(msg)
+    })
+    it('replaces only the pair when stray text surrounds it', () => {
+        const body = `top\n${BLOCK('old')}\nstray <!-- regression-summary --> tail\n`
+        expect(spliceSummary(body, 'new')).toBe(
+            `top\n${BLOCK('new')}\nstray <!-- regression-summary --> tail\n`
+        )
+    })
+    it('keeps CRLF endings and finds the separator', () => {
+        const crlf = BODY.replace(/\n/g, '\r\n')
+        const out = spliceSummary(crlf, 'S1')
+        expect(out).toBe(BODY.replace('------', `${BLOCK('S1')}\n\n------`).replace(/\n/g, '\r\n'))
+        expect(out.replace(/\r\n/g, '')).not.toContain('\n')
+    })
 })

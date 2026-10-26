@@ -30,32 +30,48 @@ export function extractSummary(plan: string): string {
 
 export type Placement = 'replaced' | 'inserted' | 'appended'
 
-function block(summary: string): string {
-    return `${OPEN}\n## What changed\n${summary.trim()}\n${CLOSE}`
+function block(summary: string, eol: string): string {
+    const text = summary.trim().replace(/\r?\n/g, eol)
+    return [OPEN, '## What changed', text, CLOSE].join(eol)
 }
+
+const UNMATCHED =
+    'the release description has an unmatched regression-summary marker; fix it on GitHub first'
 
 export function spliceWithPlacement(
     body: string,
     summary: string
 ): { body: string; placement: Placement } {
-    const b = block(summary)
-    const open = body.indexOf(OPEN)
+    // GitHub bodies edited in the web UI use CRLF; mixing endings would corrupt them.
+    const eol = body.includes('\r\n') ? '\r\n' : '\n'
+    const b = block(summary, eol)
     const close = body.indexOf(CLOSE)
-    if (open >= 0 && close > open) {
+    // lastIndexOf: a stray open marker earlier in the text must not widen the span
+    // that gets replaced, or the content between it and the pair would be deleted.
+    const open = close >= 0 ? body.lastIndexOf(OPEN, close) : -1
+    const hasMarkers = body.includes(OPEN) || close >= 0
+    if (hasMarkers && (open < 0 || close < 0)) throw new Error(UNMATCHED)
+    if (open >= 0) {
         return {
             body: body.slice(0, open) + b + body.slice(close + CLOSE.length),
             placement: 'replaced',
         }
     }
-    const lines = body.split('\n')
-    const sep = lines.indexOf(SEPARATOR)
+    const lines = body.split(/\r?\n/)
+    const sep = lines.findIndex(l => l.trimEnd() === SEPARATOR)
     if (sep >= 0) {
-        const before = lines.slice(0, sep).join('\n').replace(/\n+$/, '')
-        const after = lines.slice(sep).join('\n')
-        return { body: `${before}\n\n${b}\n\n${after}`, placement: 'inserted' }
+        const before = lines
+            .slice(0, sep)
+            .join(eol)
+            .replace(/(\r?\n)+$/, '')
+        const after = lines.slice(sep).join(eol)
+        return { body: `${before}${eol}${eol}${b}${eol}${eol}${after}`, placement: 'inserted' }
     }
-    const trimmed = body.replace(/\n+$/, '')
-    return { body: trimmed ? `${trimmed}\n\n${b}\n` : `${b}\n`, placement: 'appended' }
+    const trimmed = body.replace(/(\r?\n)+$/, '')
+    return {
+        body: trimmed ? `${trimmed}${eol}${eol}${b}${eol}` : `${b}${eol}`,
+        placement: 'appended',
+    }
 }
 
 export function spliceSummary(body: string, summary: string): string {
