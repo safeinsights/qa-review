@@ -8,6 +8,7 @@ overrides:
   vite: ^6.4.3
   postcss: ^8.5.18
   esbuild: ^0.25.0
+  source-map-js: ^1.2.2
 
 importers:
 
