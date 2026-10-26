@@ -2173,7 +2173,7 @@ const managementAppSlug = "safeinsights/management-app"
 // space separator, so "otter 644" and "OTTER-644" both resolve.
 // SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
 // still resolve, and normalizeJiraKey maps it back to the real board.
-var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP"}
+var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP", "SIINFOSEC"}
 
 var jiraKeyRE = regexp.MustCompile(
 	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)
