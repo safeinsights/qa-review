@@ -21,7 +21,9 @@ export function secretValues(vars: Vars): string[] {
 
 function redact(text: string, secrets: string[]): string {
     let out = text
-    for (const s of secrets) out = out.split(s).join('[redacted]')
+    // Longest first: a secret that contains another would otherwise survive in part.
+    const ordered = secrets.filter(s => s.length > 0).sort((a, b) => b.length - a.length)
+    for (const s of ordered) out = out.split(s).join('[redacted]')
     return out
 }
 
@@ -36,9 +38,21 @@ function stamp(d: Date): string {
 
 function resultCell(entry: ResultEntry | undefined): string {
     if (!entry) return 'MISSING'
+    if (!RESULT_VALUES.includes(entry.result)) {
+        return `MISSING (unknown result "${entry.result}")`
+    }
     if (entry.result === 'FAIL') return `FAIL (${entry.severity ?? '?'}, ${entry.area ?? '?'})`
     if (entry.result === 'NOT TESTED') return `NOT TESTED (${entry.approvedBy ?? '?'})`
     return entry.result
+}
+
+function rowFor(
+    id: string,
+    title: string,
+    entry: ResultEntry | undefined,
+    secrets: string[]
+): string {
+    return `| ${id} | ${cell(title)} | ${resultCell(entry)} | ${cell(redact(entry?.evidence ?? '', secrets))} |`
 }
 
 function table(
@@ -49,9 +63,7 @@ function table(
     const rows = ['| ID | Line | Result | Evidence |', '|---|---|---|---|']
     for (const l of lines) {
         const e = byId.get(l.id)
-        rows.push(
-            `| ${l.id} | ${cell(l.title ?? '')} | ${resultCell(e)} | ${cell(redact(e?.evidence ?? '', secrets))} |`
-        )
+        rows.push(rowFor(l.id, l.title ?? '', e, secrets))
     }
     return rows
 }
@@ -65,9 +77,12 @@ export function renderResults(input: RenderInput): string {
         if (e && RESULT_VALUES.includes(e.result)) counts[e.result] += 1
         else missing += 1
     }
+    const planned = new Set(input.plan.lines.map(l => l.id))
+    const unplanned = input.results.filter(r => !planned.has(r.id))
     const countLine = RESULT_VALUES.filter(v => counts[v] > 0)
         .map(v => `${v} ${counts[v]}`)
         .concat(missing ? [`NO RESULT ${missing}`] : [])
+        .concat(unplanned.length ? [`UNPLANNED ${unplanned.length}`] : [])
         .join(' · ')
 
     const out: string[] = [
@@ -81,19 +96,13 @@ export function renderResults(input: RenderInput): string {
         if (!lines.length) return
         out.push(`## ${name}`, '')
         if (name === 'Changes') {
-            const prs = [...new Set(lines.map(l => l.pr))]
+            const prs = [...new Set(lines.map(l => l.pr).filter(pr => pr !== undefined))]
             for (const pr of prs) {
-                out.push(
-                    `### #${pr}`,
-                    '',
-                    ...table(
-                        lines.filter(l => l.pr === pr),
-                        byId,
-                        input.secrets
-                    ),
-                    ''
-                )
+                const group = lines.filter(l => l.pr === pr)
+                out.push(`### #${pr}`, '', ...table(group, byId, input.secrets), '')
             }
+            const noPr = lines.filter(l => l.pr === undefined)
+            if (noPr.length) out.push('### (no PR)', '', ...table(noPr, byId, input.secrets), '')
         } else {
             out.push(...table(lines, byId, input.secrets), '')
         }
@@ -101,5 +110,12 @@ export function renderResults(input: RenderInput): string {
     section('Baseline', l => l.section === 'baseline')
     section('Changes', l => l.section === 'changes')
     section('Security', l => l.section === 'security')
+    const known = ['baseline', 'changes', 'security']
+    section('Other', l => !known.includes(l.section ?? ''))
+    if (unplanned.length) {
+        const rows = ['| ID | Line | Result | Evidence |', '|---|---|---|---|']
+        for (const r of unplanned) rows.push(rowFor(r.id, '', r, input.secrets))
+        out.push('## Unplanned results', '', ...rows, '')
+    }
     return out.join('\n')
 }
