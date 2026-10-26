@@ -66,12 +66,24 @@ func (a *App) WritePlan(tag, text string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	final := filepath.Join(dir, "plan.md")
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
+	// A unique temp file, so overlapping autosaves cannot truncate each other's.
+	f, err := os.CreateTemp(dir, "plan.md.*.tmp")
+	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmp, final); err != nil {
+	tmp := f.Name()
+	_, werr := f.WriteString(text)
+	cerr := f.Close()
+	if err := errors.Join(werr, cerr); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "plan.md")); err != nil {
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	return planHash(text), nil
@@ -80,7 +92,7 @@ func (a *App) WritePlan(tag, text string) (string, error) {
 func (a *App) ListReleases() ([]string, error) {
 	out, err := runToolFull(qarShim(), "release-list")
 	if err != nil {
-		return nil, fmt.Errorf("release-list: %s", out)
+		return nil, fmt.Errorf("release-list: %s", failureText(out, err))
 	}
 	var v struct {
 		Releases []string `json:"releases"`
@@ -98,7 +110,7 @@ func (a *App) ReleaseStatus(tag string) (string, error) {
 	}
 	out, err := runToolFull(qarShim(), "release-status", "--tag", tag)
 	if err != nil {
-		return "", fmt.Errorf("release-status: %s", out)
+		return "", fmt.Errorf("release-status: %s", failureText(out, err))
 	}
 	return lastLine(out), nil
 }
@@ -119,9 +131,9 @@ func (a *App) CheckPlanLines(tag string) (PlanLinesCheck, error) {
 	out, err := runToolFull(qarShim(), "plan-lines", "--input", filepath.Join(dir, "plan.md"), "--tag", tag)
 	if err != nil {
 		if strings.Contains(out, "plan-lines found") {
-			return PlanLinesCheck{OK: false, Summary: strings.TrimPrefix(strings.TrimSpace(out), "Error: ")}, nil
+			return PlanLinesCheck{OK: false, Summary: planLinesProblems(out)}, nil
 		}
-		return PlanLinesCheck{}, fmt.Errorf("plan-lines: %s", out)
+		return PlanLinesCheck{}, fmt.Errorf("plan-lines: %s", failureText(out, err))
 	}
 	var v struct {
 		Lines       int `json:"lines"`
@@ -137,6 +149,33 @@ func (a *App) CheckPlanLines(tag string) (PlanLinesCheck, error) {
 	}, nil
 }
 
+// failureText prefers the command's output, but a spawn failure (qar not found)
+// has none, and the error is then the only cause there is.
+func failureText(out string, err error) string {
+	if out != "" {
+		return out
+	}
+	return err.Error()
+}
+
+// planLinesProblems keeps only the "plan-lines found N problem(s)" block. Under the
+// pnpm fallback the output is wrapped in a script header and an ELIFECYCLE trailer
+// that mean nothing to the editor's status row.
+func planLinesProblems(out string) string {
+	i := strings.Index(out, "plan-lines found")
+	if i < 0 {
+		return strings.TrimSpace(out)
+	}
+	var kept []string
+	for _, line := range strings.Split(out[i:], "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, " ELIFECYCLE") || strings.HasPrefix(line, "ERR_PNPM") {
+			break
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 // DiscardLocalPlan replaces the local plan with the release asset.
 func (a *App) DiscardLocalPlan(tag string) error {
 	if _, err := releaseDir(tag); err != nil {
@@ -144,7 +183,7 @@ func (a *App) DiscardLocalPlan(tag string) error {
 	}
 	out, err := runToolFull(qarShim(), "release-download", "--tag", tag)
 	if err != nil {
-		return fmt.Errorf("release-download: %s", out)
+		return fmt.Errorf("release-download: %s", failureText(out, err))
 	}
 	return nil
 }
@@ -163,11 +202,16 @@ func qarShim() string { return "qar" }
 // fsnotify: the engine and the editor both write by rename, and a 500 ms poll is
 // what the verdict watcher already does.
 func (a *App) watchPlan(tag string) {
-	a.stopPlanWatcher()
 	stop := make(chan struct{})
+	// Swap under one lock: separate stop-then-store sections let two overlapping
+	// calls both see nil and orphan the first poller.
 	a.sessionMu.Lock()
+	old := a.stopPlanWatch
 	a.stopPlanWatch = stop
 	a.sessionMu.Unlock()
+	if old != nil {
+		close(old)
+	}
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -211,13 +255,16 @@ func (a *App) UnwatchPlan() { a.stopPlanWatcher() }
 
 // startReleaseSavedWatch mirrors startVerdictWatch for the release-saved file.
 func (a *App) startReleaseSavedWatch() {
-	a.stopReleaseSavedWatcher()
 	path := releaseSavedPath()
 	_ = os.Remove(path)
 	stop := make(chan struct{})
 	a.sessionMu.Lock()
+	old := a.stopReleaseSavedWatch
 	a.stopReleaseSavedWatch = stop
 	a.sessionMu.Unlock()
+	if old != nil {
+		close(old)
+	}
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()

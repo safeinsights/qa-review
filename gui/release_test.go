@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -62,5 +64,89 @@ func TestReleasePromptsHaveNoPlaceholders(t *testing.T) {
 	}
 	if !strings.Contains(composeReleaseRunPrompt("v1", "production"), "--env production") {
 		t.Fatal("run prompt must carry the env")
+	}
+}
+
+func TestWritePlanConcurrentLeavesOneWholeFile(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("QAR_REPO_DIR", repo)
+	a := &App{}
+	texts := map[string]bool{}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		text := strings.Repeat(string(rune('a'+i)), 5000)
+		texts[text] = true
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := a.WritePlan("v1", text); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	dir := filepath.Join(repo, ".tmp", "release", "v1")
+	data, err := os.ReadFile(filepath.Join(dir, "plan.md"))
+	if err != nil || !texts[string(data)] {
+		t.Fatalf("plan.md is not exactly one written text (err=%v, len=%d)", err, len(data))
+	}
+	if tmps, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmps) != 0 {
+		t.Fatalf("temp files left behind: %v", tmps)
+	}
+}
+
+func TestWatchPlanSecondStartClosesFirst(t *testing.T) {
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+	a := &App{ctx: context.Background()}
+	if err := a.WatchPlan("v1"); err != nil {
+		t.Fatal(err)
+	}
+	a.sessionMu.Lock()
+	first := a.stopPlanWatch
+	a.sessionMu.Unlock()
+	if err := a.WatchPlan("v1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-first:
+	default:
+		t.Fatal("the first watcher was orphaned, not stopped")
+	}
+	a.UnwatchPlan()
+}
+
+func TestReleaseSavedWatchSecondStartClosesFirst(t *testing.T) {
+	t.Setenv("QAR_REPO_DIR", t.TempDir())
+	a := &App{ctx: context.Background()}
+	a.startReleaseSavedWatch()
+	a.sessionMu.Lock()
+	first := a.stopReleaseSavedWatch
+	a.sessionMu.Unlock()
+	a.startReleaseSavedWatch()
+	select {
+	case <-first:
+	default:
+		t.Fatal("the first watcher was orphaned, not stopped")
+	}
+	a.stopReleaseSavedWatcher()
+}
+
+func TestPlanLinesProblems(t *testing.T) {
+	want := "plan-lines found 2 problem(s):\nR-1-1: duplicate id\nmissing section \"Security\""
+	packaged := "Error: " + want
+	dev := "> qa-review@1.0.0 qar /repo\n> tsx bin/qar.ts \"plan-lines\"\n\n" + packaged + "\n\n ELIFECYCLE  Command failed with exit code 1."
+	for name, in := range map[string]string{"packaged": packaged, "dev": dev} {
+		if got := planLinesProblems(in); got != want {
+			t.Fatalf("%s: got %q", name, got)
+		}
+	}
+}
+
+func TestFailureTextFallsBackToError(t *testing.T) {
+	if got := failureText("", os.ErrNotExist); got != os.ErrNotExist.Error() {
+		t.Fatalf("got %q", got)
+	}
+	if got := failureText("boom", os.ErrNotExist); got != "boom" {
+		t.Fatalf("got %q", got)
 	}
 }
