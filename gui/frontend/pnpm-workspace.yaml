@@ -11,11 +11,14 @@ packages: []
 #                    server.fs.deny bypass)
 #   postcss >=8.5.18 path traversal in source-map parsing
 #   esbuild >=0.24.3 dev-server request forgery
+#   source-map-js >=1.2.2  GHSA-68fv-2mgg-jv7q (indexed section offsets block the
+#                          event loop); postcss declares "^1.2.1"
 # vitest 3.2 declares vite "^5 || ^6 || ^7", so 6.x is inside its supported range.
 overrides:
     vite: '^6.4.3'
     postcss: '^8.5.18'
     esbuild: '^0.25.0'
+    source-map-js: '^1.2.2'
 
 # pnpm 11 FAILS the install (ERR_PNPM_IGNORED_BUILDS) on any unapproved
 # postinstall. esbuild arrives transitively via vite and downloads its
