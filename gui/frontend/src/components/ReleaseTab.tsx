@@ -27,6 +27,7 @@ function useReleaseSession() {
     const [live, setLive] = useState<SessionKind | null>(null)
     const [starting, setStarting] = useState(false)
     const [ownedByOther, setOwnedByOther] = useState<SessionKind | null>(null)
+    const [tag, setTag] = useState('')
     const token = useRef<string | null>(null)
 
     useEffect(() => {
@@ -57,7 +58,8 @@ function useReleaseSession() {
         }
     }, [])
 
-    const start = async (fn: () => Promise<string>) => {
+    const start = async (forTag: string, fn: () => Promise<string>) => {
+        setTag(forTag)
         setStarting(true)
         try {
             token.current = await fn()
@@ -70,12 +72,13 @@ function useReleaseSession() {
         await stopSession()
         token.current = null
         setLive(null)
+        setTag('')
     }
     const takeOver = async () => {
         await stopSession()
         setOwnedByOther(null)
     }
-    return { live, starting, ownedByOther, start, stop, takeOver }
+    return { live, tag, starting, ownedByOther, start, stop, takeOver }
 }
 
 export function ReleaseTab() {
@@ -95,17 +98,21 @@ export function ReleaseTab() {
     const open = async (t: string) => {
         setError('')
         try {
+            // The PTY and browser are one shared slot: another tag's session must go.
+            if (session.live && session.tag !== t) await session.stop()
             const s = await refreshStatus(t)
             if (!s.exists) throw new Error(`${t} is not a release of management-app`)
-            setTag(t)
-            setPhase('plan')
             const hasPlan = s.assets.some(a => a.name === 'regression-plan.md')
             if (hasPlan && !s.local.plan) {
-                // Pull the saved plan so the editor opens on it; no session yet.
+                // Pull the saved plan before the editor mounts, so it never opens
+                // on an empty buffer; no session yet.
                 await discardLocalPlan(t)
                 await refreshStatus(t)
-            } else if (!hasPlan && !s.local.plan) {
-                await session.start(() => startReleasePlanSession(t))
+            }
+            setTag(t)
+            setPhase('plan')
+            if (!hasPlan && !s.local.plan) {
+                await session.start(t, () => startReleasePlanSession(t, true))
             }
         } catch (e) {
             setError(String(e))
@@ -117,7 +124,25 @@ export function ReleaseTab() {
         setError('')
         try {
             if (session.live) await session.stop()
-            await session.start(() => startReleasePlanSession(tag))
+            await session.start(tag, () => startReleasePlanSession(tag, true))
+        } catch (e) {
+            setError(String(e))
+        }
+    }
+
+    const startPlanSession = async () => {
+        setError('')
+        try {
+            if (session.live) await session.stop()
+            await session.start(tag, () => startReleasePlanSession(tag, false))
+        } catch (e) {
+            setError(String(e))
+        }
+    }
+
+    const stop = async () => {
+        try {
+            await session.stop()
         } catch (e) {
             setError(String(e))
         }
@@ -127,15 +152,23 @@ export function ReleaseTab() {
         setError('')
         try {
             if (session.live) await session.stop()
-            await session.start(() => startReleaseRunSession(tag, env))
+            await session.start(tag, () => startReleaseRunSession(tag, env))
         } catch (e) {
             setError(String(e))
         }
     }
 
     const back = async () => {
-        await refreshStatus(tag)
-        setPhase('plan')
+        try {
+            await refreshStatus(tag)
+            setPhase('plan')
+        } catch (e) {
+            setError(String(e))
+        }
+    }
+
+    const refreshCurrent = () => {
+        refreshStatus(tag).catch(e => setError(String(e)))
     }
 
     if (session.ownedByOther) {
@@ -152,6 +185,9 @@ export function ReleaseTab() {
                 session={session}
                 onPick={open}
                 onRegenerate={() => setConfirmOpen(true)}
+                onStartSession={startPlanSession}
+                onStop={stop}
+                onStatusStale={refreshCurrent}
                 onRun={() => setPhase('run')}
                 onStartRun={startRun}
                 onBack={back}
@@ -188,6 +224,9 @@ function PhaseView({
     session,
     onPick,
     onRegenerate,
+    onStartSession,
+    onStop,
+    onStatusStale,
     onRun,
     onStartRun,
     onBack,
@@ -198,6 +237,9 @@ function PhaseView({
     session: ReturnType<typeof useReleaseSession>
     onPick: (tag: string) => void
     onRegenerate: () => void
+    onStartSession: () => void
+    onStop: () => void
+    onStatusStale: () => void
     onRun: () => void
     onStartRun: (env: string) => void
     onBack: () => void
@@ -208,20 +250,23 @@ function PhaseView({
             <ReleasePlan
                 tag={tag}
                 status={status}
-                sessionLive={session.live === 'release-plan'}
+                sessionLive={session.live === 'release-plan' && session.tag === tag}
                 starting={session.starting}
                 onRegenerate={onRegenerate}
+                onStartSession={onStartSession}
+                onStatusStale={onStatusStale}
                 onRun={onRun}
-                onStop={session.stop}
+                onStop={onStop}
             />
         )
     }
     return (
         <ReleaseRun
             status={status}
-            sessionLive={session.live === 'release-run'}
+            sessionLive={session.live === 'release-run' && session.tag === tag}
             onStart={onStartRun}
-            onStop={session.stop}
+            onStop={onStop}
+            onStatusStale={onStatusStale}
             onBack={onBack}
         />
     )

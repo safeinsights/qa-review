@@ -131,7 +131,7 @@ interface WailsApp {
     CheckPlanLines(tag: string): Promise<{ ok: boolean; summary: string }>
     WatchPlan(tag: string): Promise<void>
     UnwatchPlan(): Promise<void>
-    StartReleasePlanSession(tag: string): Promise<string>
+    StartReleasePlanSession(tag: string, regenerate: boolean): Promise<string>
     StartReleaseRunSession(tag: string, env: string): Promise<string>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
@@ -472,8 +472,8 @@ export async function unwatchPlan(): Promise<void> {
     await app().UnwatchPlan()
 }
 
-export async function startReleasePlanSession(tag: string): Promise<string> {
-    return app().StartReleasePlanSession(tag)
+export async function startReleasePlanSession(tag: string, regenerate: boolean): Promise<string> {
+    return app().StartReleasePlanSession(tag, regenerate)
 }
 
 export async function startReleaseRunSession(tag: string, env: string): Promise<string> {

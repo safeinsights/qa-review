@@ -30,6 +30,7 @@ func TestPromptTemplate(t *testing.T) {
 			composeValidationPrompt("qa", "42", "OTTER-1", "i"),
 			composeCompanionPrompt("create-study"),
 			composeReleasePlanPrompt("v1"),
+			composeReleasePlanEditPrompt("v1"),
 			composeReleaseRunPrompt("v1", "staging"),
 		} {
 			if strings.Contains(p, "{{") {

@@ -13,6 +13,8 @@ export function ReleasePlan({
     sessionLive,
     starting,
     onRegenerate,
+    onStartSession,
+    onStatusStale,
     onRun,
     onStop,
 }: {
@@ -21,13 +23,20 @@ export function ReleasePlan({
     sessionLive: boolean
     starting: boolean
     onRegenerate: () => void
+    onStartSession: () => void
+    onStatusStale: () => void
     onRun: () => void
     onStop: () => void
 }) {
-    const plan = useReleasePlan(tag, true)
+    const plan = useReleasePlan(tag, true, onStatusStale)
     const [preview, setPreview] = useState(false)
     const badge = planBadge(plan.dirty, plan.uploaded, status)
-    const canSave = sessionLive && status.canUpload && !plan.dirty && plan.lineCheck?.ok === true
+    const canSave =
+        sessionLive &&
+        status.canUpload &&
+        !plan.dirty &&
+        !plan.conflict &&
+        plan.lineCheck?.ok === true
 
     return (
         <div>
@@ -58,6 +67,11 @@ export function ReleasePlan({
                 >
                     Save to release
                 </Button>
+                <StartSessionButton
+                    isVisible={!sessionLive}
+                    disabled={starting}
+                    onStart={onStartSession}
+                />
                 <Button onClick={onRegenerate} variant="outline" radius="md" disabled={starting}>
                     Regenerate
                 </Button>
@@ -80,6 +94,7 @@ export function ReleasePlan({
                     Stop session
                 </Button>
             </Group>
+            <PlanError message={plan.error} />
             <section
                 style={{
                     background: '#0f1419',
@@ -162,5 +177,31 @@ function DiscardButton({ isVisible, onDiscard }: { isVisible: boolean; onDiscard
         <Button onClick={onDiscard} variant="subtle" color="red" size="compact-sm">
             Discard local edits
         </Button>
+    )
+}
+
+function StartSessionButton({
+    isVisible,
+    disabled,
+    onStart,
+}: {
+    isVisible: boolean
+    disabled: boolean
+    onStart: () => void
+}) {
+    if (!isVisible) return null
+    return (
+        <Button onClick={onStart} disabled={disabled} color="teal" variant="outline" radius="md">
+            Start session
+        </Button>
+    )
+}
+
+function PlanError({ message }: { message: string }) {
+    if (!message) return null
+    return (
+        <Alert color="red" mt="sm" style={{ whiteSpace: 'pre-wrap' }}>
+            {message}
+        </Alert>
     )
 }

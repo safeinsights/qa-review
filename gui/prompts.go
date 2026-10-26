@@ -105,6 +105,12 @@ func composeReleasePlanPrompt(tag string) string {
 	return prompt("release-plan", map[string]string{"tag": strings.TrimSpace(tag)})
 }
 
+// composeReleasePlanEditPrompt opens a release-plan session on an existing plan,
+// without regenerating it.
+func composeReleasePlanEditPrompt(tag string) string {
+	return prompt("release-plan-edit", map[string]string{"tag": strings.TrimSpace(tag)})
+}
+
 // composeReleaseRunPrompt opens a release-run session against one env.
 func composeReleaseRunPrompt(tag, env string) string {
 	return prompt("release-run", map[string]string{

@@ -336,13 +336,19 @@ func (a *App) startReleaseSession(kind, env, openingPrompt string) (string, erro
 	return token, nil
 }
 
-func (a *App) StartReleasePlanSession(tag string) (string, error) {
+// StartReleasePlanSession opens the plan session. regenerate=false keeps an
+// existing plan (a downloaded one) and only gives the user a live Claude to save it.
+func (a *App) StartReleasePlanSession(tag string, regenerate bool) (string, error) {
 	if _, err := releaseDir(tag); err != nil {
 		return "", err
 	}
 	// The plan session reads PRs, not the app; staging is a harmless target for
 	// the browser the shared session machinery always launches.
-	token, err := a.startReleaseSession("release-plan", "staging", composeReleasePlanPrompt(tag))
+	opening := composeReleasePlanPrompt(tag)
+	if !regenerate {
+		opening = composeReleasePlanEditPrompt(tag)
+	}
+	token, err := a.startReleaseSession("release-plan", "staging", opening)
 	if err != nil {
 		return "", err
 	}

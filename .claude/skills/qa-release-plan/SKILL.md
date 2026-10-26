@@ -18,6 +18,10 @@ when unsure.
   and reloads it when you write it.
 - **`gh`** is available (pre-approved) for PR diffs.
 
+## Plan already exists
+If the opening prompt says the plan already exists, skip Phases 1–3 and begin at
+Phase 4 after running `qar plan-lines` and reporting its counts.
+
 ## Keeping the session smooth
 - **Never prefix a command with `cd`.**
 - **Write every scratch file under `.tmp/release/<tag>/`.**
