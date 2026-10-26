@@ -1,14 +1,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Inventory } from '@/engine/inventory'
-import { releaseDir, resultsAssetName } from '@/engine/release-paths'
-import { renderResults, secretValues } from '@/engine/release-results'
+import { releaseDir, resultsAssetName, securityResultsFile } from '@/engine/release-paths'
+import {
+    hasSecurityResults,
+    renderResults,
+    renderSecurityResults,
+    secretValues,
+} from '@/engine/release-results'
 import type { ResultEntry } from '@/engine/results'
 import type { Vars } from '@/engine/settings'
 
 // `qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>`
-// Writes .tmp/release/<tag>/<regression-results-<env>-<stamp>.md> and prints its path,
-// which is what release-upload then takes.
+// Writes .tmp/release/<tag>/<regression-results-<env>-<stamp>.md> without any S- line
+// (management-app is public), and, when the run has S- results, the local-only
+// security-results-<env>.md. Prints {"output","asset","securityOutput"}; release-upload
+// takes `output`, and `securityOutput` is "" when there is none.
 export async function resultsRenderCommand(
     opts: Record<string, string>,
     vars: Vars
@@ -26,17 +33,24 @@ export async function resultsRenderCommand(
     }
     if (!Array.isArray(parsed.results))
         throw new Error('--results JSON must have a "results" array')
-    const now = new Date()
-    const md = renderResults({
+    const input = {
         tag,
         env,
         plan,
         results: parsed.results,
         secrets: secretValues(vars),
-        now,
-    })
-    const output = path.join(releaseDir(tag), resultsAssetName(env, now))
-    fs.mkdirSync(path.dirname(output), { recursive: true })
-    fs.writeFileSync(output, md)
-    process.stdout.write(`${JSON.stringify({ output, asset: path.basename(output) })}\n`)
+        now: new Date(),
+    }
+    const dir = releaseDir(tag)
+    fs.mkdirSync(dir, { recursive: true })
+    const output = path.join(dir, resultsAssetName(env, input.now))
+    fs.writeFileSync(output, renderResults({ ...input, publicOnly: true }))
+    let securityOutput = ''
+    if (hasSecurityResults(input.results)) {
+        securityOutput = path.join(dir, securityResultsFile(env))
+        fs.writeFileSync(securityOutput, renderSecurityResults(input))
+    }
+    process.stdout.write(
+        `${JSON.stringify({ output, asset: path.basename(output), securityOutput })}\n`
+    )
 }

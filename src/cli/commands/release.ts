@@ -4,15 +4,25 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
 import {
+    assertUnderReleaseDir,
     collectReleasePrs,
     downloadAsset,
     listReleases,
+    localPlanDiffers,
     releaseStatus,
     uploadAsset,
 } from '@/engine/github-release'
 import { jiraBoardsFrom, managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
-import { PLAN_ASSET, PRS_FILE, releaseDir } from '@/engine/release-paths'
+import { stripSecurity } from '@/engine/public-plan'
+import {
+    isUploadableAssetName,
+    PLAN_ASSET,
+    PLAN_FILE,
+    PRS_FILE,
+    PUBLIC_DIR,
+    releaseDir,
+} from '@/engine/release-paths'
 import type { Vars } from '@/engine/settings'
 
 const execFileAsync = promisify(execFile)
@@ -70,8 +80,29 @@ export async function releaseStatusCommand(
     print(await releaseStatus(gh, managementAppRepo(vars), tag, releaseDir(tag)))
 }
 
-// `qar release-download --tag <tag> [--asset regression-plan.md]` — fetch one asset
-// into the release dir. The plan asset lands as plan.md, the editor's file.
+// The plan lands as plan.md, the editor's file, which may hold work the asset does
+// not: unsaved edits, and always the local-only Security section. So an existing
+// plan.md is replaced only when it equals the asset or --force is given.
+function placePlan(remote: string, dest: string, force: boolean): string {
+    if (force || !fs.existsSync(dest)) {
+        fs.copyFileSync(remote, dest)
+        return 'replaced'
+    }
+    const local = fs.readFileSync(dest, 'utf8')
+    const asset = fs.readFileSync(remote, 'utf8')
+    if (local === asset) return 'unchanged'
+    if (!localPlanDiffers(local, asset))
+        return 'kept local (the asset plus the local Security section)'
+    throw new Error(
+        `refusing to overwrite ${dest}: it has edits that are not on the release; ` +
+            'save them, or pass --force to replace them with the asset'
+    )
+}
+
+// `qar release-download --tag <tag> [--asset testing-plan.md] [--remote-only] [--force]`
+// Fetches one asset into .tmp/release/<tag>/remote/. The plan asset is then placed as
+// plan.md (see placePlan); --remote-only leaves plan.md alone, which is what a run
+// uses so it never reads or replaces a plan someone is editing.
 export async function releaseDownloadCommand(
     opts: Record<string, string>,
     vars: Vars,
@@ -91,9 +122,45 @@ export async function releaseDownloadCommand(
         asset,
         path.join(dir, 'remote')
     )
-    const dest = path.join(dir, asset === PLAN_ASSET ? 'plan.md' : asset)
-    fs.copyFileSync(file, dest)
-    print({ tag, asset, output: dest })
+    if (opts['remote-only'] === 'true') {
+        print({ tag, asset, output: file })
+        return
+    }
+    if (asset !== PLAN_ASSET) {
+        const dest = path.join(dir, asset)
+        fs.copyFileSync(file, dest)
+        print({ tag, asset, output: dest })
+        return
+    }
+    const dest = path.join(dir, PLAN_FILE)
+    const plan = placePlan(file, dest, opts.force === 'true')
+    print({ tag, asset, output: dest, plan })
+}
+
+// Writes the plan without its Security section under public/, which is the file that
+// is uploaded. Reading is gated by the path guard first, like the upload itself.
+function publicPlan(tag: string, file: string): { source: string; stripped: boolean } {
+    assertUnderReleaseDir(tag, file)
+    const plan = fs.readFileSync(file, 'utf8')
+    const pub = stripSecurity(plan)
+    const source = path.join(releaseDir(tag), PUBLIC_DIR, PLAN_ASSET)
+    fs.mkdirSync(path.dirname(source), { recursive: true })
+    fs.writeFileSync(source, pub)
+    return { source, stripped: pub !== plan }
+}
+
+function assetNameFor(opts: Record<string, string>, file: string): string {
+    const given = (opts.as ?? '').trim()
+    if (given === 'true') throw new Error('release-upload requires a value for --as')
+    const base = path.basename(file)
+    const name = given || (base === PLAN_FILE ? PLAN_ASSET : base)
+    if (name !== path.basename(name) || !isUploadableAssetName(name)) {
+        throw new Error(
+            `${name} is not a release asset name: use ${PLAN_ASSET} or ` +
+                'regression-results-<env>-<YYYYMMDD-HHMM>.md'
+        )
+    }
+    return name
 }
 
 // `qar release-upload --tag <tag> --file <path> [--as <asset name>]`
@@ -105,7 +172,9 @@ export async function releaseUploadCommand(
     const tag = requireTag(opts)
     const file = (opts.file ?? '').trim()
     if (!file || file === 'true') throw new Error('release-upload requires --file <path>')
-    const asName = (opts.as ?? '').trim() || path.basename(file)
-    const url = await uploadAsset(gh, managementAppRepo(vars), tag, file, asName)
-    print({ tag, asset: asName, url })
+    const asName = assetNameFor(opts, file)
+    const { source, stripped } =
+        asName === PLAN_ASSET ? publicPlan(tag, file) : { source: file, stripped: false }
+    const url = await uploadAsset(gh, managementAppRepo(vars), tag, source, asName)
+    print({ tag, asset: asName, url, stripped })
 }

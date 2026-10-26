@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Inventory } from '@/engine/inventory'
-import { renderResults, secretValues } from '@/engine/release-results'
+import { renderResults, renderSecurityResults, secretValues } from '@/engine/release-results'
 
 const plan: Inventory = {
     card: 'v1.6.9',
@@ -54,6 +54,7 @@ describe('renderResults', () => {
             ],
             secrets: ['hunter2'],
             now: new Date(2026, 9, 26, 14, 5),
+            publicOnly: false,
         })
         expect(md).toContain('# Regression results v1.6.9 — production')
         expect(md).toContain('2026-10-26 14:05')
@@ -77,13 +78,60 @@ describe('renderResults', () => {
             results: [],
             secrets: [],
             now: new Date(),
+            publicOnly: false,
         })
         expect(md.match(/MISSING/g)).toHaveLength(3)
     })
 })
 
+describe('the public asset and the local security file', () => {
+    const input = {
+        tag: 'v1.6.9',
+        env: 'staging',
+        plan,
+        results: [
+            { id: 'BASELINE', result: 'PASS' as const, evidence: 'report' },
+            { id: 'R-1110-1', result: 'PASS' as const, evidence: 'pill' },
+            {
+                id: 'S-1',
+                result: 'FAIL' as const,
+                evidence: 'redirect followed; token abc',
+                severity: 'major' as const,
+                area: 'auth',
+            },
+            { id: 'S-9', result: 'PASS' as const, evidence: 'unplanned probe' },
+        ],
+        secrets: ['abc'],
+        now: new Date(2026, 9, 26, 14, 5),
+    }
+
+    it('publicOnly drops every S- row, the Security section, and their counts', () => {
+        const md = renderResults({ ...input, publicOnly: true })
+        expect(md).not.toMatch(/S-1|S-9|## Security|FAIL/)
+        expect(md).toMatch(/PASS 2$/m)
+        expect(md).not.toContain('UNPLANNED')
+    })
+
+    it('the security file holds only the S- rows, in the same table, redacted', () => {
+        const md = renderSecurityResults(input)
+        expect(md).toContain('# Security results v1.6.9 — staging')
+        expect(md).toContain('## Security')
+        expect(md).toContain(
+            '| S-1 | Signin redirect | FAIL (major, auth) | redirect followed; token [redacted] |'
+        )
+        expect(md).toContain('| S-9 |')
+        expect(md).not.toMatch(/R-1110-1|BASELINE/)
+    })
+})
+
 describe('renderResults edge cases', () => {
-    const base = { tag: 'v', env: 'staging', secrets: [] as string[], now: new Date() }
+    const base = {
+        tag: 'v',
+        env: 'staging',
+        secrets: [] as string[],
+        now: new Date(),
+        publicOnly: false,
+    }
     const line = (o: object) => ({
         id: 'X',
         title: 'T',
@@ -161,14 +209,18 @@ describe('renderResults edge cases', () => {
 })
 
 describe('secretValues', () => {
-    it('collects password and MFA values only', () => {
+    it('collects password, MFA, private key, token and secret values only', () => {
         expect(
             secretValues({
                 ADMIN_PASSWORD_STAGING: 'p',
                 ADMIN_MFA_SEED_STAGING: 's',
+                REVIEWER_RESULTS_PRIVATE_KEY_QA: 'k',
+                JIRA_API_TOKEN: 't',
+                CLERK_SECRET: 'c',
                 QA_BASE_URL: 'u',
+                JIRA_USERNAME: 'n',
                 EMPTY_PASSWORD: '',
             })
-        ).toEqual(['p', 's'])
+        ).toEqual(['p', 's', 'k', 't', 'c'])
     })
 })

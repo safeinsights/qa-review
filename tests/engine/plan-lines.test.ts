@@ -22,6 +22,34 @@ Words for PMs.
 Stuff.
 `
 
+describe('the completeness gate', () => {
+    it('passes when every PR has a line and every line has a PR', () => {
+        expect(() => parsePlanLines(PLAN, 'v', { prs: [1110] })).not.toThrow()
+    })
+
+    it('names a PR in the release with no test line', () => {
+        expect(() => parsePlanLines(PLAN, 'v', { prs: [1110, 1111] })).toThrow(
+            /PR #1111 has no test line/
+        )
+    })
+
+    it('names an R- line whose PR is not in the release', () => {
+        try {
+            parsePlanLines(PLAN, 'v', { prs: [] })
+            throw new Error('did not throw')
+        } catch (e) {
+            expect((e as PlanLinesError).problems).toEqual([
+                'R-1110-1: PR #1110 is not in the release',
+                'R-1110-2: PR #1110 is not in the release',
+            ])
+        }
+    })
+
+    it('is off without a PR list', () => {
+        expect(() => parsePlanLines(PLAN, 'v')).not.toThrow()
+    })
+})
+
 describe('parsePlanLines', () => {
     it('reads every tagged line with its section, pr, and staging flag', () => {
         const inv = parsePlanLines(PLAN, 'v1.6.9')
@@ -46,8 +74,17 @@ describe('parsePlanLines', () => {
     })
 
     it('rejects a missing section, naming it', () => {
-        const noSec = PLAN.replace(/## Security[\s\S]*?(?=## Technical)/, '')
-        expect(() => parsePlanLines(noSec, 'v')).toThrow(/missing section "Security"/)
+        const noChanges = PLAN.replace(/## Changes[\s\S]*?(?=## Security)/, '')
+        expect(() => parsePlanLines(noChanges, 'v')).toThrow(/missing section "Changes"/)
+    })
+
+    it('accepts a plan with no Security section (the public asset)', () => {
+        const pub = PLAN.replace(/## Security[\s\S]*?(?=## Technical)/, '')
+        expect(parsePlanLines(pub, 'v').lines.map(l => l.id)).toEqual([
+            'BASELINE',
+            'R-1110-1',
+            'R-1110-2',
+        ])
     })
 
     it('rejects sections out of order', () => {

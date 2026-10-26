@@ -10,12 +10,27 @@ export function releaseDir(tag: string): string {
 }
 
 export const PLAN_FILE = 'plan.md'
-export const PLAN_ASSET = 'regression-plan.md'
+// The public plan asset: plan.md with its Security section removed.
+export const PLAN_ASSET = 'testing-plan.md'
+export const PUBLIC_DIR = 'public'
 export const PLAN_LINES_FILE = 'plan-lines.json'
 export const PRS_FILE = 'prs.json'
 
 export function resultsFile(env: string): string {
     return `results-${env}.json`
+}
+
+// The S- results of one run. Local only: it is shown to the runner and never uploaded.
+export function securityResultsFile(env: string): string {
+    return `security-results-${env}.md`
+}
+
+const RESULTS_ASSET = /^regression-results-[a-z]+-\d{8}-\d{4}\.md$/
+
+// The only names release-upload will publish. A free-form --as could publish any
+// file in the release dir (security-results-*.md included) under any name.
+export function isUploadableAssetName(name: string): boolean {
+    return name === PLAN_ASSET || RESULTS_ASSET.test(name)
 }
 
 // The asset name for one run. The stamp is what keeps runs from replacing each

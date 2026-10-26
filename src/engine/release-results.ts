@@ -9,13 +9,18 @@ export interface RenderInput {
     results: ResultEntry[]
     secrets: string[]
     now: Date
+    // The uploaded asset: management-app is public, so S- lines and their results
+    // are left out entirely (rows, counts and the Security section).
+    publicOnly: boolean
 }
 
 // Values that must never reach a release asset. Names, not values, decide: every
-// *_PASSWORD* and *_MFA_* var in the merged settings.
+// password, MFA, private key, token and secret var in the merged settings.
+const SECRET_NAME = /_PASSWORD|_MFA_|_PRIVATE_KEY|_TOKEN|_SECRET/
+
 export function secretValues(vars: Vars): string[] {
     return Object.entries(vars)
-        .filter(([k, v]) => /_PASSWORD|_MFA_/.test(k) && typeof v === 'string' && v.length > 0)
+        .filter(([k, v]) => SECRET_NAME.test(k) && typeof v === 'string' && v.length > 0)
         .map(([, v]) => v as string)
 }
 
@@ -68,7 +73,44 @@ function table(
     return rows
 }
 
+function isSecurity(id: string, section?: string): boolean {
+    return section === 'security' || /^S-\d+$/.test(id)
+}
+
+// The asset. With publicOnly, every S- line and result is dropped before anything is
+// counted, so the counts cannot reveal that security lines exist.
 export function renderResults(input: RenderInput): string {
+    const keep = (id: string, section?: string) => !input.publicOnly || !isSecurity(id, section)
+    return render(
+        {
+            ...input,
+            plan: { ...input.plan, lines: input.plan.lines.filter(l => keep(l.id, l.section)) },
+            results: input.results.filter(r => keep(r.id)),
+        },
+        `# Regression results ${input.tag} — ${input.env}`
+    )
+}
+
+// The local-only companion: the S- lines alone, in the same table. Never uploaded.
+export function renderSecurityResults(input: Omit<RenderInput, 'publicOnly'>): string {
+    return render(
+        {
+            ...input,
+            plan: {
+                ...input.plan,
+                lines: input.plan.lines.filter(l => isSecurity(l.id, l.section)),
+            },
+            results: input.results.filter(r => isSecurity(r.id)),
+        },
+        `# Security results ${input.tag} — ${input.env}`
+    )
+}
+
+export function hasSecurityResults(results: ResultEntry[]): boolean {
+    return results.some(r => isSecurity(r.id))
+}
+
+function render(input: Omit<RenderInput, 'publicOnly'>, title: string): string {
     const byId = new Map(input.results.map(r => [r.id, r]))
     const counts = Object.fromEntries(RESULT_VALUES.map(v => [v, 0])) as Record<ResultValue, number>
     let missing = 0
@@ -85,12 +127,7 @@ export function renderResults(input: RenderInput): string {
         .concat(unplanned.length ? [`UNPLANNED ${unplanned.length}`] : [])
         .join(' · ')
 
-    const out: string[] = [
-        `# Regression results ${input.tag} — ${input.env}`,
-        '',
-        `Run at ${stamp(input.now)}. ${countLine}`,
-        '',
-    ]
+    const out: string[] = [title, '', `Run at ${stamp(input.now)}. ${countLine}`, '']
     const section = (name: string, filter: (l: InventoryLine) => boolean) => {
         const lines = input.plan.lines.filter(filter)
         if (!lines.length) return

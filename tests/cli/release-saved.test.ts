@@ -20,10 +20,10 @@ describe('release-saved', () => {
     it('writes { tag, asset, url } to the rendezvous file', async () => {
         const { releaseSavedCommand } = await import('@/cli/commands/release-saved')
         const { releaseSavedPath } = await import('@/engine/paths')
-        await releaseSavedCommand({ tag: 'v1', asset: 'regression-plan.md', url: 'https://x' })
+        await releaseSavedCommand({ tag: 'v1', asset: 'testing-plan.md', url: 'https://x' })
         expect(JSON.parse(fs.readFileSync(releaseSavedPath(), 'utf8'))).toEqual({
             tag: 'v1',
-            asset: 'regression-plan.md',
+            asset: 'testing-plan.md',
             url: 'https://x',
         })
     })

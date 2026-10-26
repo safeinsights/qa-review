@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
     assertUnderReleaseDir,
     collectReleasePrs,
+    localPlanDiffers,
     previousTag,
     prNumbersFromBody,
     prNumbersFromSubjects,
@@ -139,7 +140,7 @@ describe('releaseStatus', () => {
             return JSON.stringify({
                 assets: [
                     {
-                        name: 'regression-plan.md',
+                        name: 'testing-plan.md',
                         browser_download_url: 'https://x/plan',
                         size: 12,
                         updated_at: '2026-10-20T00:00:00Z',
@@ -150,7 +151,7 @@ describe('releaseStatus', () => {
         if (joined.startsWith('api repos/r --jq .permissions.push')) return 'true'
         if (joined.startsWith('release download v2')) {
             const dir = args[args.indexOf('--dir') + 1]
-            fs.writeFileSync(path.join(dir, 'regression-plan.md'), 'remote plan')
+            fs.writeFileSync(path.join(dir, 'testing-plan.md'), 'remote plan')
             return ''
         }
         throw new Error(`unexpected gh ${joined}`)
@@ -164,7 +165,7 @@ describe('releaseStatus', () => {
         const status = await releaseStatus(gh, 'r', 'v2', dir)
         expect(status.exists).toBe(true)
         expect(status.canUpload).toBe(true)
-        expect(status.assets.map(a => a.name)).toEqual(['regression-plan.md'])
+        expect(status.assets.map(a => a.name)).toEqual(['testing-plan.md'])
         expect(status.local).toEqual({
             plan: true,
             planDiffers: true,
@@ -180,6 +181,15 @@ describe('releaseStatus', () => {
         const status = await releaseStatus(gone, 'r', 'v9', releaseDir('v9'))
         expect(status.exists).toBe(false)
         expect(status.assets).toEqual([])
+    })
+})
+
+describe('localPlanDiffers', () => {
+    it('ignores the local Security section, which the asset never has', () => {
+        const local = '## Changes\nA\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
+        const remote = '## Changes\nA\n\n## Technical appendix\nB\n'
+        expect(localPlanDiffers(local, remote)).toBe(false)
+        expect(localPlanDiffers(local.replace('A', 'edited'), remote)).toBe(true)
     })
 })
 
@@ -226,7 +236,7 @@ describe('release error handling and upload guards', () => {
             calls.push(args)
             if (args[0] === 'api')
                 return JSON.stringify({
-                    assets: ['regression-plan.md', 'regression-results-staging-x.md'].map(name => ({
+                    assets: ['testing-plan.md', 'regression-results-staging-x.md'].map(name => ({
                         name,
                         browser_download_url: `https://x/${name}`,
                         size: 1,
@@ -238,11 +248,26 @@ describe('release error handling and upload guards', () => {
         const file = path.join(releaseDir('v2'), 'plan.md')
         fs.mkdirSync(releaseDir('v2'), { recursive: true })
         fs.writeFileSync(file, 'x')
-        await uploadAsset(gh, 'r', 'v2', file, 'regression-plan.md')
+        await uploadAsset(gh, 'r', 'v2', file, 'testing-plan.md')
         await uploadAsset(gh, 'r', 'v2', file, 'regression-results-staging-x.md')
         const uploads = calls.filter(c => c[0] === 'release')
         expect(uploads[0]).toContain('--clobber')
         expect(uploads[1]).not.toContain('--clobber')
+    })
+
+    it('refuses to upload a file that holds security lines', async () => {
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            return ''
+        }
+        fs.mkdirSync(releaseDir('v2'), { recursive: true })
+        const file = path.join(releaseDir('v2'), 'plan.md')
+        fs.writeFileSync(file, '## Summary\nx\n\n## Security\n- [S-1] t — p\n')
+        await expect(uploadAsset(gh, 'r', 'v2', file, 'testing-plan.md')).rejects.toThrow(
+            'refusing to upload testing-plan.md: it contains security lines; management-app is public'
+        )
+        expect(calls).toEqual([])
     })
 
     it('rejects a symlink in the release dir that points outside it', () => {

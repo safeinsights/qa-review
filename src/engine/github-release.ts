@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
 import { extractJiraKeys } from './jira-keys'
+import { hasSecurityContent, stripSecurity } from './public-plan'
 import { PLAN_ASSET, PLAN_FILE, releaseDir } from './release-paths'
 
 export interface ReleasePr {
@@ -247,6 +248,12 @@ export async function downloadAsset(
     return file
 }
 
+// The asset never holds the Security section, so the local plan is compared without
+// it: a local plan that differs only by its Security lines has nothing unsaved.
+export function localPlanDiffers(local: string, remote: string): boolean {
+    return stripSecurity(local) !== remote
+}
+
 export async function releaseStatus(
     gh: GhRunner,
     repo: string,
@@ -259,7 +266,10 @@ export async function releaseStatus(
     let planDiffers = false
     if (plan && assets?.some(a => a.name === PLAN_ASSET)) {
         const remote = await downloadAsset(gh, repo, tag, PLAN_ASSET, path.join(dir, 'remote'))
-        planDiffers = fs.readFileSync(remote, 'utf8') !== fs.readFileSync(planPath, 'utf8')
+        planDiffers = localPlanDiffers(
+            fs.readFileSync(planPath, 'utf8'),
+            fs.readFileSync(remote, 'utf8')
+        )
     }
     const results = fs.existsSync(dir)
         ? fs.readdirSync(dir).filter(f => /^results-[a-z]+\.json$/.test(f))
@@ -281,6 +291,11 @@ export async function uploadAsset(
     asName: string
 ): Promise<string> {
     assertUnderReleaseDir(tag, file)
+    if (hasSecurityContent(fs.readFileSync(file, 'utf8'))) {
+        throw new Error(
+            `refusing to upload ${asName}: it contains security lines; management-app is public`
+        )
+    }
     // gh names the asset after the file, so copy under the asset name first.
     const stage = path.join(releaseDir(tag), 'upload')
     fs.mkdirSync(stage, { recursive: true })

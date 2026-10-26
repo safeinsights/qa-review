@@ -266,12 +266,15 @@ export const COMMANDS = [
     },
     {
         name: 'plan-lines',
-        usage: 'qar plan-lines --input <plan.md> --tag <tag> [--output <path.json>]',
+        usage: 'qar plan-lines --input <plan.md> --tag <tag> [--output <path.json>] [--prs <prs.json>] [--security-from <plan.md>]',
         summary: 'Parse the [R-…]/[S-…] test lines out of a regression plan for results-check.',
         details:
             'Sections must be Summary, Baseline, Changes, Security, Technical appendix in that ' +
-            'order. A line is "- [ID] <title> — <steps>", with "(staging only)" at the end for ' +
-            'an active probe. Default output is plan-lines.json beside the input.',
+            'order; Security may be absent (the public asset has none). A line is ' +
+            '"- [ID] <title> — <steps>", with "(staging only)" at the end for an active probe. ' +
+            'With prs.json beside the input (or --prs), every PR needs an R- line and every R- ' +
+            'line needs a PR in the release. --security-from adds the S- lines of a local plan. ' +
+            'Default output is plan-lines.json beside the input.',
     },
     {
         name: 'release-list',
@@ -293,7 +296,9 @@ export const COMMANDS = [
         usage: 'qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>',
         summary: "Render a release run's results as the markdown asset, with secrets redacted.",
         details:
-            'Writes regression-results-<env>-<stamp>.md under .tmp/release/<tag>/ and prints {"output","asset"}.',
+            'Writes regression-results-<env>-<stamp>.md under .tmp/release/<tag>/ with no S- line ' +
+            '(management-app is public), plus security-results-<env>.md (local only, never uploaded) ' +
+            'when the run has S- results. Prints {"output","asset","securityOutput"}.',
     },
     {
         name: 'release-status',
@@ -302,15 +307,23 @@ export const COMMANDS = [
     },
     {
         name: 'release-download',
-        usage: 'qar release-download --tag <tag> [--asset regression-plan.md]',
+        usage: 'qar release-download --tag <tag> [--asset testing-plan.md] [--remote-only] [--force]',
         summary: 'Download one release asset into .tmp/release/<tag>/ (the plan lands as plan.md).',
+        details:
+            'The asset lands in remote/ first. An existing plan.md that differs from the asset ' +
+            '(beyond its local Security section) is not replaced unless --force. --remote-only ' +
+            'leaves plan.md alone.',
     },
     {
         name: 'release-upload',
         usage: 'qar release-upload --tag <tag> --file <path> [--as <asset name>]',
         summary:
-            'Upload a file under .tmp/release/<tag>/ as a release asset (only regression-plan.md is replaced; other assets are never overwritten).',
-        details: 'Refuses any file outside the release dir. Prints {"tag","asset","url"}.',
+            'Upload a file under .tmp/release/<tag>/ as a release asset (only testing-plan.md is replaced; other assets are never overwritten).',
+        details:
+            '--as is testing-plan.md or regression-results-<env>-<YYYYMMDD-HHMM>.md. The plan is ' +
+            'uploaded without its Security section; any file that still holds security lines is ' +
+            'refused, because management-app is public. Refuses any file outside the release dir. ' +
+            'Prints {"tag","asset","url","stripped"}.',
     },
     {
         name: 'release-saved',

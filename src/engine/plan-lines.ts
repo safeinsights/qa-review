@@ -29,9 +29,38 @@ function lineKindFor(id: string): 'baseline' | 'changes' | 'security' | null {
     return null
 }
 
+// Security is the one optional section: the public asset (testing-plan.md) is the
+// plan with it removed, and a run parses that asset.
+const OPTIONAL_SECTIONS: readonly SectionName[] = ['Security']
+
+export interface PlanLinesOptions {
+    // The PR numbers of the release (prs.json). Given, every PR needs an R- line and
+    // every R- line needs a PR in the release.
+    prs?: number[]
+}
+
+// The completeness gate: the plan is the release's test list, so a PR with no line is
+// a hole in it, and a line for a PR outside the release tests the wrong build.
+export function completenessProblems(lines: InventoryLine[], prs: number[]): string[] {
+    const problems: string[] = []
+    const covered = new Set(lines.filter(l => l.section === 'changes').map(l => l.pr))
+    for (const n of prs) if (!covered.has(n)) problems.push(`PR #${n} has no test line`)
+    const inRelease = new Set(prs)
+    for (const l of lines) {
+        if (l.section === 'changes' && l.pr !== undefined && !inRelease.has(l.pr)) {
+            problems.push(`${l.id}: PR #${l.pr} is not in the release`)
+        }
+    }
+    return problems
+}
+
 // The markdown is the single source: this reads the [ID] lines out of it so the
 // user can edit the plan freely and the results gate still has a list to check.
-export function parsePlanLines(markdown: string, tag: string): Inventory {
+export function parsePlanLines(
+    markdown: string,
+    tag: string,
+    options: PlanLinesOptions = {}
+): Inventory {
     const problems: string[] = []
     const lines: InventoryLine[] = []
     const seenSections: string[] = []
@@ -113,7 +142,9 @@ export function parsePlanLines(markdown: string, tag: string): Inventory {
     }
 
     for (const name of PLAN_SECTIONS) {
-        if (!seenSections.includes(name)) problems.push(`missing section "${name}"`)
+        if (!seenSections.includes(name) && !OPTIONAL_SECTIONS.includes(name)) {
+            problems.push(`missing section "${name}"`)
+        }
     }
     const order = seenSections.filter(s => (PLAN_SECTIONS as readonly string[]).includes(s))
     const expectedOrder = PLAN_SECTIONS.filter(s => order.includes(s))
@@ -121,6 +152,7 @@ export function parsePlanLines(markdown: string, tag: string): Inventory {
         problems.push(`sections are out of order: expected ${PLAN_SECTIONS.join(', ')}`)
     }
     if (!lines.some(l => l.id === 'BASELINE')) problems.push('Baseline has no [BASELINE] line')
+    if (options.prs) problems.push(...completenessProblems(lines, options.prs))
 
     if (problems.length) throw new PlanLinesError(problems)
     return { card: tag, target: 'release', lines }
