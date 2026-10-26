@@ -7,9 +7,12 @@ export class AuthError extends Error {}
 // The "My studies" side-nav link every authenticated page shows — the one shared
 // signal for "signed in". The app has since dropped both markers this used to be
 // (the "Hi, <name>" greeting and the "My dashboard" title, OTTER-617), and each
-// loss surfaced as a sign-in that WORKED being reported as a failure.
+// loss surfaced as a sign-in that WORKED being reported as a failure. The link's
+// accessible name gains a visually hidden " Updated" suffix whenever the activity dot
+// shows (it appears a beat after load), so an exact-string match flips to not-found
+// mid-wait: loginAs saw the link, then the caller's own wait for it timed out.
 export function signedInMarker(page: Page) {
-    return page.getByRole('link', { name: 'My studies', exact: true }).first()
+    return page.getByRole('link', { name: /^My studies( Updated)?$/ }).first()
 }
 
 // Where submitCredentialsToPin landed: at the 6-digit code entry, or signed
