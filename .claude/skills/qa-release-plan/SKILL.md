@@ -35,19 +35,22 @@ of 63 PRs. If `notesMissing` is not empty, the Technical appendix must list them
 
 ## Phase 2: one subagent per PR
 Dispatch subagents with the Agent tool, **6 at a time**, one per PR. Each one gets
-the PR number, the tag, and this task:
+the PR number, the tag, the repo (the `MANAGEMENT_APP_REPO` value in
+`config/settings.json`), and this task, with `<n>`, `<tag>` and `<repo>`
+substituted before dispatch:
 
 > Read `gh pr view <n> --repo <repo> --json title,body,files` and `gh pr diff <n>
 > --repo <repo>`. If the PR has a Jira key, read the card with the jira-atlassian
 > MCP (`jira_get_issue`) for its acceptance criteria. Write
 > `.tmp/release/<tag>/pr-<n>.json`:
-> `{ number, plainSummary, technicalSummary, testLines: [{ title, steps }],
+> `{ number, plainSummary, technicalSummary, testLines: [{ title, steps, stagingOnly }],
 >   securityNotes: [{ title, probe, stagingOnly }], jiraCriteria: [] }`.
 > - `plainSummary`: 1–3 sentences a PM understands. What changed for a user.
 > - `technicalSummary`: files, migrations, flags, routes, env vars, jobs.
 > - `testLines`: 1–4 concrete checks that the change IS in the build, each
 >   with the steps a tester follows and what they see. A dependency bump
->   gets one line: "app still loads".
+>   gets one line: "app still loads". `stagingOnly: true` when the steps
+>   create or change data or send bad input.
 > - `securityNotes`: anything in the diff touching auth, sessions, input
 >   parsing, redirects, file upload, SQL, secrets, logging, CORS, headers.
 >   `probe` says how to test it. `stagingOnly: true` when the probe writes
@@ -88,12 +91,14 @@ PRs reviewed with no finding: #a, #b, …
 
 Every test line is `- [ID] <title> — <steps>` with an em dash. IDs: `R-<pr>-<n>`
 under its own `### #<pr>` heading, `S-<n>` in Security. A line that writes data
-or sends bad input ends with **`(staging only)`**. Order Changes by PR number.
+or sends bad input ends with **`(staging only)`**. An `R-` line whose
+`stagingOnly` is true also ends with `(staging only)`. Write the Baseline line
+literally, with `--env <env>`; the run skill substitutes the env it runs against. Order Changes by PR number.
 
 Then `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>`. It must
-print `ok`. If it lists problems, fix the plan and run it again. Do not say
-"ready" before it passes. Then report: PRs, lines, security lines, staging-only
-lines, and the `notesMissing` count — and wait.
+print `"ok":true`. If it lists problems, fix the plan and run it again. Do not say
+"ready" before it passes. Then report: PRs, plus `lines`, `security` and `stagingOnly` from that JSON, and
+`notesMissing` from `release-prs` — and wait.
 
 ## Phase 4: edit together
 - The user may edit `plan.md` in the editor; **Read it again before any edit**.
@@ -103,8 +108,8 @@ lines, and the `notesMissing` count — and wait.
 
 ## Phase 5: save
 When the user says "save the plan" (the GUI's Save button sends exactly that):
-1. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must pass.
+1. `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>` — must print `"ok":true`.
 2. `qar release-upload --tag <tag> --file .tmp/release/<tag>/plan.md --as regression-plan.md`
-3. `qar release-saved --tag <tag> --asset regression-plan.md --url <url from step 2>`
+3. `qar release-saved --tag <tag> --asset regression-plan.md --url <url>` (the `url` key of the JSON step 2 printed)``
 4. Show the asset URL.
 If step 1 fails, show the problems and stop; nothing is uploaded.
