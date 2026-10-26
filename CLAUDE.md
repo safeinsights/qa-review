@@ -775,6 +775,53 @@ Where the numbers go:
 Adding a route means adding it to `ROUTES` in `src/suites/lighthouse.ts` and updating
 the pinned names in `tests/suites/step-names.test.ts`.
 
+## Release regression (the Release tab)
+
+Builds and runs a regression plan for one management-app release. Spec:
+`docs/superpowers/specs/2026-10-26-release-regression-design.md`.
+
+- **The PR set comes from the tag compare, never from the release body.** The
+  body is generated and has missed a third of a release (v1.6.9: 63 PRs in
+  `compare/v1.6.8...v1.6.9`, 43 in the body). `qar release-prs` reads commit
+  subjects (`Merge pull request #N`, squash `(#N)`) and reports `notesMissing`.
+- Everything for one release lives in `.tmp/release/<tag>/`: `prs.json`,
+  `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
+  `results-<env>.json`, `regression-results-<env>-<stamp>.md`.
+- `plan.md` has five fixed sections: Summary, Baseline, Changes, Security,
+  Technical appendix. Test lines are `- [R-<pr>-<n>] <title> — <steps>` and
+  `- [S-<n>] …`; `(staging only)` at the end marks an active probe.
+  `qar plan-lines` parses them into an inventory-shaped file so `results-check`
+  gates a run unchanged (its `--inventory` flag accepts a plan-lines file);
+  `--env production` rejects PASS/FAIL on a staging-only line. `plan-lines`
+  rejects a malformed bullet that holds a bracketed token in Baseline, Changes or
+  Security, instead of dropping it. It accepts CRLF.
+- Plan and results are release assets. `release-upload` replaces only
+  `regression-plan.md`; it never overwrites another asset. It accepts only files
+  under `.tmp/release/<tag>/` (symlinks resolved). `release-download` fetches them.
+- `results-render` writes `regression-results-<env>-<YYYYMMDD-HHMM>.md`. It
+  redacts every `*_PASSWORD` and `*_MFA_*` value (longest first). Unplanned results
+  and lines without a section get their own headings, so nothing is hidden.
+- The editor and the Claude session both write `plan.md`. `gui/release.go` polls
+  it every 500 ms and emits `plan-changed {tag, hash}`; `releaseSync.ts`
+  (`decideReload`) decides reload/ignore/ask. The editor's own autosave comes back
+  as an event and is ignored by hash. `PlanEditor.tsx` (CodeMirror 6) annotates an
+  external reload so it does not echo as an edit and keeps the caret.
+  `teardownSession` stops the watcher, so the UI calls `WatchPlan` again after
+  `session-ended`.
+- Go bindings in `gui/release.go`: `ListReleases`, `ReleaseStatus`, `ReadPlan`,
+  `WritePlan`, `DiscardLocalPlan`, `CheckPlanLines`, `WatchPlan`, `UnwatchPlan`,
+  `StartReleasePlanSession`, `StartReleaseRunSession`. After a save or upload the
+  skill writes `<repo>/results/release-saved.json` (`qar release-saved`); Go emits
+  `release-saved {tag, asset, url}`.
+- UI: `ReleaseTab.tsx` (phases Picker, Plan, Run), `useReleasePlan.ts`. Skills:
+  `.claude/skills/qa-release-plan` and `qa-release-run`; prompts
+  `gui/prompts/release-plan.md` and `release-run.md`.
+- `release-happy-path` is the baseline suite: three sign-ins then
+  `study-happy-path`'s own steps (34 steps). It runs the full lifecycle on
+  production too, so `RESEARCHER_RESULTS_PRIVATE_KEY_PRODUCTION` must be set.
+- `JIRA_BOARDS` and `MANAGEMENT_APP_REPO` are in `config/settings.json`; Go keeps
+  its constants and `gui/shared_config_test.go` pins them to the file.
+
 ## Posting Jira comments with inline screenshots
 
 A QA validation is worth much more with the evidence embedded in the comment. The
@@ -924,5 +971,15 @@ soft wrap had folded "Decisions needed" into one paragraph.
   timing for the report summary
 - `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
   files and link them from the comment
+- `pnpm qar release-list` — releases of management-app
+- `pnpm qar release-prs --tag v1.6.9` — the PR set of a release, from the tag compare
+- `pnpm qar release-status --tag v1.6.9` — assets, upload rights, local files
+- `pnpm qar release-download --tag v1.6.9 [--asset regression-plan.md]`
+- `pnpm qar release-upload --tag v1.6.9 --file .tmp/release/v1.6.9/plan.md --as regression-plan.md`
+- `pnpm qar plan-lines --input .tmp/release/v1.6.9/plan.md --tag v1.6.9`
+- `pnpm qar results-check --inventory .tmp/release/v1.6.9/plan-lines.json --results … [--env production]`
+- `pnpm qar results-render --tag v1.6.9 --env staging --plan … --results …`
+- `pnpm qar release-saved --tag v1.6.9 --asset regression-plan.md [--url …]`
+- `pnpm qar run --suite release-happy-path --role researcher --env staging`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)
