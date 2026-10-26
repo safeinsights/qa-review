@@ -313,6 +313,11 @@ export const COMMANDS = [
         details: 'Refuses any file outside the release dir. Prints {"tag","asset","url"}.',
     },
     {
+        name: 'release-saved',
+        usage: 'qar release-saved --tag <tag> --asset <name> [--url <url>]',
+        summary: 'Tell the GUI a release asset was uploaded (clears the unsaved badge).',
+    },
+    {
         name: 'clock',
         usage: 'qar clock --file <path.json> (--mark <phase> | --report)',
         summary: 'Record validation phase times and print the durations for the report.',

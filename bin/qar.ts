@@ -29,6 +29,7 @@ import {
     releaseStatusCommand,
     releaseUploadCommand,
 } from '@/cli/commands/release'
+import { releaseSavedCommand } from '@/cli/commands/release-saved'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { resultsCheckCommand } from '@/cli/commands/results-check'
 import { resultsRenderCommand } from '@/cli/commands/results-render'
@@ -147,6 +148,8 @@ async function main() {
             return releaseDownloadCommand(opts, await loadSettings())
         case 'release-upload':
             return releaseUploadCommand(opts, await loadSettings())
+        case 'release-saved':
+            return releaseSavedCommand(opts)
         case 'results-render':
             return resultsRenderCommand(opts, await loadSettings())
         case 'clock':
