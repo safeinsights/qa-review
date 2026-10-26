@@ -59,7 +59,13 @@ export function ReleasePlan({
                 onRun={onRun}
                 onStop={onStop}
             />
-            <StopOnlyRow isVisible={!plan.exists} disabled={!sessionLive} onStop={onStop} />
+            <NoPlanRow
+                isVisible={!plan.exists}
+                sessionLive={sessionLive}
+                canRetry={!sessionLive && !runLive && !starting}
+                onRetry={onStartSession}
+                onStop={onStop}
+            />
             <PlanError message={plan.error} />
             <section
                 style={{
@@ -146,6 +152,7 @@ function EditorPane({
                 <StartSessionButton
                     isVisible={!sessionLive && !runLive}
                     disabled={starting}
+                    label="Start session"
                     onStart={onStartSession}
                 />
                 <RegenerateButton
@@ -154,12 +161,13 @@ function EditorPane({
                     onRegenerate={onRegenerate}
                 />
                 <RunLiveNote isVisible={runLive} />
+                <RunBlockedNote isVisible={status.local.planDiffers} />
                 <Button
                     onClick={onRun}
                     variant="outline"
                     color="dark"
                     radius="md"
-                    disabled={sessionLive}
+                    disabled={sessionLive || status.local.planDiffers}
                 >
                     Run…
                 </Button>
@@ -195,20 +203,37 @@ function GeneratingNote({ isVisible }: { isVisible: boolean }) {
 }
 
 // The full status row is hidden while generating, but the user must still be
-// able to end the session.
-function StopOnlyRow({
+// able to end the session, and to retry one that ended before plan.md existed
+// (the retry reuses every pr-<n>.json already written).
+function NoPlanRow({
     isVisible,
-    disabled,
+    sessionLive,
+    canRetry,
+    onRetry,
     onStop,
 }: {
     isVisible: boolean
-    disabled: boolean
+    sessionLive: boolean
+    canRetry: boolean
+    onRetry: () => void
     onStop: () => void
 }) {
     if (!isVisible) return null
     return (
         <Group mt="sm">
-            <Button onClick={onStop} variant="outline" color="red" radius="md" disabled={disabled}>
+            <StartSessionButton
+                isVisible={!sessionLive}
+                disabled={!canRetry}
+                label="Retry"
+                onStart={onRetry}
+            />
+            <Button
+                onClick={onStop}
+                variant="outline"
+                color="red"
+                radius="md"
+                disabled={!sessionLive}
+            >
                 Stop session
             </Button>
         </Group>
@@ -286,16 +311,18 @@ function DiscardButton({ isVisible, onDiscard }: { isVisible: boolean; onDiscard
 function StartSessionButton({
     isVisible,
     disabled,
+    label,
     onStart,
 }: {
     isVisible: boolean
     disabled: boolean
+    label: string
     onStart: () => void
 }) {
     if (!isVisible) return null
     return (
         <Button onClick={onStart} disabled={disabled} color="teal" variant="outline" radius="md">
-            Start session
+            {label}
         </Button>
     )
 }
@@ -323,6 +350,16 @@ function RegenerateButton({
         <Button onClick={onRegenerate} variant="outline" radius="md" disabled={disabled}>
             Regenerate
         </Button>
+    )
+}
+
+// A run uses the saved asset, so local edits would go untested.
+function RunBlockedNote({ isVisible }: { isVisible: boolean }) {
+    if (!isVisible) return null
+    return (
+        <span className="st-dim" style={{ fontSize: 12 }}>
+            Save or discard the local edits before a run.
+        </span>
     )
 }
 

@@ -4,11 +4,13 @@ import {
     discardLocalPlan,
     onSessionEnded,
     onSessionReady,
+    PLAN_ASSET,
     type ReleaseStatus,
     releaseStatus,
     type SessionKind,
     startReleasePlanSession,
     startReleaseRunSession,
+    stopRun,
     stopSession,
     stopSessionIfOwner,
 } from '../lib/ipc'
@@ -87,6 +89,8 @@ export function ReleaseTab() {
     const [status, setStatus] = useState<ReleaseStatus | null>(null)
     const [error, setError] = useState('')
     const [confirmOpen, setConfirmOpen] = useState(false)
+    const [changeOpen, setChangeOpen] = useState(false)
+    const [baselineRunning, setBaselineRunning] = useState(false)
     const session = useReleaseSession()
 
     const refreshStatus = async (t: string) => {
@@ -102,7 +106,7 @@ export function ReleaseTab() {
             if (session.live && session.tag !== t) await session.stop()
             const s = await refreshStatus(t)
             if (!s.exists) throw new Error(`${t} is not a release of management-app`)
-            const hasPlan = s.assets.some(a => a.name === 'regression-plan.md')
+            const hasPlan = s.assets.some(a => a.name === PLAN_ASSET)
             if (hasPlan && !s.local.plan) {
                 // Pull the saved plan before the editor mounts, so it never opens
                 // on an empty buffer; no session yet.
@@ -167,6 +171,25 @@ export function ReleaseTab() {
         }
     }
 
+    // A run in progress is real work on the env, so leaving it asks first; a plan
+    // session holds nothing that is not already in plan.md, so it just stops.
+    const leaveRelease = async () => {
+        setChangeOpen(false)
+        setError('')
+        try {
+            if (baselineRunning) await stopRun()
+            if (session.live) await session.stop()
+            setPhase('pick')
+        } catch (e) {
+            setError(String(e))
+        }
+    }
+
+    const changeRelease = () => {
+        if (session.live === 'release-run' || baselineRunning) setChangeOpen(true)
+        else void leaveRelease()
+    }
+
     const refreshCurrent = () => {
         refreshStatus(tag).catch(e => setError(String(e)))
     }
@@ -177,7 +200,7 @@ export function ReleaseTab() {
 
     return (
         <div>
-            <Header tag={tag} phase={phase} onPick={() => setPhase('pick')} />
+            <Header tag={tag} phase={phase} onPick={changeRelease} />
             <PhaseView
                 phase={phase}
                 tag={tag}
@@ -191,12 +214,19 @@ export function ReleaseTab() {
                 onRun={() => setPhase('run')}
                 onStartRun={startRun}
                 onBack={back}
+                onBaselineRunning={setBaselineRunning}
             />
             <ErrorAlert message={error} />
             <RegenerateModal
                 opened={confirmOpen}
                 onClose={() => setConfirmOpen(false)}
                 onConfirm={regenerate}
+                tag={tag}
+            />
+            <ChangeReleaseModal
+                opened={changeOpen}
+                onClose={() => setChangeOpen(false)}
+                onConfirm={leaveRelease}
                 tag={tag}
             />
         </div>
@@ -230,6 +260,7 @@ function PhaseView({
     onRun,
     onStartRun,
     onBack,
+    onBaselineRunning,
 }: {
     phase: Phase
     tag: string
@@ -243,6 +274,7 @@ function PhaseView({
     onRun: () => void
     onStartRun: (env: string) => void
     onBack: () => void
+    onBaselineRunning: (running: boolean) => void
 }) {
     if (phase === 'pick' || !status) return <ReleasePicker onPick={onPick} />
     if (phase === 'plan') {
@@ -263,12 +295,14 @@ function PhaseView({
     }
     return (
         <ReleaseRun
+            tag={tag}
             status={status}
             sessionLive={session.live === 'release-run' && session.tag === tag}
             onStart={onStartRun}
             onStop={onStop}
             onStatusStale={onStatusStale}
             onBack={onBack}
+            onBaselineRunning={onBaselineRunning}
         />
     )
 }
@@ -302,6 +336,34 @@ function RegenerateModal({
                 </Button>
                 <Button color="red" onClick={onConfirm}>
                     Regenerate
+                </Button>
+            </Group>
+        </Modal>
+    )
+}
+
+function ChangeReleaseModal({
+    opened,
+    onClose,
+    onConfirm,
+    tag,
+}: {
+    opened: boolean
+    onClose: () => void
+    onConfirm: () => void
+    tag: string
+}) {
+    return (
+        <Modal opened={opened} onClose={onClose} title={`Stop the run for ${tag}?`}>
+            <p>
+                A run is in progress. Changing the release stops it; its results are not uploaded.
+            </p>
+            <Group justify="flex-end" gap="sm">
+                <Button variant="subtle" onClick={onClose}>
+                    Keep running
+                </Button>
+                <Button color="red" onClick={onConfirm}>
+                    Stop and change release
                 </Button>
             </Group>
         </Modal>

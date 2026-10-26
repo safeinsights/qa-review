@@ -133,6 +133,7 @@ interface WailsApp {
     UnwatchPlan(): Promise<void>
     StartReleasePlanSession(tag: string, regenerate: boolean): Promise<string>
     StartReleaseRunSession(tag: string, env: string): Promise<string>
+    RunBaseline(tag: string, env: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -415,6 +416,10 @@ export async function onVerdictPosted(cb: (v: VerdictPosted) => void): Promise<U
     })
 }
 
+// The plan's release asset. It is plan.md without its Security section, because
+// management-app (and so its releases) is public.
+export const PLAN_ASSET = 'testing-plan.md'
+
 // The envs a release plan can run against. qa and demo are not release targets.
 export const RELEASE_ENVS = ['staging', 'production'] as const
 
@@ -478,6 +483,56 @@ export async function startReleasePlanSession(tag: string, regenerate: boolean):
 
 export async function startReleaseRunSession(tag: string, env: string): Promise<string> {
     return app().StartReleaseRunSession(tag, env)
+}
+
+// Runs release-happy-path through Go (outside the Claude session); progress arrives
+// as baseline-step events and the outcome as baseline-done.
+export async function runBaseline(tag: string, env: string): Promise<void> {
+    await app().RunBaseline(tag, env)
+}
+
+export interface BaselineStep {
+    tag: string
+    env: string
+    index: number
+    total: number
+    name: string
+    status: string
+}
+
+export async function onBaselineStep(cb: (s: BaselineStep) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('baseline-step', (...data) => {
+        const p = (data[0] ?? {}) as Partial<BaselineStep>
+        cb({
+            tag: String(p.tag ?? ''),
+            env: String(p.env ?? ''),
+            index: Number(p.index ?? 0),
+            total: Number(p.total ?? 0),
+            name: String(p.name ?? ''),
+            status: String(p.status ?? ''),
+        })
+    })
+}
+
+export interface BaselineDone {
+    tag: string
+    env: string
+    passed: boolean
+    failedStep: string
+    error: string
+}
+
+export async function onBaselineDone(cb: (d: BaselineDone) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('baseline-done', (...data) => {
+        const p = (data[0] ?? {}) as Partial<BaselineDone>
+        cb({
+            tag: String(p.tag ?? ''),
+            env: String(p.env ?? ''),
+            passed: p.passed === true,
+            failedStep: String(p.failedStep ?? ''),
+            error: String(p.error ?? ''),
+        })
+    })
 }
 
 export interface PlanChanged {
