@@ -786,7 +786,10 @@ Builds and runs a regression plan for one management-app release. Spec:
   subjects (`Merge pull request #N`, squash `(#N)`) and reports `notesMissing`.
 - Everything for one release lives in `.tmp/release/<tag>/`: `prs.json`,
   `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
-  `results-<env>.json`, `regression-results-<env>-<stamp>.md`.
+  `remote/testing-plan.md` (the downloaded asset), `public/testing-plan.md` (what
+  was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
+  `results-<env>.json`, `regression-results-<env>-<stamp>.md` and
+  `security-results-<env>.md`.
 - `plan.md` has five fixed sections: Summary, Baseline, Changes, Security,
   Technical appendix. Test lines are `- [R-<pr>-<n>] <title> — <steps>` and
   `- [S-<n>] …`; `(staging only)` at the end marks an active probe.
@@ -794,13 +797,41 @@ Builds and runs a regression plan for one management-app release. Spec:
   gates a run unchanged (its `--inventory` flag accepts a plan-lines file);
   `--env production` rejects PASS/FAIL on a staging-only line. `plan-lines`
   rejects a malformed bullet that holds a bracketed token in Baseline, Changes or
-  Security, instead of dropping it. It accepts CRLF.
-- Plan and results are release assets. `release-upload` replaces only
-  `regression-plan.md`; it never overwrites another asset. It accepts only files
-  under `.tmp/release/<tag>/` (symlinks resolved). `release-download` fetches them.
-- `results-render` writes `regression-results-<env>-<YYYYMMDD-HHMM>.md`. It
-  redacts every `*_PASSWORD` and `*_MFA_*` value (longest first). Unplanned results
-  and lines without a section get their own headings, so nothing is hidden.
+  Security, instead of dropping it. It accepts CRLF. Security is the one optional
+  section, because the public asset has none.
+- **Completeness is gated.** With `prs.json` beside the plan (or `--prs`),
+  `plan-lines` reports `PR #n has no test line` and `R-<n>-k: PR #n is not in the
+  release`. A downloaded asset in `remote/` has no `prs.json` beside it, so a run
+  is not gated on it.
+- **management-app is public, so its release assets are too. The Security section
+  never leaves the machine.** The plan asset is `testing-plan.md`: `release-upload`
+  writes `stripSecurity(plan.md)` (`src/engine/public-plan.ts`) to
+  `public/testing-plan.md` and uploads that, and `uploadAsset` refuses any file in
+  which `hasSecurityContent` finds an `- [S-n]` bullet, a `## Security` heading or a
+  `| S-n |` row. `--as` must be `testing-plan.md` or
+  `regression-results-<env>-<stamp>.md`, so no other file in the release dir
+  (`security-results-*.md` included) can be published under any name. Only
+  `testing-plan.md` is replaced (`--clobber`); results are never overwritten. Only
+  files under `.tmp/release/<tag>/` are accepted (symlinks resolved).
+  `release-status`'s `planDiffers` compares the local plan WITHOUT its Security
+  section, or every local plan would read as unsaved.
+- `release-download` lands the asset in `remote/`, then places the plan as
+  `plan.md` only when there is none, it equals the asset, or `--force`. A local plan
+  that differs from the asset only by its Security section is kept as is.
+  `--remote-only` never touches `plan.md`: a run uses it, so it neither replaces nor
+  reads a plan someone is editing. `DiscardLocalPlan` passes `--force`, which also
+  drops the local Security lines.
+- Security lines run **on staging only, from the machine that holds the local
+  plan**. The run skill builds `run-plan-lines-<env>.json` from the downloaded asset
+  and, on staging, merges the local S- lines with `plan-lines --security-from`.
+- `results-render` writes `regression-results-<env>-<YYYYMMDD-HHMM>.md` with no S-
+  line (rows, counts and section all left out), plus `security-results-<env>.md`
+  (the S- rows alone) when the run has S- results. The second file is shown to the
+  runner in the terminal and never uploaded; on request only, the run session files
+  one Jira card with it (`qar jira-create-issue`, its only Jira write). Both files
+  redact every `*_PASSWORD`, `*_MFA_*`, `*_PRIVATE_KEY`, `*_TOKEN` and `*_SECRET`
+  value (longest first). Unplanned results and lines without a section get their
+  own headings, so nothing is hidden.
 - The editor and the Claude session both write `plan.md`. `gui/release.go` polls
   it every 500 ms and emits `plan-changed {tag, hash}`; `releaseSync.ts`
   (`decideReload`) decides reload/ignore/ask. The editor's own autosave comes back
@@ -812,7 +843,33 @@ Builds and runs a regression plan for one management-app release. Spec:
   `WritePlan`, `DiscardLocalPlan`, `CheckPlanLines`, `WatchPlan`, `UnwatchPlan`,
   `StartReleasePlanSession`, `StartReleaseRunSession`. After a save or upload the
   skill writes `<repo>/results/release-saved.json` (`qar release-saved`); Go emits
-  `release-saved {tag, asset, url}`.
+  `release-saved {tag, asset, url}`. `StartReleasePlanSession(tag, false)` with no
+  `plan.md` uses the GENERATION prompt (`releasePlanOpening`): that is the Retry
+  after a session died mid-generation, and it reuses the `pr-<n>.json` files.
+- **The baseline runs from the GUI, not the session.** `RunBaseline(tag, env)`
+  (`gui/baseline.go`) spawns `run --suite release-happy-path --json` through
+  `engineCmd` in its own process group, outside the Claude sandbox, and takes the
+  ONE tracked-run slot (`ErrRunInProgress` both ways with the Testing tab; `StopRun`
+  stops it). Nobody is at a Retry button, so it answers `step-failed` with
+  `give-up` and `error-hold` with `resume`; without that the held browser waits
+  forever. It emits `baseline-step {tag, env, index, total, name, status}` (index is
+  positional: study-happy-path repeats step names) and `baseline-done`, and writes
+  `baseline-<env>.json` `{passed, steps, failedStep, error, reportPath,
+  finishedAt}`. Passing needs a zero exit AND an ok result line: a stopped engine
+  exits 0 with none. The UI then starts the run session, which reads that file for
+  its `BASELINE` line and never runs `qar run`.
+- **Each release session has its own allowlist** (`releasePlanAllowedTools`,
+  `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
+  pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
+  (per `knownJiraServers`), `gh pr view/diff`, `qar release-*`/`plan-lines`/
+  `results-*`, read-only shell and file edits; the plan adds `Agent`; the run adds
+  chrome-devtools, `session-login` and `jira-create-issue`.
+- **Why Save can be disabled with no session live:** Save is an instruction to the
+  plan session ("save the plan" sent to the PTY), not an upload the GUI makes. With
+  no live session nothing would receive it, so Save needs a session, the push right,
+  a written buffer and a green plan-lines. Start session (or Retry) gives it one.
+  Run… and Start run are disabled while the local plan differs from the asset: a run
+  tests the asset, so local edits would go untested.
 - UI: `ReleaseTab.tsx` (phases Picker, Plan, Run), `useReleasePlan.ts`. Skills:
   `.claude/skills/qa-release-plan` and `qa-release-run`; prompts
   `gui/prompts/release-plan.md` and `release-run.md`.
@@ -974,12 +1031,12 @@ soft wrap had folded "Decisions needed" into one paragraph.
 - `pnpm qar release-list` — releases of management-app
 - `pnpm qar release-prs --tag v1.6.9` — the PR set of a release, from the tag compare
 - `pnpm qar release-status --tag v1.6.9` — assets, upload rights, local files
-- `pnpm qar release-download --tag v1.6.9 [--asset regression-plan.md]`
-- `pnpm qar release-upload --tag v1.6.9 --file .tmp/release/v1.6.9/plan.md --as regression-plan.md`
-- `pnpm qar plan-lines --input .tmp/release/v1.6.9/plan.md --tag v1.6.9`
+- `pnpm qar release-download --tag v1.6.9 [--asset testing-plan.md] [--remote-only] [--force]`
+- `pnpm qar release-upload --tag v1.6.9 --file .tmp/release/v1.6.9/plan.md --as testing-plan.md`
+- `pnpm qar plan-lines --input .tmp/release/v1.6.9/plan.md --tag v1.6.9 [--prs …] [--security-from …]`
 - `pnpm qar results-check --inventory .tmp/release/v1.6.9/plan-lines.json --results … [--env production]`
 - `pnpm qar results-render --tag v1.6.9 --env staging --plan … --results …`
-- `pnpm qar release-saved --tag v1.6.9 --asset regression-plan.md [--url …]`
+- `pnpm qar release-saved --tag v1.6.9 --asset testing-plan.md [--url …]`
 - `pnpm qar run --suite release-happy-path --role researcher --env staging`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

@@ -14,16 +14,32 @@ staging or production and saves the results.
    both change the plan. When the session changes it, the editor reloads. Your
    cursor stays in place. If you have unsaved edits, the app asks you what to do.
 3. **Run.** Choose **staging** or **production** and press **Start run**. The
-   runner does the baseline suite first. Then a session goes through each line
-   of the plan in the browser. At the end, the results are checked and
-   uploaded.
+   app runs the baseline suite first and shows each step, for example
+   "Baseline: step 5/34". Then a session goes through each line of the plan in
+   the browser. A failed baseline does not stop the run. At the end, the
+   results are checked and uploaded.
 
 ## Where the files go
 
 The plan and the results are assets on the GitHub release of the management
-app. The plan is `regression-plan.md`. A result file is named
-`regression-results-<env>-<date>-<time>.md`. Passwords and login codes are
-removed from the result file before it is saved.
+app. The plan is `testing-plan.md`. A result file is named
+`regression-results-<env>-<date>-<time>.md`. Passwords, login codes, private
+keys, tokens and other secrets are removed from the result file before it is
+saved.
+
+## Security lines stay on your computer
+
+The management-app repository is public. Anyone can read its release assets.
+For this reason, the Security section of the plan is never uploaded:
+
+- When you save the plan, the app removes the Security section from the
+  uploaded copy. Your local plan keeps it. The app does not upload a file that
+  contains security lines.
+- The security lines run on staging only, and only on the computer that has
+  the local plan.
+- Their results go to a local file, `security-results-<env>.md`. The session
+  shows them to you in the terminal. They are not uploaded. If you ask, the
+  session can put them on one Jira card.
 
 ## Test lines and "(staging only)"
 
@@ -34,6 +50,9 @@ that line.
 
 ## Why Save is disabled
 
+- **No session is live.** Save tells the plan session to upload the plan. If no
+  session is live, nothing can do the upload. Press **Start session** (or
+  **Retry**) first.
 - **You cannot push to the management-app repository.** Saving adds a file to
   the release. You need the push right. Ask a teammate who has it to save the
   plan.
@@ -41,6 +60,18 @@ that line.
   bracket token in a section. The editor shows the problem. Fix the line.
 - **The editor has unsaved keystrokes.** Wait one moment. The app saves your
   typing to the local file first.
+
+## Why Run is disabled
+
+- **The local plan has unsaved edits.** A run uses the plan on the release.
+  Save or discard your edits first, or the run does not test them.
+- **You cannot push to the management-app repository.** A run uploads its
+  results. You need the push right.
+
+## If the session stops before the plan exists
+
+Press **Retry**. The new session continues the work. It uses the pull request
+notes that the first session already wrote.
 
 ## Regenerate overwrites your local plan
 
