@@ -99,3 +99,16 @@ func promptTarget(env, pr string) string {
 	}
 	return "--env " + env
 }
+
+// composeReleasePlanPrompt opens a release-plan session: build the plan for `tag`.
+func composeReleasePlanPrompt(tag string) string {
+	return prompt("release-plan", map[string]string{"tag": strings.TrimSpace(tag)})
+}
+
+// composeReleaseRunPrompt opens a release-run session against one env.
+func composeReleaseRunPrompt(tag, env string) string {
+	return prompt("release-run", map[string]string{
+		"tag": strings.TrimSpace(tag),
+		"env": strings.TrimSpace(env),
+	})
+}

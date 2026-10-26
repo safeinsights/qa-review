@@ -208,6 +208,10 @@ type App struct {
 	// stopVerdictWatch stops the validation session's verdict-file poller (which
 	// emits "verdict-posted" when Claude records a verdict). Closed on teardown.
 	stopVerdictWatch chan struct{}
+	// stopPlanWatch / stopReleaseSavedWatch stop the Release tab's pollers (plan.md
+	// changes, and the release-saved rendezvous file). Closed on teardown.
+	stopPlanWatch         chan struct{}
+	stopReleaseSavedWatch chan struct{}
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -462,6 +466,11 @@ var validationAllowedTools = append([]string{
 	"Write",
 	"Edit",
 }, figmaReadTools()...)
+
+// releaseAllowedTools is the Release tab's pre-approval set: the Validation set
+// (browser MCP, gh, qar, file edits, Jira READS for acceptance criteria) plus the
+// Agent tool, which the plan skill uses for one subagent per PR.
+var releaseAllowedTools = append(append([]string{}, validationAllowedTools...), "Agent")
 
 // knownFigmaServers are the names a Figma MCP server is registered under: the
 // Claude Code plugin, the `claude mcp add … figma` the Doctor hint recommends, and
@@ -896,6 +905,8 @@ func (a *App) SendToPty(text string) error {
 // actually running (so callers can decide whether to emit "session-ended").
 func (a *App) teardownSession() bool {
 	a.stopVerdictWatcher()
+	a.stopReleaseSavedWatcher()
+	a.stopPlanWatcher()
 	running := a.pty.running()
 	a.pty.stop()
 

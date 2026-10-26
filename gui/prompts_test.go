@@ -29,6 +29,8 @@ func TestPromptTemplate(t *testing.T) {
 			composeAuthoringPrompt("qa", "42", "researcher", "i"),
 			composeValidationPrompt("qa", "42", "OTTER-1", "i"),
 			composeCompanionPrompt("create-study"),
+			composeReleasePlanPrompt("v1"),
+			composeReleaseRunPrompt("v1", "staging"),
 		} {
 			if strings.Contains(p, "{{") {
 				t.Fatalf("unsubstituted placeholder:\n%s", p)

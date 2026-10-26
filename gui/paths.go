@@ -102,6 +102,12 @@ func verdictPostedPath() string {
 	return filepath.Join(repoDir(), "results", "verdict-posted.json")
 }
 
+// Written by `qar release-saved` (src/engine/paths.ts releaseSavedPath). Keep in
+// sync with the TS path, as verdictPostedPath is.
+func releaseSavedPath() string {
+	return filepath.Join(repoDir(), "results", "release-saved.json")
+}
+
 // resourcesDir returns the .app's Contents/Resources dir (where the engine bundle
 // + shipped node + Playwright node_modules live), or "" when not running from an
 // .app bundle (e.g. `wails dev`), in which case callers fall back to `pnpm qar`.
