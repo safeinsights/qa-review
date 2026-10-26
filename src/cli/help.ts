@@ -255,13 +255,23 @@ export const COMMANDS = [
     },
     {
         name: 'results-check',
-        usage: 'qar results-check --inventory <path.json> --results <path.json>',
+        usage: 'qar results-check --inventory <path.json> --results <path.json> [--env <env>]',
         summary: 'Gate a validation report: every inventory line has one evidenced result.',
         details:
             'Results are {"results":[{"id","result":"PASS|FAIL|CONFLICT|UNCLEAR|NOT TESTED",' +
             '"evidence","severity?","area?","approvedBy?","decision?"}]}. FAIL needs severity and area; ' +
             'NOT TESTED needs approvedBy; a line with source type "observed" can only be a FAIL. ' +
-            'Fails listing every gap; prints {"ok","counts"} when clean.',
+            'Fails listing every gap; prints {"ok","counts"} when clean.' +
+            ' With --env production, a line flagged stagingOnly cannot be PASS or FAIL.',
+    },
+    {
+        name: 'plan-lines',
+        usage: 'qar plan-lines --input <plan.md> --tag <tag> [--output <path.json>]',
+        summary: 'Parse the [R-…]/[S-…] test lines out of a regression plan for results-check.',
+        details:
+            'Sections must be Summary, Baseline, Changes, Security, Technical appendix in that ' +
+            'order. A line is "- [ID] <title> — <steps>", with "(staging only)" at the end for ' +
+            'an active probe. Default output is plan-lines.json beside the input.',
     },
     {
         name: 'release-list',

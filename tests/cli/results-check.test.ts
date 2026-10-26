@@ -69,3 +69,36 @@ describe('results-check', () => {
         await expect(resultsCheckCommand(opts)).rejects.toThrow('"results" array')
     })
 })
+
+describe('results-check --env', () => {
+    it('passes --env through to the production rule', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-results-env-'))
+        const inv = path.join(dir, 'inv.json')
+        const res = path.join(dir, 'res.json')
+        fs.writeFileSync(
+            inv,
+            JSON.stringify({
+                card: 'v1',
+                target: 'release',
+                lines: [
+                    {
+                        id: 'S-1',
+                        title: 'p',
+                        kind: 'check',
+                        text: 'x',
+                        source: { type: 'card', ref: 'plan' },
+                        stagingOnly: true,
+                    },
+                ],
+            })
+        )
+        fs.writeFileSync(
+            res,
+            JSON.stringify({ results: [{ id: 'S-1', result: 'PASS', evidence: 'e' }] })
+        )
+        await expect(
+            resultsCheckCommand({ inventory: inv, results: res, env: 'production' })
+        ).rejects.toThrow(/staging only/)
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+})

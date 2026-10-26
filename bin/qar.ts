@@ -20,6 +20,7 @@ import { loginCommand } from '@/cli/commands/login'
 import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
+import { planLinesCommand } from '@/cli/commands/plan-lines'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import {
     releaseDownloadCommand,
@@ -133,6 +134,8 @@ async function main() {
             return inventoryRenderCommand(opts)
         case 'results-check':
             return resultsCheckCommand(opts)
+        case 'plan-lines':
+            return planLinesCommand(opts)
         case 'release-list':
             return releaseListCommand(opts, await loadSettings())
         case 'release-prs':
