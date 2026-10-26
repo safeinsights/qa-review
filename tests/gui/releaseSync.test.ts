@@ -42,4 +42,14 @@ describe('decideReload', () => {
             })
         ).toBe('ask')
     })
+    it('ignores a hash the editor holds even when the buffer is dirty', () => {
+        expect(
+            decideReload({
+                incomingHash: 'h1',
+                lastWrittenHash: null,
+                loadedHash: 'h1',
+                dirty: true,
+            })
+        ).toBe('ignore')
+    })
 })

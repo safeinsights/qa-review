@@ -1,11 +1,14 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Annotation, Compartment, EditorState } from '@codemirror/state'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// Marks the programmatic replace so it is not reported to the parent as typing.
+const external = Annotation.define<boolean>()
 
 // Raw markdown with a Preview toggle. Raw on purpose: a WYSIWYG editor rewrites
 // tables, ids and spacing even when nobody edits, which breaks the [ID] lines and
@@ -31,7 +34,8 @@ function useCodeMirror(value: string, onChange: (text: string) => void) {
                 EditorView.lineWrapping,
                 theme.current.of(dark.matches ? oneDark : []),
                 EditorView.updateListener.of(u => {
-                    if (u.docChanged) latestOnChange.current(u.state.doc.toString())
+                    if (u.docChanged && !u.transactions.some(t => t.annotation(external)))
+                        latestOnChange.current(u.state.doc.toString())
                 }),
             ],
         })
@@ -54,7 +58,11 @@ function useCodeMirror(value: string, onChange: (text: string) => void) {
         if (!v) return
         const current = v.state.doc.toString()
         if (current === value) return
-        v.dispatch({ changes: { from: 0, to: current.length, insert: value } })
+        v.dispatch({
+            changes: { from: 0, to: current.length, insert: value },
+            selection: { anchor: Math.min(v.state.selection.main.head, value.length) },
+            annotations: external.of(true),
+        })
     }, [value])
 
     return host
