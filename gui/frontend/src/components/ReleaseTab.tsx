@@ -10,7 +10,6 @@ import {
     type SessionKind,
     startReleasePlanSession,
     startReleaseRunSession,
-    stopRun,
     stopSession,
     stopSessionIfOwner,
 } from '../lib/ipc'
@@ -177,9 +176,10 @@ export function ReleaseTab() {
         setChangeOpen(false)
         setError('')
         try {
-            if (baselineRunning) await stopRun()
-            if (session.live) await session.stop()
+            // Leaving the Run phase first unmounts it, which stops a running baseline
+            // and drops its listeners, so its end cannot start a run session.
             setPhase('pick')
+            if (session.live) await session.stop()
         } catch (e) {
             setError(String(e))
         }

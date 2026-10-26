@@ -52,6 +52,8 @@ function useReleaseRun(
     const runningCb = useRef(onBaselineRunning)
     runningCb.current = onBaselineRunning
     useEffect(() => runningCb.current(baseline.isRunning), [baseline.isRunning])
+    // Unmounting stops the baseline (useBaseline), so it is no longer running.
+    useEffect(() => () => runningCb.current(false), [])
     const blocked = startBlockedReason(status)
     const busy = sessionLive || baseline.isRunning
     const start = async () => {

@@ -42,10 +42,11 @@ export function useBaseline(tag: string, onFinished: (env: string) => void) {
     const start = async (env: string) => {
         stopped.current = false
         setState({ phase: 'running', index: 0, total: 0, name: '' })
+        running.current = true
         try {
             await runBaseline(tag, env)
-            running.current = true
         } catch (e) {
+            running.current = false
             setState({ phase: 'idle' })
             throw e
         }
