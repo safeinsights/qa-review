@@ -1,0 +1,42 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import type { Inventory } from '@/engine/inventory'
+import { releaseDir, resultsAssetName } from '@/engine/release-paths'
+import { renderResults, secretValues } from '@/engine/release-results'
+import type { ResultEntry } from '@/engine/results'
+import type { Vars } from '@/engine/settings'
+
+// `qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>`
+// Writes .tmp/release/<tag>/<regression-results-<env>-<stamp>.md> and prints its path,
+// which is what release-upload then takes.
+export async function resultsRenderCommand(
+    opts: Record<string, string>,
+    vars: Vars
+): Promise<void> {
+    const need = (k: string) => {
+        const v = (opts[k] ?? '').trim()
+        if (!v || v === 'true') throw new Error(`results-render requires --${k}`)
+        return v
+    }
+    const tag = need('tag')
+    const env = need('env')
+    const plan = JSON.parse(fs.readFileSync(need('plan'), 'utf8')) as Inventory
+    const parsed = JSON.parse(fs.readFileSync(need('results'), 'utf8')) as {
+        results?: ResultEntry[]
+    }
+    if (!Array.isArray(parsed.results))
+        throw new Error('--results JSON must have a "results" array')
+    const now = new Date()
+    const md = renderResults({
+        tag,
+        env,
+        plan,
+        results: parsed.results,
+        secrets: secretValues(vars),
+        now,
+    })
+    const output = path.join(releaseDir(tag), resultsAssetName(env, now))
+    fs.mkdirSync(path.dirname(output), { recursive: true })
+    fs.writeFileSync(output, md)
+    process.stdout.write(`${JSON.stringify({ output, asset: path.basename(output) })}\n`)
+}

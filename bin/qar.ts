@@ -31,6 +31,7 @@ import {
 } from '@/cli/commands/release'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { resultsCheckCommand } from '@/cli/commands/results-check'
+import { resultsRenderCommand } from '@/cli/commands/results-render'
 import { runCommand } from '@/cli/commands/run'
 import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
@@ -146,6 +147,8 @@ async function main() {
             return releaseDownloadCommand(opts, await loadSettings())
         case 'release-upload':
             return releaseUploadCommand(opts, await loadSettings())
+        case 'results-render':
+            return resultsRenderCommand(opts, await loadSettings())
         case 'clock':
             return clockCommand(opts)
         default:

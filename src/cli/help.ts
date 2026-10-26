@@ -289,6 +289,13 @@ export const COMMANDS = [
             'PRs the body omits. Each PR carries its Jira keys, files, and body.',
     },
     {
+        name: 'results-render',
+        usage: 'qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>',
+        summary: "Render a release run's results as the markdown asset, with secrets redacted.",
+        details:
+            'Writes regression-results-<env>-<stamp>.md under .tmp/release/<tag>/ and prints {"output","asset"}.',
+    },
+    {
         name: 'release-status',
         usage: 'qar release-status --tag <tag>',
         summary: 'Report the assets on a release, upload rights, and the local plan/results files.',
