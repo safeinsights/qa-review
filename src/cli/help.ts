@@ -320,9 +320,11 @@ export const COMMANDS = [
         summary:
             'Upload a file under .tmp/release/<tag>/ as a release asset (only testing-plan.md is replaced; other assets are never overwritten).',
         details:
-            '--as is testing-plan.md or regression-results-<env>-<YYYYMMDD-HHMM>.md. The plan is ' +
-            'uploaded without its Security section; any file that still holds security lines is ' +
-            'refused, because management-app is public. Refuses any file outside the release dir. ' +
+            '--as is testing-plan.md or regression-results-<env>-<YYYYMMDD-HHMM>.md. testing-plan.md ' +
+            'is made only from .tmp/release/<tag>/plan.md, uploaded without its Security section; a ' +
+            'results asset is only the file of the same name in .tmp/release/<tag>/. Any file that ' +
+            'still holds security content (an S-<n> id, a Security heading) is refused, because ' +
+            'management-app is public. ' +
             'Prints {"tag","asset","url","stripped"}.',
     },
     {
@@ -336,7 +338,7 @@ export const COMMANDS = [
         summary:
             "Write the plan's Summary section into the release description, above the PR table.",
         details:
-            'Inserts a <!-- regression-summary --> block before the "------" separator (or replaces the existing block). Nothing else in the description changes.',
+            'Inserts a <!-- regression-summary --> block before the "------" separator (or replaces the existing block). Nothing else in the description changes. --input must be under .tmp/release/<tag>/, and a Summary with security content is refused.',
     },
     {
         name: 'clock',

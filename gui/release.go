@@ -177,7 +177,8 @@ func planLinesProblems(out string) string {
 }
 
 // DiscardLocalPlan replaces the local plan with the release asset. The asset has no
-// Security section, so a discard also drops the local security lines.
+// Security section, so release-download --force splices the local one back in: the
+// local plan is the only copy of it.
 func (a *App) DiscardLocalPlan(tag string) error {
 	if _, err := releaseDir(tag); err != nil {
 		return err
@@ -309,6 +310,38 @@ func (a *App) stopReleaseSavedWatcher() {
 	}
 }
 
+// releaseDisallowedTools are denied outright in both release sessions. Under
+// --permission-mode auto, a tool off the allowlist does not prompt the user: the
+// auto-mode classifier decides, and it could approve a direct `gh release upload`
+// of plan.md (Security section and all) or a Jira comment. A deny rule outranks
+// both. The qar release-* and jira-create-issue commands still work: qar's own gh
+// and Jira calls are child processes, not Bash tool calls.
+func releaseDisallowedTools() []string {
+	tools := []string{
+		"Bash(gh release:*)",
+		"Bash(gh api:*)",
+		"Bash(gh pr merge:*)",
+		"Bash(gh pr close:*)",
+		"Bash(gh issue:*)",
+	}
+	for _, server := range knownJiraServers {
+		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
+			tools = append(tools, mcpToolName(server, tool))
+		}
+	}
+	return tools
+}
+
+func releaseClaudeArgs(allowed []string, mcpPath string) []string {
+	return []string{
+		"--permission-mode", "auto",
+		"--allowedTools", strings.Join(allowed, ","),
+		"--disallowedTools", strings.Join(releaseDisallowedTools(), ","),
+		"--add-dir", repoDir(),
+		"--mcp-config", mcpPath,
+	}
+}
+
 // startReleaseSession is the shared body of the two starters: browser, MCP config,
 // claude with the session's own allowlist, watchers, opening prompt.
 func (a *App) startReleaseSession(kind, env, openingPrompt string, allowed []string) (string, error) {
@@ -326,13 +359,7 @@ func (a *App) startReleaseSession(kind, env, openingPrompt string, allowed []str
 	a.sessionMcpPath = mcpPath
 	a.sessionMu.Unlock()
 	go probeMcpServers(cdpPort, jiraCfg)
-	claudeArgs := []string{
-		"--permission-mode", "auto",
-		"--allowedTools", strings.Join(allowed, ","),
-		"--add-dir", repoDir(),
-		"--mcp-config", mcpPath,
-	}
-	if err := a.pty.start(a, repoDir(), withGuiPath(), claudeArgs); err != nil {
+	if err := a.pty.start(a, repoDir(), withGuiPath(), releaseClaudeArgs(allowed, mcpPath)); err != nil {
 		a.StopSession()
 		return "", err
 	}

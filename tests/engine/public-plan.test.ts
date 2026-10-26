@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { hasSecurityContent, stripSecurity } from '@/engine/public-plan'
+import {
+    extractSecurity,
+    hasSecurityContent,
+    spliceSecurity,
+    stripSecurity,
+} from '@/engine/public-plan'
 
 const PLAN = `# Regression plan v1
 
@@ -69,8 +74,47 @@ describe('hasSecurityContent', () => {
         expect(hasSecurityContent('| S-1 | Redirect | PASS | ok |')).toBe(true)
     })
 
-    it('is false for the stripped plan and for a mention in prose', () => {
+    it('sees an S- id anywhere, any bullet marker, and a Security heading at any depth', () => {
+        expect(hasSecurityContent('See S-1 in the notes')).toBe(true)
+        expect(hasSecurityContent('{"id":"S-3","title":"t"}')).toBe(true)
+        expect(hasSecurityContent('* [S-2] t — p')).toBe(true)
+        expect(hasSecurityContent('+ [S-2] t — p')).toBe(true)
+        expect(hasSecurityContent('    - [S-2] t — p')).toBe(true)
+        expect(hasSecurityContent('### Security\nx')).toBe(true)
+        expect(hasSecurityContent('## security\nx')).toBe(true)
+        expect(hasSecurityContent('#### SECURITY notes\nx')).toBe(true)
+    })
+
+    it('is false for the stripped plan and for ids that only contain S-', () => {
         expect(hasSecurityContent(WITHOUT)).toBe(false)
-        expect(hasSecurityContent('See [S-1] in the notes\n### Security notes')).toBe(false)
+        expect(hasSecurityContent('OTTERS-12 and HTTPS-2 and R-1-1\nsecurity in prose')).toBe(false)
+    })
+})
+
+const SECTION = `## Security
+- [S-1] Redirect — probe /signin (staging only)
+PRs reviewed with no finding: #2
+
+`
+
+describe('extractSecurity / spliceSecurity', () => {
+    it('extracts exactly the bytes stripSecurity removes', () => {
+        expect(extractSecurity(PLAN)).toBe(SECTION)
+        expect(extractSecurity(WITHOUT)).toBe('')
+    })
+
+    it('puts the section back after Changes, before the Technical appendix', () => {
+        expect(spliceSecurity(WITHOUT, SECTION)).toBe(PLAN)
+        expect(stripSecurity(spliceSecurity(WITHOUT, SECTION))).toBe(WITHOUT)
+    })
+
+    it('keeps CRLF and appends when the plan has no later section', () => {
+        const crlf = PLAN.replace(/\n/g, '\r\n')
+        const crlfWithout = WITHOUT.replace(/\n/g, '\r\n')
+        expect(spliceSecurity(crlfWithout, extractSecurity(crlf))).toBe(crlf)
+        expect(spliceSecurity('## Changes\nA\n', '## Security\n- [S-1] t')).toBe(
+            '## Changes\nA\n## Security\n- [S-1] t'
+        )
+        expect(spliceSecurity(WITHOUT, '')).toBe(WITHOUT)
     })
 })

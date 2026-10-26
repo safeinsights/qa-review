@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Group, Switch } from '@mantine/core'
+import { Alert, Badge, Button, Group, Modal, Switch } from '@mantine/core'
 import { useState } from 'react'
 import type { PlanLinesCheck, ReleaseStatus } from '../lib/ipc'
 import { PlanEditor } from './PlanEditor'
@@ -298,13 +298,41 @@ function LineCheck({ check }: { check: PlanLinesCheck | null }) {
     )
 }
 
-// Shown only when the local file differs from the release asset.
+// Shown only when the local file differs from the release asset. A discard cannot be
+// undone, so it asks first.
 function DiscardButton({ isVisible, onDiscard }: { isVisible: boolean; onDiscard: () => void }) {
+    const [confirmOpen, setConfirmOpen] = useState(false)
     if (!isVisible) return null
+    const confirm = () => {
+        setConfirmOpen(false)
+        onDiscard()
+    }
     return (
-        <Button onClick={onDiscard} variant="subtle" color="red" size="compact-sm">
-            Discard local edits
-        </Button>
+        <>
+            <Button
+                onClick={() => setConfirmOpen(true)}
+                variant="subtle"
+                color="red"
+                size="compact-sm"
+            >
+                Discard local edits
+            </Button>
+            <Modal
+                opened={confirmOpen}
+                onClose={() => setConfirmOpen(false)}
+                title="Discard local edits?"
+            >
+                <p>Your Security section is kept.</p>
+                <Group justify="flex-end" gap="sm">
+                    <Button variant="subtle" onClick={() => setConfirmOpen(false)}>
+                        Cancel
+                    </Button>
+                    <Button color="red" onClick={confirm}>
+                        Discard
+                    </Button>
+                </Group>
+            </Modal>
+        </>
     )
 }
 

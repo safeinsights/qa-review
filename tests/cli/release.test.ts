@@ -126,6 +126,85 @@ describe('release commands', () => {
         ).rejects.toThrow(/not a release asset name/)
     })
 
+    describe('release-upload sources', () => {
+        const results = 'regression-results-staging-20261026-1200.md'
+        const setup = async () => {
+            const { releaseDir } = await import('@/engine/release-paths')
+            const dir = releaseDir('v2')
+            fs.mkdirSync(dir, { recursive: true })
+            fs.writeFileSync(path.join(dir, 'plan-lines.json'), '{"lines":[]}')
+            fs.writeFileSync(path.join(dir, 'results-staging.json'), '{"results":[]}')
+            fs.writeFileSync(path.join(dir, 'pr-1.json'), '{"number":1}')
+            fs.writeFileSync(path.join(dir, 'plan.md'), '## Changes\nA\n')
+            fs.writeFileSync(path.join(dir, results), '| R-1-1 | t | PASS | ok |\n')
+            return dir
+        }
+        const gh = (calls: string[][]) => async (args: string[]) => {
+            calls.push(args)
+            if (args[0] === 'release') return ''
+            return JSON.stringify({
+                assets: ['testing-plan.md', results].map(name => ({
+                    name,
+                    browser_download_url: `https://x/${name}`,
+                    size: 1,
+                    updated_at: '',
+                })),
+            })
+        }
+
+        it.each(['plan-lines.json', 'results-staging.json', 'pr-1.json'])(
+            'refuses %s under any asset name',
+            async name => {
+                const { releaseUploadCommand } = await import('@/cli/commands/release')
+                const dir = await setup()
+                const calls: string[][] = []
+                const file = path.join(dir, name)
+                for (const as of [undefined, 'testing-plan.md', results]) {
+                    const opts: Record<string, string> = as
+                        ? { tag: 'v2', file, as }
+                        : { tag: 'v2', file }
+                    await expect(releaseUploadCommand(opts, vars, gh(calls))).rejects.toThrow(
+                        /not a release asset name|refusing to upload/
+                    )
+                }
+                expect(calls).toEqual([])
+            }
+        )
+
+        it('refuses plan.md as a results asset', async () => {
+            const { releaseUploadCommand } = await import('@/cli/commands/release')
+            const dir = await setup()
+            const calls: string[][] = []
+            await expect(
+                releaseUploadCommand(
+                    { tag: 'v2', file: path.join(dir, 'plan.md'), as: results },
+                    vars,
+                    gh(calls)
+                )
+            ).rejects.toThrow(/refusing to upload/)
+            expect(calls).toEqual([])
+        })
+
+        it('uploads the plan from plan.md and a results file from its own name', async () => {
+            const { releaseUploadCommand } = await import('@/cli/commands/release')
+            const dir = await setup()
+            const calls: string[][] = []
+            vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+            await releaseUploadCommand(
+                { tag: 'v2', file: path.join(dir, 'plan.md') },
+                vars,
+                gh(calls)
+            )
+            await releaseUploadCommand(
+                { tag: 'v2', file: path.join(dir, results) },
+                vars,
+                gh(calls)
+            )
+            const uploads = calls.filter(c => c[0] === 'release').map(c => path.basename(c[3]))
+            expect(uploads).toEqual(['testing-plan.md', results])
+        })
+    })
+
     describe('release-download of the plan', () => {
         const remote = '## Changes\nA\n\n## Technical appendix\nB\n'
         const gh = async (args: string[]) => {
@@ -151,6 +230,27 @@ describe('release commands', () => {
             expect(fs.readFileSync(file, 'utf8')).toBe('my edits')
             await releaseDownloadCommand({ tag: 'v2', force: 'true' }, vars, gh)
             expect(fs.readFileSync(file, 'utf8')).toBe(remote)
+        })
+
+        it('--force drops R- edits but keeps the local Security section in place', async () => {
+            const { releaseDownloadCommand } = await import('@/cli/commands/release')
+            const assetPlan = '## Changes\n- [R-1-1] asset line — s\n\n## Technical appendix\nB\n'
+            const ghPlan = async (args: string[]) => {
+                const dir = args[args.indexOf('--dir') + 1]
+                fs.writeFileSync(path.join(dir, 'testing-plan.md'), assetPlan)
+                return ''
+            }
+            const file = await local(
+                '## Changes\n- [R-1-1] my edit — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
+            )
+            const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+            await releaseDownloadCommand({ tag: 'v2', force: 'true' }, vars, ghPlan)
+            expect(fs.readFileSync(file, 'utf8')).toBe(
+                '## Changes\n- [R-1-1] asset line — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
+            )
+            expect(JSON.parse(String(write.mock.calls[0][0])).plan).toBe(
+                'replaced (local Security section kept)'
+            )
         })
 
         it('keeps a plan.md that differs only by its Security section', async () => {

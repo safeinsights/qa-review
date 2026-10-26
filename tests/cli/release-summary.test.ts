@@ -42,6 +42,38 @@ describe('release-summary command', () => {
         expect(String(write.mock.calls[0][0])).toContain('"placement":"inserted"')
     })
 
+    it('refuses a Summary with security content before touching the release', async () => {
+        const { releaseSummaryCommand } = await import('@/cli/commands/release-summary')
+        const { releaseDir } = await import('@/engine/release-paths')
+        const dir = releaseDir('v1')
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, 'plan.md'), '## Summary\n\nSee S-1.\n\n## Baseline\n')
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            return ''
+        }
+        await expect(releaseSummaryCommand({ tag: 'v1' }, vars, gh)).rejects.toThrow(
+            /security content/
+        )
+        expect(calls).toEqual([])
+    })
+
+    it('refuses an --input outside the release dir', async () => {
+        const { releaseSummaryCommand } = await import('@/cli/commands/release-summary')
+        const outside = path.join(repo, 'plan.md')
+        fs.writeFileSync(outside, '## Summary\n\nWhat changed.\n')
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            return ''
+        }
+        await expect(
+            releaseSummaryCommand({ tag: 'v1', input: outside }, vars, gh)
+        ).rejects.toThrow(/under/)
+        expect(calls).toEqual([])
+    })
+
     it('requires --tag', async () => {
         const { releaseSummaryCommand } = await import('@/cli/commands/release-summary')
         await expect(releaseSummaryCommand({}, vars, async () => '')).rejects.toThrow(/--tag/)

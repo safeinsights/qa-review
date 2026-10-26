@@ -14,7 +14,7 @@ import {
 } from '@/engine/github-release'
 import { jiraBoardsFrom, managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
-import { stripSecurity } from '@/engine/public-plan'
+import { extractSecurity, spliceSecurity, stripSecurity } from '@/engine/public-plan'
 import {
     isUploadableAssetName,
     PLAN_ASSET,
@@ -82,14 +82,21 @@ export async function releaseStatusCommand(
 
 // The plan lands as plan.md, the editor's file, which may hold work the asset does
 // not: unsaved edits, and always the local-only Security section. So an existing
-// plan.md is replaced only when it equals the asset or --force is given.
+// plan.md is replaced only when it equals the asset or --force is given. --force
+// (the editor's Discard) drops the edits but keeps the Security section: the asset
+// never holds it, so replacing it would lose it for good.
 function placePlan(remote: string, dest: string, force: boolean): string {
-    if (force || !fs.existsSync(dest)) {
+    if (!fs.existsSync(dest)) {
         fs.copyFileSync(remote, dest)
         return 'replaced'
     }
     const local = fs.readFileSync(dest, 'utf8')
     const asset = fs.readFileSync(remote, 'utf8')
+    if (force) {
+        const security = extractSecurity(local)
+        fs.writeFileSync(dest, spliceSecurity(asset, security))
+        return security ? 'replaced (local Security section kept)' : 'replaced'
+    }
     if (local === asset) return 'unchanged'
     if (!localPlanDiffers(local, asset))
         return 'kept local (the asset plus the local Security section)'
@@ -138,15 +145,22 @@ export async function releaseDownloadCommand(
 }
 
 // Writes the plan without its Security section under public/, which is the file that
-// is uploaded. Reading is gated by the path guard first, like the upload itself.
+// is uploaded. Only the release's own plan.md is read: any other file named as the
+// plan asset (prs.json, a results file) would be published under the plan's name.
 function publicPlan(tag: string, file: string): { source: string; stripped: boolean } {
     assertUnderReleaseDir(tag, file)
-    const plan = fs.readFileSync(file, 'utf8')
-    const pub = stripSecurity(plan)
+    const plan = path.join(fs.realpathSync(releaseDir(tag)), PLAN_FILE)
+    if (!fs.existsSync(file) || fs.realpathSync(file) !== plan) {
+        throw new Error(
+            `refusing to upload ${file} as ${PLAN_ASSET}: the plan asset is made from ${plan} only`
+        )
+    }
+    const text = fs.readFileSync(file, 'utf8')
+    const pub = stripSecurity(text)
     const source = path.join(releaseDir(tag), PUBLIC_DIR, PLAN_ASSET)
     fs.mkdirSync(path.dirname(source), { recursive: true })
     fs.writeFileSync(source, pub)
-    return { source, stripped: pub !== plan }
+    return { source, stripped: pub !== text }
 }
 
 function assetNameFor(opts: Record<string, string>, file: string): string {

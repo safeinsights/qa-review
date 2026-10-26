@@ -3,7 +3,13 @@ import path from 'node:path'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
 import { extractJiraKeys } from './jira-keys'
 import { hasSecurityContent, stripSecurity } from './public-plan'
-import { PLAN_ASSET, PLAN_FILE, releaseDir } from './release-paths'
+import {
+    isUploadableAssetName,
+    PLAN_ASSET,
+    PLAN_FILE,
+    PUBLIC_DIR,
+    releaseDir,
+} from './release-paths'
 
 export interface ReleasePr {
     number: number
@@ -185,6 +191,25 @@ export function assertUnderReleaseDir(tag: string, file: string): void {
     }
 }
 
+// The one file each asset may come from: the plan asset from the stripped copy under
+// public/, a results asset from the file of the same name in the release dir root.
+// A name check alone let any file under the dir (plan-lines.json, pr-<n>.json, the
+// raw plan.md) go public under an allowed name; the markdown-only content guard
+// never looked at those.
+export function assertAssetSource(tag: string, file: string, asName: string): void {
+    if (!isUploadableAssetName(asName)) throw new Error(`${asName} is not a release asset name`)
+    assertUnderReleaseDir(tag, file)
+    const dir = fs.realpathSync(releaseDir(tag))
+    const expected =
+        asName === PLAN_ASSET ? path.join(dir, PUBLIC_DIR, PLAN_ASSET) : path.join(dir, asName)
+    const resolved = fs.existsSync(file) ? fs.realpathSync(file) : path.resolve(file)
+    if (resolved !== expected) {
+        throw new Error(
+            `refusing to upload ${file} as ${asName}: that asset is only uploaded from ${expected}`
+        )
+    }
+}
+
 async function canUpload(gh: GhRunner, repo: string): Promise<boolean> {
     const out = await gh(['api', `repos/${repo}`, '--jq', '.permissions.push'])
     return out.trim() === 'true'
@@ -290,7 +315,7 @@ export async function uploadAsset(
     file: string,
     asName: string
 ): Promise<string> {
-    assertUnderReleaseDir(tag, file)
+    assertAssetSource(tag, file, asName)
     if (hasSecurityContent(fs.readFileSync(file, 'utf8'))) {
         throw new Error(
             `refusing to upload ${asName}: it contains security lines; management-app is public`

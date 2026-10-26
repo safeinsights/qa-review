@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
+import { assertUnderReleaseDir } from '@/engine/github-release'
 import { managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
 import { PLAN_FILE, releaseDir } from '@/engine/release-paths'
@@ -25,6 +26,7 @@ export async function releaseSummaryCommand(
     if (!tag || tag === 'true') throw new Error('release-summary requires --tag <tag>')
     const input = (opts.input ?? '').trim() || path.join(releaseDir(tag), PLAN_FILE)
     if (input === 'true') throw new Error('release-summary requires a value for --input')
+    assertUnderReleaseDir(tag, input)
     const summary = extractSummary(fs.readFileSync(input, 'utf8'))
     const placement = await updateReleaseSummary(gh, managementAppRepo(vars), tag, summary)
     process.stdout.write(`${JSON.stringify({ tag, chars: summary.length, placement })}\n`)

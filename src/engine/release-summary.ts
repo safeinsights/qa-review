@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
+import { hasSecurityContent } from './public-plan'
 import { releaseDir } from './release-paths'
 
 const OPEN = '<!-- regression-summary -->'
@@ -84,6 +85,13 @@ export async function updateReleaseSummary(
     tag: string,
     summary: string
 ): Promise<Placement> {
+    // The release description is as public as the assets, and the Summary is free
+    // text the session writes: it can quote an S- line.
+    if (hasSecurityContent(summary)) {
+        throw new Error(
+            'refusing to publish the summary: it contains security content; management-app is public'
+        )
+    }
     const raw = await gh(['api', `repos/${repo}/releases/tags/${tag}`, '--jq', '.body'])
     // --jq prints the string with a trailing newline that is not part of the body,
     // and prints the bare word "null" for a release with no description.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractSummary, spliceSummary } from '@/engine/release-summary'
+import { extractSummary, spliceSummary, updateReleaseSummary } from '@/engine/release-summary'
 
 const PLAN =
     '# Regression plan v1\n\n## Summary\n\nFirst para.\n\n**Nav.** Second para.\n\n## Baseline\n- [BASELINE] x — y\n'
@@ -60,5 +60,21 @@ describe('spliceSummary', () => {
         const out = spliceSummary(crlf, 'S1')
         expect(out).toBe(BODY.replace('------', `${BLOCK('S1')}\n\n------`).replace(/\n/g, '\r\n'))
         expect(out.replace(/\r\n/g, '')).not.toContain('\n')
+    })
+})
+
+describe('updateReleaseSummary', () => {
+    it('refuses a summary with security content and makes no gh call', async () => {
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            return ''
+        }
+        for (const summary of ['Probed S-2 on staging.', '### Security\nx', '- [S-1] t — p']) {
+            await expect(updateReleaseSummary(gh, 'r', 'v1', summary)).rejects.toThrow(
+                /security content/
+            )
+        }
+        expect(calls).toEqual([])
     })
 })

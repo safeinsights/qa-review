@@ -202,3 +202,42 @@ func TestReleaseAllowlistsAreNarrow(t *testing.T) {
 		}
 	}
 }
+
+// Auto mode lets its classifier approve a tool that is off the allowlist, so the
+// writes a release session must never make itself are denied by name.
+func TestReleaseSessionsDenyDirectWrites(t *testing.T) {
+	args := releaseClaudeArgs(releaseRunAllowedTools, "/tmp/mcp.json")
+	denied := ""
+	for i, a := range args {
+		if a == "--disallowedTools" && i+1 < len(args) {
+			denied = "," + args[i+1] + ","
+		}
+	}
+	if denied == "" {
+		t.Fatal("release session args lack --disallowedTools")
+	}
+	want := []string{"Bash(gh release:*)", "Bash(gh api:*)", "Bash(gh pr merge:*)", "Bash(gh pr close:*)", "Bash(gh issue:*)"}
+	for _, server := range knownJiraServers {
+		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
+			want = append(want, mcpToolName(server, tool))
+		}
+	}
+	if !strings.Contains(denied, ",mcp__jira-atlassian__jira_add_comment,") {
+		t.Error("jira-atlassian's comment tool is not denied")
+	}
+	for _, tool := range want {
+		if !strings.Contains(denied, ","+tool+",") {
+			t.Errorf("%s is not denied", tool)
+		}
+	}
+	for name, list := range map[string][]string{"plan": releasePlanAllowedTools, "run": releaseRunAllowedTools} {
+		for _, tool := range list {
+			if strings.Contains(denied, ","+tool+",") {
+				t.Errorf("%s list allows denied tool %s", name, tool)
+			}
+		}
+	}
+	if !strings.Contains(","+strings.Join(releaseRunAllowedTools, ",")+",", ",Bash(qar jira-create-issue:*),") {
+		t.Error("the run session must keep qar jira-create-issue")
+	}
+}

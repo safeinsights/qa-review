@@ -236,20 +236,24 @@ describe('release error handling and upload guards', () => {
             calls.push(args)
             if (args[0] === 'api')
                 return JSON.stringify({
-                    assets: ['testing-plan.md', 'regression-results-staging-x.md'].map(name => ({
-                        name,
-                        browser_download_url: `https://x/${name}`,
-                        size: 1,
-                        updated_at: '',
-                    })),
+                    assets: ['testing-plan.md', 'regression-results-staging-20261026-1200.md'].map(
+                        name => ({
+                            name,
+                            browser_download_url: `https://x/${name}`,
+                            size: 1,
+                            updated_at: '',
+                        })
+                    ),
                 })
             return ''
         }
-        const file = path.join(releaseDir('v2'), 'plan.md')
-        fs.mkdirSync(releaseDir('v2'), { recursive: true })
-        fs.writeFileSync(file, 'x')
-        await uploadAsset(gh, 'r', 'v2', file, 'testing-plan.md')
-        await uploadAsset(gh, 'r', 'v2', file, 'regression-results-staging-x.md')
+        const results = 'regression-results-staging-20261026-1200.md'
+        const plan = path.join(releaseDir('v2'), 'public', 'testing-plan.md')
+        fs.mkdirSync(path.dirname(plan), { recursive: true })
+        fs.writeFileSync(plan, 'x')
+        fs.writeFileSync(path.join(releaseDir('v2'), results), 'x')
+        await uploadAsset(gh, 'r', 'v2', plan, 'testing-plan.md')
+        await uploadAsset(gh, 'r', 'v2', path.join(releaseDir('v2'), results), results)
         const uploads = calls.filter(c => c[0] === 'release')
         expect(uploads[0]).toContain('--clobber')
         expect(uploads[1]).not.toContain('--clobber')
@@ -261,12 +265,39 @@ describe('release error handling and upload guards', () => {
             calls.push(args)
             return ''
         }
-        fs.mkdirSync(releaseDir('v2'), { recursive: true })
-        const file = path.join(releaseDir('v2'), 'plan.md')
+        const file = path.join(releaseDir('v2'), 'public', 'testing-plan.md')
+        fs.mkdirSync(path.dirname(file), { recursive: true })
         fs.writeFileSync(file, '## Summary\nx\n\n## Security\n- [S-1] t — p\n')
         await expect(uploadAsset(gh, 'r', 'v2', file, 'testing-plan.md')).rejects.toThrow(
             'refusing to upload testing-plan.md: it contains security lines; management-app is public'
         )
+        expect(calls).toEqual([])
+    })
+
+    it('uploads an asset only from its one source file', async () => {
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            return ''
+        }
+        const dir = releaseDir('v2')
+        const results = 'regression-results-staging-20261026-1200.md'
+        for (const sub of ['remote', 'public', 'upload']) {
+            fs.mkdirSync(path.join(dir, sub), { recursive: true })
+            fs.writeFileSync(path.join(dir, sub, results), 'x')
+        }
+        fs.writeFileSync(path.join(dir, 'plan.md'), 'x')
+        for (const sub of ['remote', 'public', 'upload']) {
+            await expect(
+                uploadAsset(gh, 'r', 'v2', path.join(dir, sub, results), results)
+            ).rejects.toThrow(/only uploaded from/)
+        }
+        await expect(
+            uploadAsset(gh, 'r', 'v2', path.join(dir, 'plan.md'), 'testing-plan.md')
+        ).rejects.toThrow(/only uploaded from/)
+        await expect(
+            uploadAsset(gh, 'r', 'v2', path.join(dir, 'plan.md'), 'plan.md')
+        ).rejects.toThrow(/not a release asset name/)
         expect(calls).toEqual([])
     })
 
