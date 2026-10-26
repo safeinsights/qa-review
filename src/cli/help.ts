@@ -292,7 +292,7 @@ export const COMMANDS = [
         name: 'release-upload',
         usage: 'qar release-upload --tag <tag> --file <path> [--as <asset name>]',
         summary:
-            'Upload a file under .tmp/release/<tag>/ as a release asset (replaces a same-named one).',
+            'Upload a file under .tmp/release/<tag>/ as a release asset (only regression-plan.md is replaced; other assets are never overwritten).',
         details: 'Refuses any file outside the release dir. Prints {"tag","asset","url"}.',
     },
     {

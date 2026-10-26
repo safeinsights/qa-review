@@ -65,4 +65,14 @@ describe('release commands', () => {
             releaseUploadCommand({ tag: 'v2', file: outside }, vars, async () => '')
         ).rejects.toThrow(/under/)
     })
+
+    it('release-download rejects a path-like or valueless --asset', async () => {
+        const { releaseDownloadCommand } = await import('@/cli/commands/release')
+        await expect(
+            releaseDownloadCommand({ tag: 'v2', asset: '../../x' }, vars, async () => '')
+        ).rejects.toThrow(/not an asset name/)
+        await expect(
+            releaseDownloadCommand({ tag: 'v2', asset: 'true' }, vars, async () => '')
+        ).rejects.toThrow(/requires a value for --asset/)
+    })
 })

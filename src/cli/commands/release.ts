@@ -79,6 +79,10 @@ export async function releaseDownloadCommand(
 ): Promise<void> {
     const tag = requireTag(opts)
     const asset = (opts.asset ?? PLAN_ASSET).trim()
+    if (!asset || asset === 'true') throw new Error('release-download requires a value for --asset')
+    if (asset !== path.basename(asset) || asset === '.' || asset === '..') {
+        throw new Error(`${asset} is not an asset name`)
+    }
     const dir = releaseDir(tag)
     const file = await downloadAsset(
         gh,

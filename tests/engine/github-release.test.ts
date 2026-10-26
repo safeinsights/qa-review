@@ -9,6 +9,7 @@ import {
     prNumbersFromBody,
     prNumbersFromSubjects,
     releaseStatus,
+    uploadAsset,
 } from '@/engine/github-release'
 import { releaseDir } from '@/engine/release-paths'
 
@@ -190,5 +191,70 @@ describe('assertUnderReleaseDir', () => {
             /under/
         )
         expect(() => assertUnderReleaseDir('v2', '/etc/passwd')).toThrow(/under/)
+    })
+})
+
+describe('release error handling and upload guards', () => {
+    let repo: string
+    let prior: string | undefined
+    beforeEach(() => {
+        prior = process.env.QAR_REPO_DIR
+        repo = fs.mkdtempSync(path.join(os.tmpdir(), 'qar-release-g-'))
+        process.env.QAR_REPO_DIR = repo
+    })
+    afterEach(() => {
+        if (prior === undefined) delete process.env.QAR_REPO_DIR
+        else process.env.QAR_REPO_DIR = prior
+        fs.rmSync(repo, { recursive: true, force: true })
+    })
+
+    it('rejects on a non-404 failure but maps a 404 to exists:false', async () => {
+        const boom = async () => {
+            throw new Error('HTTP 500')
+        }
+        await expect(releaseStatus(boom, 'r', 'v2', releaseDir('v2'))).rejects.toThrow(/500/)
+        const gone = async (args: string[]) => {
+            if (args.join(' ').includes('releases/tags/')) throw new Error('HTTP 404')
+            return 'true'
+        }
+        expect((await releaseStatus(gone, 'r', 'v2', releaseDir('v2'))).exists).toBe(false)
+    })
+
+    it('clobbers only the plan asset', async () => {
+        const calls: string[][] = []
+        const gh = async (args: string[]) => {
+            calls.push(args)
+            if (args[0] === 'api')
+                return JSON.stringify({
+                    assets: ['regression-plan.md', 'regression-results-staging-x.md'].map(name => ({
+                        name,
+                        browser_download_url: `https://x/${name}`,
+                        size: 1,
+                        updated_at: '',
+                    })),
+                })
+            return ''
+        }
+        const file = path.join(releaseDir('v2'), 'plan.md')
+        fs.mkdirSync(releaseDir('v2'), { recursive: true })
+        fs.writeFileSync(file, 'x')
+        await uploadAsset(gh, 'r', 'v2', file, 'regression-plan.md')
+        await uploadAsset(gh, 'r', 'v2', file, 'regression-results-staging-x.md')
+        const uploads = calls.filter(c => c[0] === 'release')
+        expect(uploads[0]).toContain('--clobber')
+        expect(uploads[1]).not.toContain('--clobber')
+    })
+
+    it('rejects a symlink in the release dir that points outside it', () => {
+        fs.mkdirSync(releaseDir('v2'), { recursive: true })
+        const secret = path.join(repo, 'secret.txt')
+        fs.writeFileSync(secret, 's')
+        const link = path.join(releaseDir('v2'), 'link.md')
+        fs.symlinkSync(secret, link)
+        expect(() => assertUnderReleaseDir('v2', link)).toThrow(/under/)
+    })
+
+    it('rejects . and .. and slashes as tags', () => {
+        for (const t of ['.', '..', 'a/b']) expect(() => releaseDir(t)).toThrow(/not a release tag/)
     })
 })

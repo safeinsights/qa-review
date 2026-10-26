@@ -4,7 +4,8 @@ import { repoDir } from './paths'
 // One directory per release holds everything the plan and run sessions produce.
 // It is gitignored (.tmp/) and is also what the GUI editor reads and writes.
 export function releaseDir(tag: string): string {
-    if (!/^[\w.-]+$/.test(tag)) throw new Error(`"${tag}" is not a release tag`)
+    if (tag === '.' || tag === '..' || !/^[\w.-]+$/.test(tag))
+        throw new Error(`"${tag}" is not a release tag`)
     return path.join(repoDir(), '.tmp', 'release', tag)
 }
 

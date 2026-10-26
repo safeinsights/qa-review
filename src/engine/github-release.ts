@@ -172,8 +172,11 @@ export async function collectReleasePrs(
 }
 
 export function assertUnderReleaseDir(tag: string, file: string): void {
-    const dir = releaseDir(tag)
-    const resolved = path.resolve(file)
+    // realpath on both sides: a symlink inside the dir must not smuggle in a file
+    // from outside it.
+    fs.mkdirSync(releaseDir(tag), { recursive: true })
+    const dir = fs.realpathSync(releaseDir(tag))
+    const resolved = fs.existsSync(file) ? fs.realpathSync(file) : path.resolve(file)
     if (resolved !== dir && !resolved.startsWith(`${dir}${path.sep}`)) {
         throw new Error(
             `${file} is not under ${dir}; only files under the release dir are uploaded`
@@ -182,11 +185,14 @@ export function assertUnderReleaseDir(tag: string, file: string): void {
 }
 
 async function canUpload(gh: GhRunner, repo: string): Promise<boolean> {
-    try {
-        return (await gh(['api', `repos/${repo}`, '--jq', '.permissions.push'])).trim() === 'true'
-    } catch {
-        return false
-    }
+    const out = await gh(['api', `repos/${repo}`, '--jq', '.permissions.push'])
+    return out.trim() === 'true'
+}
+
+// Only a 404 means "no such release"; offline, expired auth or a rate limit must
+// surface, or they would read as a release that does not exist.
+function isNotFound(e: unknown): boolean {
+    return e instanceof Error && /HTTP 404/.test(e.message)
 }
 
 async function remoteAssets(
@@ -210,8 +216,9 @@ async function remoteAssets(
             size: a.size,
             updatedAt: a.updated_at,
         }))
-    } catch {
-        return null
+    } catch (e) {
+        if (isNotFound(e)) return null
+        throw e
     }
 }
 
@@ -279,7 +286,9 @@ export async function uploadAsset(
     fs.mkdirSync(stage, { recursive: true })
     const staged = path.join(stage, asName)
     fs.copyFileSync(file, staged)
-    await gh(['release', 'upload', tag, staged, '--repo', repo, '--clobber'])
+    // Only the plan is replaceable; results assets are history and must never be overwritten.
+    const clobber = asName === PLAN_ASSET ? ['--clobber'] : []
+    await gh(['release', 'upload', tag, staged, '--repo', repo, ...clobber])
     const assets = (await remoteAssets(gh, repo, tag)) ?? []
     const uploaded = assets.find(a => a.name === asName)
     if (!uploaded) throw new Error(`${asName} is not on ${tag} after upload`)
