@@ -467,10 +467,50 @@ var validationAllowedTools = append([]string{
 	"Edit",
 }, figmaReadTools()...)
 
-// releaseAllowedTools is the Release tab's pre-approval set: the Validation set
-// (browser MCP, gh, qar, file edits, Jira READS for acceptance criteria) plus the
-// Agent tool, which the plan skill uses for one subagent per PR.
-var releaseAllowedTools = append(append([]string{}, validationAllowedTools...), "Agent")
+// knownJiraServers are the names the Jira MCP server is registered under: the
+// per-session config (writeValidationMcpConfig) and the package name a user-level
+// `claude mcp add` tends to use. --allowedTools matches by tool name, so each needs
+// its own entry.
+var knownJiraServers = []string{"jira-atlassian", "mcp-atlassian"}
+
+// releaseShared is what both release sessions may do without a prompt. It is NOT the
+// Validation set: that one pre-approves every Jira tool (comments, transitions),
+// every gh command and every qar command, while a release session's only writes to
+// management-app are `gh release upload` and `gh release edit`, both made by the
+// listed qar release-* commands, and it must never write to Jira on its own.
+func releaseShared() []string {
+	tools := []string{}
+	for _, server := range knownJiraServers {
+		tools = append(tools, mcpToolName(server, "jira_get_issue"))
+	}
+	return append(tools,
+		"Bash(gh pr view:*)",
+		"Bash(gh pr diff:*)",
+		"Bash(qar release-*:*)",
+		"Bash(qar plan-lines:*)",
+		"Bash(qar results-*:*)",
+		"Bash(mkdir:*)",
+		"Bash(ls:*)",
+		"Bash(cat:*)",
+		"Bash(date:*)",
+		"Bash(echo:*)",
+		"Read",
+		"Write",
+		"Edit",
+	)
+}
+
+// releasePlanAllowedTools adds the Agent tool: the plan skill reads each PR in its
+// own subagent.
+var releasePlanAllowedTools = append(releaseShared(), "Agent")
+
+// releaseRunAllowedTools adds the browser, the login helper, and the one Jira write
+// the run may make: a single card for the security results, and only on request.
+var releaseRunAllowedTools = append(releaseShared(),
+	"mcp__chrome-devtools",
+	"Bash(qar session-login:*)",
+	"Bash(qar jira-create-issue:*)",
+)
 
 // knownFigmaServers are the names a Figma MCP server is registered under: the
 // Claude Code plugin, the `claude mcp add … figma` the Doctor hint recommends, and

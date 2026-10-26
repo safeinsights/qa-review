@@ -150,3 +150,55 @@ func TestFailureTextFallsBackToError(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestReleasePlanOpeningRetriesGenerationWithoutAPlan(t *testing.T) {
+	generate := composeReleasePlanPrompt("v1")
+	edit := composeReleasePlanEditPrompt("v1")
+	cases := []struct {
+		regenerate, exists bool
+		want               string
+	}{
+		{true, true, generate},
+		{true, false, generate},
+		// A session that died before writing plan.md: Retry generates again.
+		{false, false, generate},
+		{false, true, edit},
+	}
+	for _, c := range cases {
+		if got := releasePlanOpening("v1", c.regenerate, c.exists); got != c.want {
+			t.Errorf("regenerate=%v exists=%v: got %q", c.regenerate, c.exists, got)
+		}
+	}
+}
+
+// The release sessions must not inherit the Validation set's broad entries: every
+// Jira tool (comments, transitions), every gh command, and every qar command.
+func TestReleaseAllowlistsAreNarrow(t *testing.T) {
+	lists := map[string][]string{
+		"plan": releasePlanAllowedTools,
+		"run":  releaseRunAllowedTools,
+	}
+	for name, list := range lists {
+		joined := "," + strings.Join(list, ",") + ","
+		for _, banned := range []string{"mcp__jira-atlassian", "Bash(gh:*)", "Bash(qar:*)", "Bash(pnpm qar:*)"} {
+			if strings.Contains(joined, ","+banned+",") {
+				t.Errorf("%s list contains %s", name, banned)
+			}
+		}
+		for _, server := range knownJiraServers {
+			if !strings.Contains(joined, ","+mcpToolName(server, "jira_get_issue")+",") {
+				t.Errorf("%s list lacks jira_get_issue for %q", name, server)
+			}
+		}
+	}
+	plan := "," + strings.Join(releasePlanAllowedTools, ",") + ","
+	run := "," + strings.Join(releaseRunAllowedTools, ",") + ","
+	if !strings.Contains(plan, ",Agent,") || strings.Contains(run, ",Agent,") {
+		t.Error("Agent belongs to the plan session only")
+	}
+	for _, tool := range []string{"mcp__chrome-devtools", "Bash(qar session-login:*)", "Bash(qar jira-create-issue:*)"} {
+		if !strings.Contains(run, ","+tool+",") || strings.Contains(plan, ","+tool+",") {
+			t.Errorf("%s belongs to the run session only", tool)
+		}
+	}
+}

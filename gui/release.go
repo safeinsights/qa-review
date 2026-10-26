@@ -176,12 +176,15 @@ func planLinesProblems(out string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// DiscardLocalPlan replaces the local plan with the release asset.
+// DiscardLocalPlan replaces the local plan with the release asset. The asset has no
+// Security section, so a discard also drops the local security lines.
 func (a *App) DiscardLocalPlan(tag string) error {
 	if _, err := releaseDir(tag); err != nil {
 		return err
 	}
-	out, err := runToolFull(qarShim(), "release-download", "--tag", tag)
+	// --force: release-download otherwise refuses to replace a plan with unsaved
+	// edits, and replacing them is exactly what Discard asks for.
+	out, err := runToolFull(qarShim(), "release-download", "--tag", tag, "--force")
 	if err != nil {
 		return fmt.Errorf("release-download: %s", failureText(out, err))
 	}
@@ -199,8 +202,10 @@ func lastLine(out string) string {
 func qarShim() string { return "qar" }
 
 // watchPlan polls plan.md and emits plan-changed when its hash moves. Polling, not
-// fsnotify: the engine and the editor both write by rename, and a 500 ms poll is
-// what the verdict watcher already does.
+// fsnotify, as the verdict watcher does. Only the editor writes by rename: the
+// engine's release-download copies over the file and Claude's Write truncates and
+// writes it, so a tick can read a half-written file. That is tolerated, not
+// prevented: the next tick hashes the finished file and emits again.
 func (a *App) watchPlan(tag string) {
 	stop := make(chan struct{})
 	// Swap under one lock: separate stop-then-store sections let two overlapping
@@ -305,8 +310,8 @@ func (a *App) stopReleaseSavedWatcher() {
 }
 
 // startReleaseSession is the shared body of the two starters: browser, MCP config,
-// claude with the release allowlist, watchers, opening prompt.
-func (a *App) startReleaseSession(kind, env, openingPrompt string) (string, error) {
+// claude with the session's own allowlist, watchers, opening prompt.
+func (a *App) startReleaseSession(kind, env, openingPrompt string, allowed []string) (string, error) {
 	token, cdpPort, err := a.startSessionBrowser(kind, env, "")
 	if err != nil {
 		return "", err
@@ -323,7 +328,7 @@ func (a *App) startReleaseSession(kind, env, openingPrompt string) (string, erro
 	go probeMcpServers(cdpPort, jiraCfg)
 	claudeArgs := []string{
 		"--permission-mode", "auto",
-		"--allowedTools", strings.Join(releaseAllowedTools, ","),
+		"--allowedTools", strings.Join(allowed, ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
 	}
@@ -336,19 +341,29 @@ func (a *App) startReleaseSession(kind, env, openingPrompt string) (string, erro
 	return token, nil
 }
 
+// releasePlanOpening picks the plan session's opening prompt. Only an existing plan
+// gets the edit prompt: with no plan.md (a session that died while generating), the
+// edit prompt would run plan-lines on a missing file, while the generation prompt
+// reuses every pr-<n>.json already written.
+func releasePlanOpening(tag string, regenerate, planExists bool) string {
+	if regenerate || !planExists {
+		return composeReleasePlanPrompt(tag)
+	}
+	return composeReleasePlanEditPrompt(tag)
+}
+
 // StartReleasePlanSession opens the plan session. regenerate=false keeps an
 // existing plan (a downloaded one) and only gives the user a live Claude to save it.
 func (a *App) StartReleasePlanSession(tag string, regenerate bool) (string, error) {
-	if _, err := releaseDir(tag); err != nil {
+	dir, err := releaseDir(tag)
+	if err != nil {
 		return "", err
 	}
+	_, statErr := os.Stat(filepath.Join(dir, "plan.md"))
 	// The plan session reads PRs, not the app; staging is a harmless target for
 	// the browser the shared session machinery always launches.
-	opening := composeReleasePlanPrompt(tag)
-	if !regenerate {
-		opening = composeReleasePlanEditPrompt(tag)
-	}
-	token, err := a.startReleaseSession("release-plan", "staging", opening)
+	opening := releasePlanOpening(tag, regenerate, statErr == nil)
+	token, err := a.startReleaseSession("release-plan", "staging", opening, releasePlanAllowedTools)
 	if err != nil {
 		return "", err
 	}
@@ -363,5 +378,5 @@ func (a *App) StartReleaseRunSession(tag, env string) (string, error) {
 	if env != "staging" && env != "production" {
 		return "", errors.New("a release runs against staging or production")
 	}
-	return a.startReleaseSession("release-run", env, composeReleaseRunPrompt(tag, env))
+	return a.startReleaseSession("release-run", env, composeReleaseRunPrompt(tag, env), releaseRunAllowedTools)
 }
