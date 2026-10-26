@@ -47,8 +47,13 @@ substituted before dispatch:
 > --repo <repo>`. If the PR has a Jira key, read the card with the jira-atlassian
 > MCP (`jira_get_issue`) for its acceptance criteria. Write
 > `.tmp/release/<tag>/pr-<n>.json`:
-> `{ number, plainSummary, technicalSummary, testLines: [{ title, steps, stagingOnly }],
+> `{ number, impact, plainSummary, technicalSummary, testLines: [{ title, steps, stagingOnly }],
 >   securityNotes: [{ title, probe, stagingOnly }], jiraCriteria: [] }`.
+> - `impact`: `high`, `medium` or `low`. `high` = a user-visible behaviour
+>   change, a data migration, an auth or permission change, or a security
+>   fix; `medium` = a visible UI change with no behaviour change, an email
+>   change, an admin-only change; `low` = a dependency bump, CI, lint, docs,
+>   tests only.
 > - `plainSummary`: 1–3 sentences a PM understands. What changed for a user.
 > - `technicalSummary`: files, migrations, flags, routes, env vars, jobs.
 > - `testLines`: 1–4 concrete checks that the change IS in the build, each
@@ -72,13 +77,13 @@ sections, in this order, as `##` headings:
 # Regression plan <tag>
 
 ## Summary
-<plain language, by feature, for PMs — from the plainSummary fields, grouped>
+<plain language, by feature, for PMs — from the plainSummary fields, grouped; high-impact items first>
 
 ## Baseline
 - [BASELINE] Run release-happy-path — qar run --suite release-happy-path --env <env>
 
 ## Changes
-### #<n> <title> (<jira keys>)
+### #<n> <title> (<jira keys>) [<impact>]
 - [R-<n>-1] <title> — <steps and what the tester sees>
 
 ## Security
@@ -97,7 +102,11 @@ Every test line is `- [ID] <title> — <steps>` with an em dash. IDs: `R-<pr>-<n
 under its own `### #<pr>` heading, `S-<n>` in Security. A line that writes data
 or sends bad input ends with **`(staging only)`**. An `R-` line whose
 `stagingOnly` is true also ends with `(staging only)`. Write the Baseline line
-literally, with `--env <env>`; the run skill substitutes the env it runs against. Order Changes by PR number.
+literally, with `--env <env>`; the run skill substitutes the env it runs against. The Summary lists feature groups with the high-impact items first. The Changes
+section is ordered by impact (high, medium, low), then by PR number within an
+impact; each `### #<pr>` heading ends with the impact in brackets, e.g.
+`### #1110 OTTER-794: migrations … [high]`. The Technical appendix stays in
+PR-number order.
 
 Then `qar plan-lines --input .tmp/release/<tag>/plan.md --tag <tag>`. It must
 print `"ok":true`. If it lists problems, fix the plan and run it again. Do not say

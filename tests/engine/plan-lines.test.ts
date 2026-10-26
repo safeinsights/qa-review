@@ -99,4 +99,11 @@ describe('parsePlanLines', () => {
             expect((e as PlanLinesError).problems).toHaveLength(2)
         }
     })
+
+    it('reads the pr from a heading ending in an impact suffix', () => {
+        const plan = PLAN.replace(/^### #1110.*$/m, '### #1110 OTTER-794 migrations [high]')
+        const lines = parsePlanLines(plan, 'v').lines.filter(l => l.id.startsWith('R-1110-'))
+        expect(lines.length).toBeGreaterThan(0)
+        for (const l of lines) expect(l.pr).toBe(1110)
+    })
 })

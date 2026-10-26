@@ -43,4 +43,10 @@ describe('qa-release-plan', () => {
         expect([...i].sort((a, b) => a - b)).toEqual(i)
         expect(src).toContain('(staging only)')
     })
+
+    it('orders Changes by impact with the three levels', () => {
+        expect(src).toContain('ordered by impact')
+        expect(src).toContain('impact')
+        for (const w of ['high', 'medium', 'low']) expect(src).toContain(w)
+    })
 })
