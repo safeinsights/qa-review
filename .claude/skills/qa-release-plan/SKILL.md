@@ -67,7 +67,10 @@ substituted before dispatch:
 > Keep the file under 300 lines. Do not edit any other file.
 
 The `repo` is `MANAGEMENT_APP_REPO` from `config/settings.json`. A PR whose
-`pr-<n>.json` already exists is skipped (a retry after a crash reuses them).
+`pr-<n>.json` already exists is reused (a retry after a crash) only if it parses
+as JSON AND its `impact` is one of `high`, `medium`, `low`. Otherwise dispatch
+that PR's subagent again and overwrite the file. Never default a missing
+`impact`: it would silently misorder the plan.
 
 ## Phase 3: write `plan.md`
 Merge the `pr-<n>.json` files into `.tmp/release/<tag>/plan.md` with EXACTLY these
