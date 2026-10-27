@@ -143,6 +143,12 @@ For each line, skip `BASELINE` (Phase 2 recorded it):
   you to skip it). `evidence` names what you saw and the screenshot path.
   Never put a credential in evidence. Append the result to
   `results-<env>.jsonl` before you start the next line.
+- A line whose steps start with `Known issue <key>:` checks a criterion that QA
+  failed and moved to that follow-up card. Its steps describe the behaviour QA saw.
+  PASS when the app still behaves that way, and name the key in evidence. FAIL
+  when anything else breaks there. When the criterion now works as the card asked,
+  PASS and say "the known issue <key> looks fixed" in evidence, so the follow-up
+  can be checked.
 - When the env does not have what a line needs (an empty table, no study from
   before the release), record what you could check and ask the runner whether to
   skip the rest; do not guess a PASS.

@@ -50,11 +50,33 @@ substituted before dispatch:
 
 > Read `gh pr view <n> --repo <repo> --json title,body,files` and `gh pr diff <n>
 > --repo <repo>`. If the PR has a Jira key, read the card with the jira-atlassian
-> MCP (`jira_get_issue`) for its acceptance criteria. Write
-> `.tmp/release/<tag>/pr-<n>.json`:
+> MCP: `jira_get_issue` with `fields` set to
+> `summary,status,description,issuelinks` and `comment_limit` 100. The defaults
+> leave out the links and stop at 10 comments. From the card take:
+> - the acceptance criteria;
+> - the latest QA validation comment, if there is one. A qa-review validation ends
+>   with "Posted by qa-review <version>" and gives each criterion a result (PASS,
+>   FAIL, NOT TESTED) and a verdict;
+> - the follow-up cards: links to other cards, and keys that the validation names
+>   for a FAIL ("follow-up", "tracked as"). Read each follow-up's status with
+>   `jira_get_issue` (`fields` `summary,status`).
+>
+> Write `.tmp/release/<tag>/pr-<n>.json`:
 > `{ number, impact, plainSummary, technicalSummary,
 >   testLines: [{ title, steps, role, needs, endsStudy, stagingOnly }],
->   securityNotes: [{ title, probe, stagingOnly }], jiraCriteria: [] }`.
+>   securityNotes: [{ title, probe, stagingOnly }], jiraCriteria: [],
+>   knownIssues: [{ criterion, qaResult, followUp, followUpStatus, currentBehaviour }] }`.
+> - `knownIssues`: each criterion the QA validation did not PASS and that was moved
+>   to a follow-up card. `currentBehaviour` is what QA saw instead.
+> - A known issue whose follow-up is not Done: its test line expects the current
+>   behaviour, not the criterion. Start `steps` with
+>   `Known issue <follow-up key>:` and describe what the tester sees today. The run
+>   passes the line while the app still behaves that way, and fails it only when
+>   something else changes, so the area is still checked for new breakage.
+> - A known issue whose follow-up is Done: the fix may be in this release. Write a
+>   normal line for the criterion and name the follow-up key in `steps`.
+> - A criterion that failed on QA with no follow-up is not a known issue: write a
+>   normal line, and say in `technicalSummary` that QA failed it.
 > - `impact`: `high`, `medium` or `low`. `high` = a user-visible behaviour
 >   change, a data migration, an auth or permission change, or a security
 >   fix; `medium` = a visible UI change with no behaviour change, an email
@@ -100,8 +122,10 @@ substituted before dispatch:
 
 The `repo` is `MANAGEMENT_APP_REPO` from `config/settings.json`. A PR whose
 `pr-<n>.json` already exists is reused (a retry after a crash) only if it parses
-as JSON, its `impact` is one of `high`, `medium`, `low`, AND every test line has
-a `role` and a `needs` from the lists above. Otherwise dispatch
+as JSON, its `impact` is one of `high`, `medium`, `low`, every test line has
+a `role` and a `needs` from the lists above, AND it has a `knownIssues` array
+(empty when the PR has no card or the card has no QA validation; a file written
+before this field existed did not read the comments). Otherwise dispatch
 that PR's subagent again and overwrite the file. Never default a missing
 `impact`, `role` or `needs`: a guessed value silently puts the check in the
 wrong place in the run.
@@ -131,6 +155,7 @@ PRs reviewed with no finding: #a, #b, …
 ## Technical appendix
 ### [#<n>](<url>) <title>
 <technicalSummary, Jira links>
+Known issues: <criterion> — QA <qaResult>, follow-up <key> (<status>); … (only when knownIssues is not empty)
 ### PRs missing from the release notes
 #…, #…
 ```
@@ -175,8 +200,9 @@ line`), and every Changes line needs its PR in the release (`<g>.<n> <title>:
 PR #n is not in the release`). If it lists problems, fix the plan and run it
 again. Do not say
 "ready" before it passes. Then report: PRs, plus `lines`, `security` and `stagingOnly` from that JSON,
-`notesMissing` from `release-prs`, and the Changes lines whose steps start with
-`Requires` (by id, with what each one requires) — and wait.
+`notesMissing` from `release-prs`, the Changes lines whose steps start with
+`Requires` (by id, with what each one requires), and the lines whose steps start
+with `Known issue` (by id, with the follow-up key) — and wait.
 
 ## Phase 4: edit together
 - The user may edit `plan.md` in the editor; **Read it again before any edit**.
