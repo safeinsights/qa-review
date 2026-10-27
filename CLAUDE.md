@@ -87,7 +87,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   "Settings / configuration" below.
 - `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
   request-access | rekey | set-secret | get-secret | sync | session | jira-comment |
-  jira-delete-comment`.
+  jira-delete-comment | jira-delete-attachment`.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
   See "Posting Jira comments with inline screenshots" below for why this exists
   instead of the `jira-atlassian` MCP's `jira_add_comment`.
@@ -809,6 +809,13 @@ POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
 - `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
   has no delete tool, so this is the only way to clean up a bad post). 404 = already
   gone = success.
+- `qar jira-delete-attachment --issue <KEY> --ids <id1,id2>` removes attachments.
+  **Deleting a comment does NOT delete the files it uploaded**, so a repost leaves the
+  first post's screenshots and `--attach` files behind as duplicates on the card (ids
+  from `qar jira-attachments`). Jira's delete endpoint takes the attachment id alone —
+  no issue in the path — so a mistyped id would delete a file on some other card. The
+  command therefore checks each id against `--issue`'s attachment list first and
+  leaves any id not on it untouched, reporting it as `deleted: false`.
 
 Body text **is** markdown — `buildCommentAdf()` converts each text segment with
 `markdownToAdf()` (the `marklassian` package) and splices the resulting block nodes
@@ -912,6 +919,8 @@ soft wrap had folded "Decisions needed" into one paragraph.
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
   — post a Jira comment with the screenshots embedded inline (see above)
 - `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
+- `pnpm qar jira-delete-attachment --issue OTTER-640 --ids 29216,29217` — remove a
+  deleted comment's leftover uploads
 - `pnpm qar jira-attachments --issue OTTER-617 --download`
 - `pnpm qar jira-create-issue --project OTTER --summary "…" --body-file f.md --link OTTER-617`
 - `pnpm qar inventory-render --input .tmp/OTTER-617-inventory.json` — the requirement

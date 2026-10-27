@@ -212,6 +212,15 @@ export const COMMANDS = [
         summary: 'Delete Jira comments (404 = already gone = success).',
     },
     {
+        name: 'jira-delete-attachment',
+        usage: 'qar jira-delete-attachment --issue <KEY> --ids <id1,id2>',
+        summary: "Delete attachments from a card, e.g. a deleted comment's leftover uploads.",
+        details:
+            'Deleting a comment does not delete the files it uploaded. Ids come from ' +
+            'qar jira-attachments. An id that is not on --issue is reported and left alone, ' +
+            "since Jira's delete endpoint would otherwise remove it from whatever card holds it.",
+    },
+    {
         name: 'jira-attachments',
         usage: 'qar jira-attachments --issue <KEY> [--download] [--dir <path>]',
         summary: "List a card's attachments; --download saves the text ones under .tmp/.",

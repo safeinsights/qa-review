@@ -12,6 +12,7 @@ import { inviteCommand } from '@/cli/commands/invite'
 import {
     jiraAttachmentsCommand,
     jiraCommentCommand,
+    jiraDeleteAttachmentCommand,
     jiraDeleteCommentCommand,
 } from '@/cli/commands/jira'
 import { jiraCreateIssueCommand } from '@/cli/commands/jira-create-issue'
@@ -118,6 +119,8 @@ async function main() {
             return jiraCreateIssueCommand(opts, await loadSettings())
         case 'jira-delete-comment':
             return jiraDeleteCommentCommand(opts, await loadSettings())
+        case 'jira-delete-attachment':
+            return jiraDeleteAttachmentCommand(opts, await loadSettings())
         case 'verdict-posted':
             return verdictPostedCommand(opts)
         case 'followup-advice':
