@@ -7,7 +7,7 @@ description: Execute a saved regression plan for a management-app release agains
 
 You execute a **regression plan** that is already on the GitHub release. The GUI
 has already run the baseline suite; you record its result, drive a **live
-browser** through every `[R-…]`/`[S-…]` line, record one result per line, and
+browser** through every Changes and `[S-…]` line, record one result per line, and
 upload the results as a release asset.
 
 ## The environment you're in
@@ -24,13 +24,17 @@ upload the results as a release asset.
 - **Write every scratch file under `.tmp/release/<tag>/`.**
 - **One command per Bash call.** Pre-approved: every `qar` command whose name
   starts with `release-`, `qar plan-lines`, `qar results-check`,
-  `qar results-render`, `qar session-login`, `gh pr view`/`gh pr diff`, read-only
+  `qar results-render`, `qar session-login`, `qar cleanup`, `gh pr view`/`gh pr diff`, read-only
   `mkdir`/`ls`/`cat`/`date`/`echo`, Read/Write/Edit, the chrome-devtools MCP tools
   and the Jira MCP's `jira_get_issue`.
 - **Never run `qar run`.** The GUI ran the baseline before this session started.
 - **Never post to Jira on your own.** The results go to the release only.
-- **Production is real.** Create nothing there except what the baseline suite
-  creates and deletes. A line marked `(staging only)` is NOT TESTED on production.
+- **Production is real, and the run may create data there.** Everything you
+  create (studies, users, orgs, files) gets a natural title and description, as
+  a real user would write it — never "test", "QA" or "asdf". Write each id to
+  `.tmp/release/<tag>/created-<env>.json` as you create it, and delete all of
+  it at the end (Phase 3, last step). A line marked `(staging only)` sends bad
+  input and is NOT TESTED on production.
 - **management-app is public, and so is every release asset.** Security lines and
   their results never leave this machine.
 
@@ -57,10 +61,20 @@ and evidence "the baseline did not run". **A failed baseline does not stop the
 run**; the other lines still need results.
 
 ## Phase 3: the lines
-After the user's go, run `qar session-login --role researcher` first. The lines
-say when another role is needed; switch with the same command.
+The plan is in run order. Go from top to bottom; do not reorder.
 
-For each line in `run-plan-lines-<env>.json`, in order, skip `BASELINE` (Phase 2 recorded it):
+- Each `### <g>. <Role> · <setup>` group names who is signed in. When the role
+  changes from the group before, switch with `qar session-login --role <role>`.
+  `run-plan-lines-<env>.json` carries the same `role` and `needs` per line.
+- A `> Next:` line between groups is a setup step, not a test line. Do it in
+  the browser, as the role it names, before the next group. It creates the
+  study or moves it to the next stage. `Next, with a new study:` means create
+  another study for the group below it; the study before it was ended on
+  purpose. If a setup step fails, every line that needs that study is
+  `NOT TESTED` with `approvedBy: "setup"` and the failure in evidence; go on
+  with the lines that do not need it.
+
+For each line, skip `BASELINE` (Phase 2 recorded it):
 - On **production**, a `stagingOnly` line is `NOT TESTED` with
   `approvedBy: "plan"` and evidence `"staging only"`. Do not run its probe.
 - S- lines run on **staging only**, and only when Phase 1 merged them from the local
@@ -71,6 +85,15 @@ For each line in `run-plan-lines-<env>.json`, in order, skip `BASELINE` (Phase 2
   `area`), or `NOT TESTED` (with `approvedBy` — the user's name when they told
   you to skip it). `evidence` names what you saw and the screenshot path.
   Never put a credential in evidence.
+
+Last, the `> Last:` step: delete everything in `created-<env>.json`. Sign in as
+admin (`qar session-login --role admin`), read an admin token in the browser
+with `evaluate_script`:
+```js
+async () => (await window.Clerk.session.getToken({ skipCache: true })) ?? ''
+```
+and run `qar cleanup --env <env> --token <jwt> --studies <ids> --users <ids>`.
+A 404 means already deleted. Report any id that did not delete, by name.
 
 ## Phase 4: gate, render, upload
 1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`.

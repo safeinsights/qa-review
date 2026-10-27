@@ -3,9 +3,10 @@ import { markdown } from '@codemirror/lang-markdown'
 import { Annotation, Compartment, EditorState } from '@codemirror/state'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
-import { useEffect, useRef } from 'react'
+import { type ComponentProps, type MouseEvent, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { openExternal } from '../lib/ipc'
 
 // Marks the programmatic replace so it is not reported to the parent as typing.
 const external = Annotation.define<boolean>()
@@ -94,11 +95,33 @@ export function PlanEditor({
     )
 }
 
+// A plain <a> would navigate the app's own webview to GitHub, with no way back.
+function ExternalLink({
+    href,
+    children,
+    node: _node,
+    ...rest
+}: ComponentProps<'a'> & { node?: unknown }) {
+    const open = (e: MouseEvent) => {
+        e.preventDefault()
+        if (href) openExternal(href)
+    }
+    return (
+        <a {...rest} href={href} onClick={open}>
+            {children}
+        </a>
+    )
+}
+
+const previewComponents = { a: ExternalLink }
+
 function PlanPreview({ text, isVisible }: { text: string; isVisible: boolean }) {
     if (!isVisible) return null
     return (
         <div style={{ padding: '12px 18px' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={previewComponents}>
+                {text}
+            </ReactMarkdown>
         </div>
     )
 }

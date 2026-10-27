@@ -788,20 +788,40 @@ Builds and runs a regression plan for one management-app release. Spec:
   `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
   `remote/testing-plan.md` (the downloaded asset), `public/testing-plan.md` (what
   was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
-  `results-<env>.json`, `regression-results-<env>-<stamp>.md` and
-  `security-results-<env>.md`.
+  `created-<env>.json` (what the run created, for cleanup), `results-<env>.json`,
+  `regression-results-<env>-<stamp>.md` and `security-results-<env>.md`.
 - `plan.md` has five fixed sections: Summary, Baseline, Changes, Security,
-  Technical appendix. Test lines are `- [R-<pr>-<n>] <title> — <steps>` and
-  `- [S-<n>] …`; `(staging only)` at the end marks an active probe.
+  Technical appendix. Baseline and Security lines are `- [BASELINE] …` and
+  `- [S-<n>] <title> — <steps>`; `(staging only)` at the end marks an active probe
+  or bad input. Changes lines are `- <g>.<n> <title> — <steps> ([PR #<pr>](<url>))`
+  under run group headings `### <g>. <Role> · <no study | study with …>`.
   `qar plan-lines` parses them into an inventory-shaped file so `results-check`
   gates a run unchanged (its `--inventory` flag accepts a plan-lines file);
   `--env production` rejects PASS/FAIL on a staging-only line. `plan-lines`
   rejects a malformed bullet that holds a bracketed token in Baseline, Changes or
   Security, instead of dropping it. It accepts CRLF. Security is the one optional
   section, because the public asset has none.
+- **The plan reads in the order it is run**, so a person can run it by hand as
+  efficiently as the session. `qar plan-order` (`src/engine/plan-order.ts`) sorts
+  Changes: no-study checks first, grouped by role; then ONE study moved through
+  the `study-happy-path` stages (`STAGES`), each check run while the study is at
+  the stage it needs. At a stage the groups start as the role already signed in
+  and end as the role that moves the study on, so each role signs in once per
+  stage at most. A check marked `(ends the study)` (a rejection, a delete) is
+  either the walk's last check or gets a study of its own. `plan-order` writes
+  the `> Next:` setup steps and the `> Last:` cleanup, numbers every line and
+  links every PR. It refuses, writing nothing, when Changes holds any other text,
+  since a rewrite would drop it. The plan skill runs it after writing the plan
+  and after every edit to Changes.
+- The ids are positions (`3.2` = group 3, check 2) so a tester sees where they
+  are. Security keeps `S-<n>`: `hasSecurityContent` finds a Security line by that
+  token, and a weaker token would weaken the public-asset guard.
+- **Production runs create data.** Only S- probes and bad-input checks are
+  staging only. What a run creates gets natural titles and descriptions and is
+  deleted at the end with `qar cleanup` as admin.
 - **Completeness is gated.** With `prs.json` beside the plan (or `--prs`),
-  `plan-lines` reports `PR #n has no test line` and `R-<n>-k: PR #n is not in the
-  release`. A downloaded asset in `remote/` has no `prs.json` beside it, so a run
+  `plan-lines` reports `PR #n has no test line` and `<g>.<n> <title>: PR #n is not
+  in the release`. The PR number comes from the line's `(PR #n)` link. A downloaded asset in `remote/` has no `prs.json` beside it, so a run
   is not gated on it.
 - **management-app is public, so its release assets are too. The Security section
   never leaves the machine.** The plan asset is `testing-plan.md`: `release-upload`
@@ -874,8 +894,9 @@ Builds and runs a regression plan for one management-app release. Spec:
   `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
   pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
   (per `knownJiraServers`), `gh pr view/diff`, `qar release-*`/`plan-lines`/
-  `results-*`, read-only shell and file edits; the plan adds `Agent`; the run adds
-  chrome-devtools, `session-login` and `jira-create-issue`.
+  `results-*`, read-only shell and file edits; the plan adds `Agent` and
+  `plan-order`; the run adds chrome-devtools, `session-login`, `cleanup` and
+  `jira-create-issue`.
 - **Why Save can be disabled with no session live:** Save is an instruction to the
   plan session ("save the plan" sent to the PTY), not an upload the GUI makes. With
   no live session nothing would receive it, so Save needs a session, the push right,
@@ -1046,6 +1067,7 @@ soft wrap had folded "Decisions needed" into one paragraph.
 - `pnpm qar release-download --tag v1.6.9 [--asset testing-plan.md] [--remote-only] [--force]`
 - `pnpm qar release-upload --tag v1.6.9 --file .tmp/release/v1.6.9/plan.md --as testing-plan.md`
 - `pnpm qar plan-lines --input .tmp/release/v1.6.9/plan.md --tag v1.6.9 [--prs …] [--security-from …]`
+- `pnpm qar plan-order --input .tmp/release/v1.6.9/plan.md` — sort Changes into run order
 - `pnpm qar results-check --inventory .tmp/release/v1.6.9/plan-lines.json --results … [--env production]`
 - `pnpm qar results-render --tag v1.6.9 --env staging --plan … --results …`
 - `pnpm qar release-saved --tag v1.6.9 --asset testing-plan.md [--url …]`

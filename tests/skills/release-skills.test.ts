@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { commandNames } from '@/cli/help'
+import { ROLES, STAGES } from '@/engine/plan-order'
 
 // A skill that names a qar command that does not exist sends the session into a
 // retry loop. This pins every `qar <command>` in both release skills to help.ts.
@@ -87,9 +88,41 @@ describe('qa-release-plan', () => {
         expect(src).toContain('(staging only)')
     })
 
-    it('orders Changes by impact with the three levels', () => {
-        expect(src).toContain('ordered by impact')
-        expect(src).toContain('impact')
+    it('keeps the three impact levels, but no longer sorts Changes by them', () => {
         for (const w of ['high', 'medium', 'low']) expect(src).toContain(w)
+        expect(src).not.toContain('ordered by impact')
+    })
+
+    // A stage or role the skill names but the code does not know makes plan-order
+    // refuse every plan the session writes.
+    it('names every role, stage key and stage label the code knows', () => {
+        for (const role of ROLES) expect(src).toContain(`\`${role}\``)
+        for (const stage of STAGES) {
+            expect(src).toContain(`\`${stage.key}\``)
+            expect(src).toContain(stage.label)
+        }
+    })
+
+    it('sorts with plan-order after writing, after edits, and before saving', () => {
+        expect(src.match(/qar plan-order/g)?.length).toBeGreaterThanOrEqual(3)
+        expect(src).toMatch(/do not sort by hand/)
+    })
+})
+
+describe('qa-release-run', () => {
+    const src = fs.readFileSync(
+        path.resolve(__dirname, '../../.claude/skills/qa-release-run/SKILL.md'),
+        'utf8'
+    )
+
+    it('runs the plan top to bottom and does the Next steps', () => {
+        expect(src).toMatch(/do not reorder/)
+        expect(src).toContain('> Next:')
+    })
+
+    it('creates data on production with natural names and deletes it at the end', () => {
+        expect(src).not.toMatch(/Create nothing there/)
+        expect(src).toMatch(/natural title and description/)
+        expect(src).toContain('qar cleanup --env <env>')
     })
 })

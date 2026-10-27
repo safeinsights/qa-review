@@ -1,4 +1,5 @@
 import type { Inventory, InventoryLine } from './inventory'
+import { LINE_FORM, type ParsedHeading, parseChangeLine, parseGroupHeading } from './plan-order'
 
 export const PLAN_SECTIONS = [
     'Summary',
@@ -16,17 +17,72 @@ export class PlanLinesError extends Error {
 }
 
 const SECTION_HEADING = /^## (.+?)\s*$/
-const PR_HEADING = /^### #(\d+)\b/
 const TAGGED_LINE = /^- \[([A-Z]+(?:-\d+)*)\]\s*(.*)$/
 const BULLET_WITH_TOKEN = /^\s*[-*+]\s*\[([^\]]+)\]/
-const TEST_SECTIONS: readonly (SectionName | null)[] = ['Baseline', 'Changes', 'Security']
+const TEST_SECTIONS: readonly (SectionName | null)[] = ['Baseline', 'Security']
 const STAGING_ONLY = /\s*\(staging only\)\s*$/i
 
-function lineKindFor(id: string): 'baseline' | 'changes' | 'security' | null {
+function lineKindFor(id: string): 'baseline' | 'security' | null {
     if (id === 'BASELINE') return 'baseline'
-    if (/^R-\d+-\d+$/.test(id)) return 'changes'
     if (/^S-\d+$/.test(id)) return 'security'
     return null
+}
+
+const BULLET = /^\s*[-*+]\s/
+
+// A Changes line is "<group>.<n> …" under a run group heading. The number is its
+// place in the run, so it must match the group it sits in; `qar plan-order` renumbers
+// after an edit.
+function changesLine(
+    raw: string,
+    group: ParsedHeading | null,
+    problems: string[]
+): InventoryLine | null {
+    const parsed = parseChangeLine(raw)
+    if (parsed === null) {
+        if (BULLET.test(raw))
+            problems.push(`${raw.trim()}: a test line is "${LINE_FORM}" at column 0`)
+        return null
+    }
+    if (typeof parsed === 'string') {
+        problems.push(parsed)
+        return null
+    }
+    const name = parsed.number ?? parsed.title
+    if (!group) {
+        problems.push(`${name}: is not under a run group heading`)
+        return null
+    }
+    if (!parsed.number) {
+        problems.push(`${name}: has no number — run qar plan-order`)
+        return null
+    }
+    if (Number(parsed.number.split('.')[0]) !== group.number) {
+        problems.push(`${name}: is under group ${group.number} — run qar plan-order`)
+        return null
+    }
+    if (parsed.pr === undefined) {
+        problems.push(`${name}: needs "([PR #<n>](<url>))" at the end`)
+        return null
+    }
+    if (parsed.endsStudy && group.needs === 'none') {
+        problems.push(`${name}: "(ends the study)" needs a group with a study`)
+        return null
+    }
+    return {
+        id: parsed.number,
+        title: parsed.title,
+        kind: 'check',
+        text: parsed.steps,
+        source: { type: 'card', ref: 'plan' },
+        section: 'changes',
+        pr: parsed.pr,
+        prUrl: parsed.prUrl,
+        stagingOnly: parsed.stagingOnly,
+        role: group.role,
+        needs: group.needs,
+        endsStudy: parsed.endsStudy,
+    }
 }
 
 // Security is the one optional section: the public asset (testing-plan.md) is the
@@ -34,8 +90,8 @@ function lineKindFor(id: string): 'baseline' | 'changes' | 'security' | null {
 const OPTIONAL_SECTIONS: readonly SectionName[] = ['Security']
 
 export interface PlanLinesOptions {
-    // The PR numbers of the release (prs.json). Given, every PR needs an R- line and
-    // every R- line needs a PR in the release.
+    // The PR numbers of the release (prs.json). Given, every PR needs a Changes line
+    // and every Changes line needs a PR in the release.
     prs?: number[]
 }
 
@@ -48,7 +104,7 @@ export function completenessProblems(lines: InventoryLine[], prs: number[]): str
     const inRelease = new Set(prs)
     for (const l of lines) {
         if (l.section === 'changes' && l.pr !== undefined && !inRelease.has(l.pr)) {
-            problems.push(`${l.id}: PR #${l.pr} is not in the release`)
+            problems.push(`${l.id} ${l.title}: PR #${l.pr} is not in the release`)
         }
     }
     return problems
@@ -65,8 +121,16 @@ export function parsePlanLines(
     const lines: InventoryLine[] = []
     const seenSections: string[] = []
     let section: SectionName | null = null
-    let pr: number | undefined
+    let group: ParsedHeading | null = null
     const ids = new Set<string>()
+    const addId = (id: string): boolean => {
+        if (ids.has(id)) {
+            problems.push(`${id}: duplicate id`)
+            return false
+        }
+        ids.add(id)
+        return true
+    }
 
     for (const raw of markdown.split(/\r?\n/)) {
         const heading = SECTION_HEADING.exec(raw)
@@ -75,13 +139,23 @@ export function parsePlanLines(
             if ((PLAN_SECTIONS as readonly string[]).includes(name)) {
                 section = name as SectionName
                 seenSections.push(name)
-                pr = undefined
+                group = null
             }
             continue
         }
-        const prHead = PR_HEADING.exec(raw)
-        if (prHead) {
-            pr = Number(prHead[1])
+        if (section === 'Changes') {
+            const heading = parseGroupHeading(raw)
+            if (typeof heading === 'string') {
+                problems.push(heading)
+                group = null
+                continue
+            }
+            if (heading) {
+                group = heading
+                continue
+            }
+            const line = changesLine(raw, group, problems)
+            if (line && addId(line.id)) lines.push(line)
             continue
         }
         const tagged = TAGGED_LINE.exec(raw)
@@ -97,23 +171,18 @@ export function parsePlanLines(
         }
         const id = tagged[1]
         let rest = tagged[2]
-        if (ids.has(id)) {
-            problems.push(`${id}: duplicate id`)
-            continue
-        }
-        ids.add(id)
+        if (!addId(id)) continue
         const kind = lineKindFor(id)
         if (!kind) {
-            problems.push(`${id}: ids are BASELINE, R-<pr>-<n> or S-<n>`)
+            problems.push(`${id}: ids in Baseline and Security are BASELINE or S-<n>`)
             continue
         }
         const expected: Record<typeof kind, SectionName> = {
             baseline: 'Baseline',
-            changes: 'Changes',
             security: 'Security',
         }
         if (section !== expected[kind]) {
-            const prefix = kind === 'baseline' ? 'the BASELINE' : `an ${id[0]}-`
+            const prefix = kind === 'baseline' ? 'the BASELINE' : 'an S-'
             problems.push(`${id}: ${prefix} line belongs in ${expected[kind]}`)
             continue
         }
@@ -125,10 +194,6 @@ export function parsePlanLines(
             problems.push(`${id}: needs "<title> — <steps>"`)
             continue
         }
-        if (kind === 'changes' && pr !== undefined && Number(id.split('-')[1]) !== pr) {
-            problems.push(`${id}: is under PR #${pr}`)
-            continue
-        }
         lines.push({
             id,
             title: title.trim(),
@@ -136,7 +201,6 @@ export function parsePlanLines(
             text,
             source: { type: 'card', ref: 'plan' },
             section: kind,
-            pr: kind === 'changes' ? Number(id.split('-')[1]) : undefined,
             stagingOnly,
         })
     }

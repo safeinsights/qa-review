@@ -232,21 +232,21 @@ describe('release commands', () => {
             expect(fs.readFileSync(file, 'utf8')).toBe(remote)
         })
 
-        it('--force drops R- edits but keeps the local Security section in place', async () => {
+        it('--force drops Changes edits but keeps the local Security section in place', async () => {
             const { releaseDownloadCommand } = await import('@/cli/commands/release')
-            const assetPlan = '## Changes\n- [R-1-1] asset line — s\n\n## Technical appendix\nB\n'
+            const assetPlan = '## Changes\n- 1.1 asset line — s\n\n## Technical appendix\nB\n'
             const ghPlan = async (args: string[]) => {
                 const dir = args[args.indexOf('--dir') + 1]
                 fs.writeFileSync(path.join(dir, 'testing-plan.md'), assetPlan)
                 return ''
             }
             const file = await local(
-                '## Changes\n- [R-1-1] my edit — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
+                '## Changes\n- 1.1 my edit — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
             )
             const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
             await releaseDownloadCommand({ tag: 'v2', force: 'true' }, vars, ghPlan)
             expect(fs.readFileSync(file, 'utf8')).toBe(
-                '## Changes\n- [R-1-1] asset line — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
+                '## Changes\n- 1.1 asset line — s\n\n## Security\n- [S-1] t — p\n\n## Technical appendix\nB\n'
             )
             expect(JSON.parse(String(write.mock.calls[0][0])).plan).toBe(
                 'replaced (local Security section kept)'

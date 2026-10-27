@@ -104,23 +104,48 @@ Fixed sections, in this order:
 
 1. **Summary** — plain language, by feature. For PMs.
 2. **Baseline** — one line: run `release-happy-path`.
-3. **Changes** — one subsection per PR. Each has one or more test lines:
-   `- [R-1112-1] <title> — <steps to check>`. Line IDs are `R-<pr>-<n>`.
+3. **Changes** — the PR test lines in run order (see "Run order" below), in
+   run groups `### <g>. <Role> · <no study | study with …>`. Each line is
+   `- <g>.<n> <title> — <steps to check> ([PR #1112](<url>))`. The id is the
+   line's place in the run.
 4. **Security** — findings from the diff review, each a line
    `- [S-<n>] <title> — <probe or check>`. A line that needs an active probe
    ends with `(staging only)`. PRs reviewed with no finding are listed.
 5. **Technical appendix** — per PR: files, migrations, flags, routes, Jira
    links. Ends with "PRs missing from the release notes".
 
+### Run order
+
+The plan reads in the order it is run, so a person can run it by hand as
+efficiently as the session. Each Changes line has a `role` (admin, researcher,
+reviewer) and a `needs`: `none` or one study stage from `study-happy-path`
+(draft proposal → submitted → approved → code submitted → code changes
+requested → code approved → results to review → approved results).
+`qar plan-order` sorts the section:
+
+1. Checks with no study, grouped by role, ending as the researcher.
+2. One study moved through the stages up to the last one a check needs. At
+   each stage, the groups start as the role signed in and end as the role that
+   moves the study on. The code-changes stage is entered only when a check
+   needs it.
+3. A check marked `(ends the study)` is the last check of that walk, or gets a
+   new study of its own.
+4. `> Next:` setup steps between groups, and a `> Last:` step that deletes
+   what the run created.
+
+Production runs create data too: natural titles and descriptions, deleted at
+the end with `qar cleanup`. Only active probes and bad input are staging only.
+
 ### `plan-lines.json`
 
-The machine form of the `R-`/`S-` lines. `qar plan-lines --input plan.md`
+The machine form of the test lines. `qar plan-lines --input plan.md`
 parses the IDs out of the markdown, so the markdown stays the single source
 and the user can edit it freely.
 
 ```json
-{ "lines": [{ "id": "R-1112-1", "title": "…", "section": "changes",
-              "pr": 1112, "stagingOnly": false }] }
+{ "lines": [{ "id": "3.1", "title": "…", "section": "changes",
+              "pr": 1112, "role": "reviewer", "needs": "proposal-submitted",
+              "endsStudy": false, "stagingOnly": false }] }
 ```
 
 ### `results-<env>.json`
@@ -164,7 +189,8 @@ In `bin/qar.ts` and `src/engine/release.ts`.
 | `qar release-status --tag v1.6.9` | assets on the release, local files, whether the local plan differs from the asset, `canUpload` | JSON |
 | `qar release-download --tag … --asset regression-plan.md` | `gh release download` into `.tmp/release/<tag>/` | path |
 | `qar release-upload --tag … --file plan.md [--as regression-plan.md]` | `gh release upload --clobber` | asset URL |
-| `qar plan-lines --input plan.md` | parses `[R-…]`/`[S-…]` lines; rejects duplicate IDs and sections out of order | `plan-lines.json` |
+| `qar plan-lines --input plan.md` | parses the Changes and `[S-…]` lines; rejects duplicate IDs and sections out of order | `plan-lines.json` |
+| `qar plan-order --input plan.md` | sorts Changes into run order, writes the setup steps, numbers lines, links PRs | `plan.md`, in place |
 | `qar results-check --plan plan-lines.json --results results-staging.json --env staging` | the existing gate, extended to accept plan lines as the inventory; with `--env production` rejects a `stagingOnly` line that is PASS or FAIL | problems list |
 | `qar results-render --results … --plan …` | builds `results-<env>.md`: counts, each line's result and evidence, screenshot links | path |
 
@@ -236,7 +262,8 @@ Opening prompt from `gui/prompts/release-run.md` with `{{tag}}`, `{{env}}`.
 Tab **Release** (`gui/frontend/src/components/ReleaseTab.tsx`), after
 Validation. Three phases, one component each.
 
-- **`ReleasePicker`** — a `Select` from `qar release-list`, or a typed tag.
+- **`ReleasePicker`** — a `Select` from `qar release-list`. There is no typed
+  tag: a tag with no GitHub release has nowhere to hold the assets.
   On pick it calls `release-status` and goes to Plan.
 - **`ReleasePlan`** — full-width editor on top, Claude terminal below (the
   existing `Terminal` component), and a status row between them: the
@@ -378,12 +405,12 @@ stays in PR-number order. Security is ordered by severity as before.
 4. **Writes to management-app**: `gh release upload` and
    `gh release edit --notes-file` only. Release sessions get a release-specific
    allowlist (read-only Jira issue tool, `gh pr view/diff`, the `qar release-*`,
-   `plan-lines`, `results-*`, `session-login` commands, `jira-create-issue` in
-   the run session, Read/Write/Edit, Agent in the plan session, chrome-devtools
-   in the run session), not the Validation list.
+   `plan-lines`, `results-*`, `session-login` commands, `plan-order` and Agent
+   in the plan session, `cleanup`, `jira-create-issue` and chrome-devtools in
+   the run session, Read/Write/Edit), not the Validation list.
 5. **Completeness is gated**: `plan-lines` reads `prs.json` beside the plan and
-   reports every PR without an `R-<n>-*` line, and any `R-` line whose PR is not
-   in the compare.
+   reports every PR without a Changes line, and any Changes line whose PR is
+   not in the compare.
 
 Clarification: because the public asset cannot list Security lines, a production
 run has none to record — they are absent from the public results, not

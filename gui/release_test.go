@@ -132,7 +132,7 @@ func TestReleaseSavedWatchSecondStartClosesFirst(t *testing.T) {
 }
 
 func TestPlanLinesProblems(t *testing.T) {
-	want := "plan-lines found 2 problem(s):\nR-1-1: duplicate id\nmissing section \"Security\""
+	want := "plan-lines found 2 problem(s):\n1.1: duplicate id\nmissing section \"Security\""
 	packaged := "Error: " + want
 	dev := "> qa-review@1.0.0 qar /repo\n> tsx bin/qar.ts \"plan-lines\"\n\n" + packaged + "\n\n ELIFECYCLE  Command failed with exit code 1."
 	for name, in := range map[string]string{"packaged": packaged, "dev": dev} {
@@ -196,10 +196,13 @@ func TestReleaseAllowlistsAreNarrow(t *testing.T) {
 	if !strings.Contains(plan, ",Agent,") || strings.Contains(run, ",Agent,") {
 		t.Error("Agent belongs to the plan session only")
 	}
-	for _, tool := range []string{"mcp__chrome-devtools", "Bash(qar session-login:*)", "Bash(qar jira-create-issue:*)"} {
+	for _, tool := range []string{"mcp__chrome-devtools", "Bash(qar session-login:*)", "Bash(qar cleanup:*)", "Bash(qar jira-create-issue:*)"} {
 		if !strings.Contains(run, ","+tool+",") || strings.Contains(plan, ","+tool+",") {
 			t.Errorf("%s belongs to the run session only", tool)
 		}
+	}
+	if !strings.Contains(plan, ",Bash(qar plan-order:*),") || strings.Contains(run, ",Bash(qar plan-order:*),") {
+		t.Error("plan-order belongs to the plan session only: the run tests the asset as uploaded")
 	}
 }
 

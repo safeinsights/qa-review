@@ -136,7 +136,9 @@ function render(input: Omit<RenderInput, 'publicOnly'>, title: string): string {
             const prs = [...new Set(lines.map(l => l.pr).filter(pr => pr !== undefined))]
             for (const pr of prs) {
                 const group = lines.filter(l => l.pr === pr)
-                out.push(`### #${pr}`, '', ...table(group, byId, input.secrets), '')
+                const url = group.find(l => l.prUrl)?.prUrl
+                const heading = url ? `### [#${pr}](${url})` : `### #${pr}`
+                out.push(heading, '', ...table(group, byId, input.secrets), '')
             }
             const noPr = lines.filter(l => l.pr === undefined)
             if (noPr.length) out.push('### (no PR)', '', ...table(noPr, byId, input.secrets), '')

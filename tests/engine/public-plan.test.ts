@@ -15,8 +15,8 @@ Words.
 - [BASELINE] Run release-happy-path — qar run
 
 ## Changes
-### #1 x [high]
-- [R-1-1] t — s
+### 1. Researcher · no study
+- 1.1 t — s ([PR #1](https://github.com/o/r/pull/1))
 
 ## Security
 - [S-1] Redirect — probe /signin (staging only)
@@ -36,8 +36,8 @@ Words.
 - [BASELINE] Run release-happy-path — qar run
 
 ## Changes
-### #1 x [high]
-- [R-1-1] t — s
+### 1. Researcher · no study
+- 1.1 t — s ([PR #1](https://github.com/o/r/pull/1))
 
 ## Technical appendix
 ### #1 x

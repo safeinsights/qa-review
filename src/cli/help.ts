@@ -267,14 +267,27 @@ export const COMMANDS = [
     {
         name: 'plan-lines',
         usage: 'qar plan-lines --input <plan.md> --tag <tag> [--output <path.json>] [--prs <prs.json>] [--security-from <plan.md>]',
-        summary: 'Parse the [R-…]/[S-…] test lines out of a regression plan for results-check.',
+        summary: 'Parse the test lines out of a regression plan for results-check.',
         details:
             'Sections must be Summary, Baseline, Changes, Security, Technical appendix in that ' +
-            'order; Security may be absent (the public asset has none). A line is ' +
-            '"- [ID] <title> — <steps>", with "(staging only)" at the end for an active probe. ' +
-            'With prs.json beside the input (or --prs), every PR needs an R- line and every R- ' +
-            'line needs a PR in the release. --security-from adds the S- lines of a local plan. ' +
-            'Default output is plan-lines.json beside the input.',
+            'order; Security may be absent (the public asset has none). Changes holds run ' +
+            'groups ("### <n>. <Role> · <no study | study with …>") of lines "- <n>.<n> <title> ' +
+            '— <steps> ([PR #<n>](<url>))"; Baseline and Security lines are "- [ID] <title> — ' +
+            '<steps>". "(staging only)" at the end marks an active probe or bad input. With ' +
+            'prs.json beside the input (or --prs), every PR needs a Changes line and every ' +
+            'Changes line needs a PR in the release. --security-from adds the S- lines of a ' +
+            'local plan. Default output is plan-lines.json beside the input.',
+    },
+    {
+        name: 'plan-order',
+        usage: 'qar plan-order --input <plan.md>',
+        summary: "Sort a regression plan's Changes section into run order, in place.",
+        details:
+            'Groups the checks by role and study stage so one study moves through its ' +
+            'lifecycle with the fewest sign-ins, writes the Next steps between groups, ' +
+            'renumbers every line and links every PR. A line marked "(ends the study)" ' +
+            'runs last or on a new study. Refuses, changing nothing, if Changes holds ' +
+            'anything other than run groups, test lines and Next notes.',
     },
     {
         name: 'release-list',

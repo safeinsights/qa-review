@@ -21,6 +21,7 @@ import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
 import { planLinesCommand } from '@/cli/commands/plan-lines'
+import { planOrderCommand } from '@/cli/commands/plan-order'
 import { rekeyCommand } from '@/cli/commands/rekey'
 import {
     releaseDownloadCommand,
@@ -139,6 +140,8 @@ async function main() {
             return resultsCheckCommand(opts)
         case 'plan-lines':
             return planLinesCommand(opts)
+        case 'plan-order':
+            return planOrderCommand(opts, await loadSettings())
         case 'release-list':
             return releaseListCommand(opts, await loadSettings())
         case 'release-prs':

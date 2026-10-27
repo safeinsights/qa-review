@@ -14,8 +14,8 @@ x
 - [BASELINE] Run release-happy-path — qar run
 
 ## Changes
-### #1 a [high]
-- [R-1-1] t — s
+### 1. Researcher · no study
+- 1.1 t — s ([PR #1](https://github.com/o/r/pull/1))
 
 ## Security
 - [S-1] Redirect — probe (staging only)
@@ -68,6 +68,6 @@ describe('plan-lines', () => {
         const ids = JSON.parse(fs.readFileSync(output, 'utf8')).lines.map(
             (l: { id: string }) => l.id
         )
-        expect(ids).toEqual(['BASELINE', 'R-1-1', 'S-1'])
+        expect(ids).toEqual(['BASELINE', '1.1', 'S-1'])
     })
 })
