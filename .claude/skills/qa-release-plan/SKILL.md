@@ -64,7 +64,24 @@ substituted before dispatch:
 > - `technicalSummary`: files, migrations, flags, routes, env vars, jobs.
 > - `testLines`: 1–4 concrete checks that the change IS in the build, each
 >   with the steps a tester follows and what they see. A dependency bump
->   gets one line: "app still loads".
+>   gets one line: "app still loads", with `role` researcher and `needs` none,
+>   so all of them land in one group and the run checks once.
+>   - If the check needs what the run's browser does not have — Sentry, the
+>     Coder admin CLI, an email inbox, an SMS phone, a second account of one
+>     role, two tabs open at the same time, or data from before the release —
+>     start `steps` with `Requires <what>.` The run asks about these lines
+>     before it starts.
+>   - Never change a shared account's security key, password, MFA or org role,
+>     or a live data partner's code environments or data sources: other testers
+>     and CI use them. Write the check for a new invited user, or for an
+>     environment the check creates and then deletes. Never write a step that
+>     the app says cannot be undone (for example adding a Test Lab).
+>   - Do not name ids, people or records from one env (a QA study id, a QA
+>     member). Say what the check needs ("a study whose results were encrypted
+>     before this release"), so it runs on any env.
+>   - Write a signed-out check as "with no session", not "in a private window".
+>     A check of the sign-in screens uses a new invited user, so nobody types a
+>     shared account's password.
 >   - `role`: `admin`, `researcher` or `reviewer` — who is signed in.
 >   - `needs`: `none`, or the study stage the check needs: `proposal-draft`,
 >     `proposal-submitted`, `proposal-approved`, `code-submitted`,
@@ -157,8 +174,9 @@ every PR in `prs.json` needs at least one Changes line (`PR #n has no test
 line`), and every Changes line needs its PR in the release (`<g>.<n> <title>:
 PR #n is not in the release`). If it lists problems, fix the plan and run it
 again. Do not say
-"ready" before it passes. Then report: PRs, plus `lines`, `security` and `stagingOnly` from that JSON, and
-`notesMissing` from `release-prs` — and wait.
+"ready" before it passes. Then report: PRs, plus `lines`, `security` and `stagingOnly` from that JSON,
+`notesMissing` from `release-prs`, and the Changes lines whose steps start with
+`Requires` (by id, with what each one requires) — and wait.
 
 ## Phase 4: edit together
 - The user may edit `plan.md` in the editor; **Read it again before any edit**.

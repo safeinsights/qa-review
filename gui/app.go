@@ -504,12 +504,17 @@ func releaseShared() []string {
 // own subagent) and plan-order, which sorts the plan into run order.
 var releasePlanAllowedTools = append(releaseShared(), "Agent", "Bash(qar plan-order:*)")
 
-// releaseRunAllowedTools adds the browser, the login helper, cleanup of the studies
-// and users the run creates, and the one Jira write the run may make: a single card
-// for the security results, and only on request.
+// releaseRunAllowedTools adds the browser, the login helper, the disposable users the
+// skill uses instead of changing a shared account (session-create-user, invite and
+// totp for a hand-driven signup), cleanup of the studies and users the run creates,
+// and the one Jira write the run may make: a single card for the security results,
+// and only on request.
 var releaseRunAllowedTools = append(releaseShared(),
 	"mcp__chrome-devtools",
 	"Bash(qar session-login:*)",
+	"Bash(qar session-create-user:*)",
+	"Bash(qar invite:*)",
+	"Bash(qar totp:*)",
 	"Bash(qar cleanup:*)",
 	"Bash(qar jira-create-issue:*)",
 )

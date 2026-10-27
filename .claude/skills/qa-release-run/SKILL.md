@@ -37,6 +37,49 @@ upload the results as a release asset.
   input and is NOT TESTED on production.
 - **management-app is public, and so is every release asset.** Security lines and
   their results never leave this machine.
+- **Write each result as soon as you have it.** Append one JSON object per line to
+  `.tmp/release/<tag>/results-<env>.jsonl`. A long run can stop at any time, and a
+  result that is only in the conversation is lost when it does.
+
+## Shared accounts and disposable users
+The admin, researcher and reviewer accounts are shared by every tester and by CI.
+- **Never change a shared account's** security key, password, MFA or org role. A key
+  reset replaces the account's public key, and the results key in settings then
+  stops decrypting results for everyone. A line that needs one of these changes
+  runs on a disposable user, or it is `NOT TESTED` with the runner's approval.
+- **Never type a shared account's password.** It would be in the transcript. For a
+  check of the sign-in screens themselves (a wrong password, the MFA picker, the
+  back link, page layout), sign in as a disposable user.
+- **Never change a live data partner's** code environments or data sources that
+  studies use. Create your own (natural name, testing image) and delete it.
+- **Never do what the app says cannot be undone** (for example "Add Test Lab": "This
+  selection cannot be reversed") unless the runner approves it.
+
+To make a disposable user:
+- **With a security key:** `qar session-create-user --role researcher|reviewer`. It
+  prints `{userId, email}`.
+- **Without a key, or to see the MFA enrolment screens:** `qar invite --role
+  researcher|reviewer` prints an `inviteUrl`. Sign out (account menu > Log out),
+  open the URL, choose Create New Account and give a natural first and last name.
+  On the authenticator screen, read the setup key from the page and get codes with
+  `qar totp --secret <key>`. Keep the key in `.tmp/release/<tag>/`, never in
+  evidence. The user id is in the `__session` cookie: decode the JWT payload and
+  read `userMetadata.user.id`.
+- Write every user id to `created-<env>.json` at once.
+
+## Browser constraints
+- **Sign out with the account menu's Log out.** `window.Clerk.signOut()` from
+  `evaluate_script` can hang the tool for two minutes.
+- **A TOTP code works once.** Clerk refuses a code it already accepted. If you type
+  a code by hand and need another for the same account, wait for the next 30 s
+  window. `qar session-login` waits by itself.
+- **"Signed out" or "in a private window":** do not sign out the session. Use
+  `evaluate_script` with `fetch(url, { credentials: 'omit' })` and read the status,
+  the final URL and the body.
+- **"Opens in a new tab":** check the link's `href` and `target="_blank"`, then open
+  the `href` in the same tab and check the page.
+- **Two tabs at the same time** (for example "look at tab B without reloading"):
+  this session cannot do it. Ask the runner in Phase 1.
 
 ## Phase 1: the plan
 1. `qar release-download --tag <tag> --remote-only` — lands as
@@ -47,9 +90,23 @@ upload the results as a release asset.
    - It exists: `qar plan-lines --input .tmp/release/<tag>/remote/testing-plan.md --tag <tag> --security-from .tmp/release/<tag>/plan.md --output .tmp/release/<tag>/run-plan-lines-<env>.json`
    - It does not exist, or the env is **production**: `qar plan-lines --input .tmp/release/<tag>/remote/testing-plan.md --tag <tag> --output .tmp/release/<tag>/run-plan-lines-<env>.json`
    It must print `"ok":true`. If it fails, show the problems and stop.
-3. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
-   output. On staging with no local plan, say that the security lines cannot run
-   from this machine. Wait for the user's go.
+3. Read every line's steps and list the lines this session cannot do:
+   - steps that start with `Requires` (the plan skill marks access the browser
+     does not have: Sentry, the Coder admin CLI, an email inbox, an SMS phone, a
+     second account of one role, data from before the release);
+   - lines that need two tabs at the same time;
+   - lines that change a shared account or do something the app cannot undo (see
+     "Shared accounts and disposable users"), when no disposable user can stand in;
+   - lines that name data from another env (for example a QA study id) that the
+     target env does not have.
+4. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
+   output, the list from step 3, and an estimate of the time: about 70 lines an
+   hour for the no-study groups, much less for the study groups (a code run in the
+   enclave can take many minutes). On staging with no local plan, say that the
+   security lines cannot run from this machine. Ask which of the step 3 lines to
+   skip, and whether to run all of the plan or only some groups. Wait for the
+   user's go. Each skipped line is `NOT TESTED` with `approvedBy` set to the
+   runner's name and the reason in evidence.
 
 ## Phase 2: the baseline
 Read `.tmp/release/<tag>/baseline-<env>.json`
@@ -84,19 +141,44 @@ For each line, skip `BASELINE` (Phase 2 recorded it):
 - One result per line: `PASS`, `FAIL` (with `severity` blocker|major|minor and
   `area`), or `NOT TESTED` (with `approvedBy` — the user's name when they told
   you to skip it). `evidence` names what you saw and the screenshot path.
-  Never put a credential in evidence.
+  Never put a credential in evidence. Append the result to
+  `results-<env>.jsonl` before you start the next line.
+- When the env does not have what a line needs (an empty table, no study from
+  before the release), record what you could check and ask the runner whether to
+  skip the rest; do not guess a PASS.
+- Several lines can ask for the same check (for example "App still loads" for one
+  role, once per dependency PR). Do the check once; give each line its own
+  result with the same evidence.
+- Code environments and data sources you create are not deleted by `qar
+  cleanup`. Delete them in the UI as soon as their lines are done. Unlink a data
+  source from its environment first: both delete buttons are disabled while
+  they are linked.
 
 Last, the `> Last:` step: delete everything in `created-<env>.json`. Sign in as
 admin (`qar session-login --role admin`), read an admin token in the browser
-with `evaluate_script`:
+with `evaluate_script`, and give the tool a `filePath` under
+`.tmp/release/<tag>/` so the token is not printed:
 ```js
 async () => (await window.Clerk.session.getToken({ skipCache: true })) ?? ''
 ```
-and run `qar cleanup --env <env> --token <jwt> --studies <ids> --users <ids>`.
-A 404 means already deleted. Report any id that did not delete, by name.
+Run `qar cleanup --env <env> --token <jwt> --studies <ids> --users <ids>` with the
+token from that file, then delete the file. The token lasts about a minute, so
+read it just before the cleanup. A 404 means already deleted. Report any id that
+did not delete, by name. Leave data you did not create (for example the
+baseline's study) unless the runner tells you to delete it.
+
+### When the runner stops the run early
+1. Do the `> Last:` cleanup for everything created so far.
+2. Build `results-<env>.json` from `results-<env>.jsonl`. Every line with no result
+   is `NOT TESTED`, `approvedBy` the runner's name, evidence "Run stopped by the
+   runner before this line was tested." Write a small script under
+   `.tmp/release/<tag>/` that reads `run-plan-lines-<env>.json` for the line ids.
+3. Do Phase 4 steps 2, 3 and 6. Ask before steps 4 and 5: a mostly NOT TESTED
+   result on a public release can look like a finished run.
 
 ## Phase 4: gate, render, upload
-1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`.
+1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`, one entry
+   per line of `results-<env>.jsonl`.
 2. `qar results-check --inventory .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
    — must print `"ok":true`. Fix every listed gap first.
 3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json`

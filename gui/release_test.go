@@ -196,7 +196,7 @@ func TestReleaseAllowlistsAreNarrow(t *testing.T) {
 	if !strings.Contains(plan, ",Agent,") || strings.Contains(run, ",Agent,") {
 		t.Error("Agent belongs to the plan session only")
 	}
-	for _, tool := range []string{"mcp__chrome-devtools", "Bash(qar session-login:*)", "Bash(qar cleanup:*)", "Bash(qar jira-create-issue:*)"} {
+	for _, tool := range []string{"mcp__chrome-devtools", "Bash(qar session-login:*)", "Bash(qar session-create-user:*)", "Bash(qar invite:*)", "Bash(qar totp:*)", "Bash(qar cleanup:*)", "Bash(qar jira-create-issue:*)"} {
 		if !strings.Contains(run, ","+tool+",") || strings.Contains(plan, ","+tool+",") {
 			t.Errorf("%s belongs to the run session only", tool)
 		}
