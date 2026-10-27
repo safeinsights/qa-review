@@ -1,11 +1,12 @@
-import { Alert, Button, Select, TextInput } from '@mantine/core'
+import { Alert, Button, Select } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { listReleases } from '../lib/ipc'
 
-// Pick a release: the newest tags from gh, or a typed tag.
+// Pick a release from the ones gh lists. There is no typed-tag input: a tag with no
+// GitHub release has nowhere to hold the plan and results assets.
 export function ReleasePicker({ onPick }: { onPick: (tag: string) => void }) {
     const [tags, setTags] = useState<string[]>([])
-    const [typed, setTyped] = useState('')
+    const [tag, setTag] = useState('')
     const [error, setError] = useState('')
 
     useEffect(() => {
@@ -14,7 +15,6 @@ export function ReleasePicker({ onPick }: { onPick: (tag: string) => void }) {
             .catch(e => setError(String(e)))
     }, [])
 
-    const tag = typed.trim()
     return (
         <div
             style={{
@@ -31,19 +31,12 @@ export function ReleasePicker({ onPick }: { onPick: (tag: string) => void }) {
                 <Select
                     label="Release"
                     data={tags}
-                    value={tags.includes(tag) ? tag : null}
-                    onChange={v => v && setTyped(v)}
+                    value={tag || null}
+                    onChange={v => setTag(v ?? '')}
                     placeholder="newest first"
                     searchable
                     w={220}
                     comboboxProps={{ withinPortal: true }}
-                />
-                <TextInput
-                    label="or type a tag"
-                    value={typed}
-                    onChange={e => setTyped(e.currentTarget.value)}
-                    placeholder="v1.6.9"
-                    w={160}
                 />
                 <Button onClick={() => onPick(tag)} disabled={!tag} color="teal" radius="md">
                     Open
