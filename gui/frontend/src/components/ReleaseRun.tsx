@@ -7,7 +7,7 @@ import {
     RELEASE_ENVS,
     type ReleaseStatus,
 } from '../lib/ipc'
-import { Terminal } from './Terminal'
+import { ReleaseRunLive } from './ReleaseRunLive'
 import { baselineLabel, useBaseline } from './useBaseline'
 
 // A finished run uploads its results asset; refresh so History shows it. The
@@ -85,6 +85,7 @@ export function ReleaseRun({
     tag,
     status,
     sessionLive,
+    screencastPort,
     onStart,
     onStop,
     onBack,
@@ -94,6 +95,7 @@ export function ReleaseRun({
     tag: string
     status: ReleaseStatus
     sessionLive: boolean
+    screencastPort: number | null
     onStart: (env: string) => void
     onStop: () => void
     onBack: () => void
@@ -145,19 +147,12 @@ export function ReleaseRun({
             <Note text={run.blocked} />
             <Note text={run.baselineText} />
             <Note text={run.error} danger />
-            <section
-                style={{
-                    background: '#0f1419',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    overflow: 'hidden',
-                    height: 'min(55vh, 640px)',
-                    padding: 8,
-                    marginTop: 12,
-                }}
-            >
-                <Terminal />
-            </section>
+            <ReleaseRunLive
+                tag={tag}
+                env={run.env}
+                sessionLive={sessionLive}
+                screencastPort={screencastPort}
+            />
             <HistoryTable rows={run.results} />
         </div>
     )

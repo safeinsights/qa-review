@@ -37,9 +37,13 @@ upload the results as a release asset.
   input and is NOT TESTED on production.
 - **management-app is public, and so is every release asset.** Security lines and
   their results never leave this machine.
-- **Write each result as soon as you have it.** Append one JSON object per line to
-  `.tmp/release/<tag>/results-<env>.jsonl`. A long run can stop at any time, and a
-  result that is only in the conversation is lost when it does.
+- **Write each result as soon as you have it**, with `qar release-result` (Phase 3).
+  A long run can stop at any time, and a result that is only in the conversation is
+  lost when it does.
+- **Tell the GUI what you are doing.** The runner watches a progress panel above the
+  browser. It reads what `qar release-progress` writes, so run it at each change
+  (Phases 2–4). The runner can also click and type in the browser. If they do, wait
+  for them to say they are done before you go on.
 
 ## Shared accounts and disposable users
 The admin, researcher and reviewer accounts are shared by every tester and by CI.
@@ -99,7 +103,16 @@ To make a disposable user:
      "Shared accounts and disposable users"), when no disposable user can stand in;
    - lines that name data from another env (for example a QA study id) that the
      target env does not have.
-4. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
+4. Check for an earlier run: `qar release-progress --tag <tag> --env <env> --status`.
+   When `done` is more than 0, an earlier session left results. Then also run
+   `qar deployed-release --env <env>` and compare its `label` with the tag:
+   - Same release: offer to resume — "`<done>` of `<total>` lines already have
+     results (`<counts>`), last written `<loggedAt>`. Resume, or start fresh?"
+     Name the `stale` lines, if any: the plan changed since, and they will be
+     tested again.
+   - Another release: say that the env was redeployed since and the earlier
+     results test a different build. Recommend starting fresh.
+5. Report the `lines`, `changes`, `security` and `stagingOnly` values from that
    output, the list from step 3, and an estimate of the time: about 70 lines an
    hour for the no-study groups, much less for the study groups (a code run in the
    enclave can take many minutes). On staging with no local plan, say that the
@@ -109,16 +122,31 @@ To make a disposable user:
    runner's name and the reason in evidence.
 
 ## Phase 2: the baseline
+First start the run log. For a new run:
+`qar release-progress --tag <tag> --env <env> --start` — it keeps any earlier run's
+log under a stamped name. When the runner chose to resume:
+`qar release-progress --tag <tag> --env <env> --resume` — it keeps the log. Then
+`qar release-progress --tag <tag> --env <env> --line BASELINE --note "Recording the baseline result"`.
+
 Read `.tmp/release/<tag>/baseline-<env>.json`
 (`{passed, steps, failedStep, error, reportPath, finishedAt}`). Record the
-`BASELINE` line: PASS with `reportPath` as evidence when `passed` is true;
+`BASELINE` line with `qar release-result` (Phase 3): PASS with `reportPath` as evidence when `passed` is true;
 otherwise FAIL with `severity`, `area`, and `failedStep` and `error` in the
 evidence. If the file is missing, record `NOT TESTED` with `approvedBy: "gui"`
 and evidence "the baseline did not run". **A failed baseline does not stop the
 run**; the other lines still need results.
 
 ## Phase 3: the lines
-The plan is in run order. Go from top to bottom; do not reorder.
+The plan is in run order. Go from top to bottom; do not reorder. The GUI ran the
+baseline again for this session, so record `BASELINE` again on a resume too: the
+new result replaces the old one.
+
+**On a resume**, skip every line that is not in `remaining` from the `--status`
+output. The study does not carry over: the earlier session deleted its study at
+cleanup, or left it at an unknown stage. So at the first group with a study that
+still has a remaining line, create a new study and do every `> Next:` step from the
+first study group down to that group, as setup only: run no test lines on the way.
+Write the new study's id to `created-<env>.json`.
 
 - Each `### <g>. <Role> · <setup>` group names who is signed in. When the role
   changes from the group before, switch with `qar session-login --role <role>`.
@@ -129,9 +157,14 @@ The plan is in run order. Go from top to bottom; do not reorder.
   another study for the group below it; the study before it was ended on
   purpose. If a setup step fails, every line that needs that study is
   `NOT TESTED` with `approvedBy: "setup"` and the failure in evidence; go on
-  with the lines that do not need it.
+  with the lines that do not need it. Before a setup step, run
+  `qar release-progress --tag <tag> --env <env> --step setup --note "<what it does>"`.
 
 For each line, skip `BASELINE` (Phase 2 recorded it):
+- Before you start the line, run
+  `qar release-progress --tag <tag> --env <env> --line <id> --note "<what you do first>"`.
+  Run it again with a new `--note` when the line has a long wait (a workspace
+  launch, an enclave run), so the runner sees why nothing moves.
 - On **production**, a `stagingOnly` line is `NOT TESTED` with
   `approvedBy: "plan"` and evidence `"staging only"`. Do not run its probe.
 - S- lines run on **staging only**, and only when Phase 1 merged them from the local
@@ -141,8 +174,11 @@ For each line, skip `BASELINE` (Phase 2 recorded it):
 - One result per line: `PASS`, `FAIL` (with `severity` blocker|major|minor and
   `area`), or `NOT TESTED` (with `approvedBy` — the user's name when they told
   you to skip it). `evidence` names what you saw and the screenshot path.
-  Never put a credential in evidence. Append the result to
-  `results-<env>.jsonl` before you start the next line.
+  Never put a credential in evidence. Write it before you start the next line:
+  `qar release-result --tag <tag> --env <env> --id <id> --result PASS|FAIL|"NOT TESTED" --evidence "<text>"`,
+  plus `--severity` and `--area` for a FAIL and `--approved-by` for a NOT TESTED.
+  It refuses an entry that results-check would refuse; fix it and run it again. A
+  second result for the same line replaces the first.
 - A line whose steps start with `Known issue <key>:` checks a criterion that QA
   failed and moved to that follow-up card. Its steps describe the behaviour QA saw.
   PASS when the app still behaves that way, and name the key in evidence. FAIL
@@ -160,7 +196,8 @@ For each line, skip `BASELINE` (Phase 2 recorded it):
   source from its environment first: both delete buttons are disabled while
   they are linked.
 
-Last, the `> Last:` step: delete everything in `created-<env>.json`. Sign in as
+Last, the `> Last:` step. Run `qar release-progress --tag <tag> --env <env> --step cleanup --note "Deleting what the run created"`,
+then delete everything in `created-<env>.json`. Sign in as
 admin (`qar session-login --role admin`), read an admin token in the browser
 with `evaluate_script`, and give the tool a `filePath` under
 `.tmp/release/<tag>/` so the token is not printed:
@@ -175,16 +212,16 @@ baseline's study) unless the runner tells you to delete it.
 
 ### When the runner stops the run early
 1. Do the `> Last:` cleanup for everything created so far.
-2. Build `results-<env>.json` from `results-<env>.jsonl`. Every line with no result
-   is `NOT TESTED`, `approvedBy` the runner's name, evidence "Run stopped by the
-   runner before this line was tested." Write a small script under
-   `.tmp/release/<tag>/` that reads `run-plan-lines-<env>.json` for the line ids.
+2. `qar release-results --tag <tag> --env <env> --stopped-by "<runner's name>"`.
+   Every line with no result becomes `NOT TESTED`, approved by the runner, with
+   the evidence "Run stopped by the runner before this line was tested."
 3. Do Phase 4 steps 2, 3 and 6. Ask before steps 4 and 5: a mostly NOT TESTED
    result on a public release can look like a finished run.
 
 ## Phase 4: gate, render, upload
-1. Write `.tmp/release/<tag>/results-<env>.json` as `{"results":[…]}`, one entry
-   per line of `results-<env>.jsonl`.
+1. `qar release-progress --tag <tag> --env <env> --step report --note "Checking and writing the results"`,
+   then `qar release-results --tag <tag> --env <env>`. It writes
+   `results-<env>.json` in run order and refuses while a line has no result.
 2. `qar results-check --inventory .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
    — must print `"ok":true`. Fix every listed gap first.
 3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json`

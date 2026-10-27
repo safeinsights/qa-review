@@ -30,6 +30,11 @@ import {
     releaseStatusCommand,
     releaseUploadCommand,
 } from '@/cli/commands/release'
+import {
+    releaseProgressCommand,
+    releaseResultCommand,
+    releaseResultsCommand,
+} from '@/cli/commands/release-run-log'
 import { releaseSavedCommand } from '@/cli/commands/release-saved'
 import { releaseSummaryCommand } from '@/cli/commands/release-summary'
 import { requestAccessCommand } from '@/cli/commands/request-access'
@@ -154,6 +159,12 @@ async function main() {
             return releaseUploadCommand(opts, await loadSettings())
         case 'release-saved':
             return releaseSavedCommand(opts)
+        case 'release-progress':
+            return releaseProgressCommand(opts)
+        case 'release-result':
+            return releaseResultCommand(opts)
+        case 'release-results':
+            return releaseResultsCommand(opts)
         case 'release-summary':
             return releaseSummaryCommand(opts, await loadSettings())
         case 'results-render':

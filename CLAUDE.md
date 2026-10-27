@@ -790,6 +790,23 @@ Builds and runs a regression plan for one management-app release. Spec:
   was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
   `created-<env>.json` (what the run created, for cleanup), `results-<env>.json`,
   `regression-results-<env>-<stamp>.md` and `security-results-<env>.md`.
+- **The run is logged as it goes, and the GUI shows it.** The run session writes
+  `progress-<env>.json` (`qar release-progress --start | --line <id> | --step …`)
+  and appends each result to `results-<env>.jsonl` (`qar release-result`, which
+  applies the results-check rules at once). `qar release-results` builds
+  `results-<env>.json` from the log; `--stopped-by <runner>` fills the lines a
+  stopped run never reached as NOT TESTED. The Run phase shows the terminal beside
+  the shared, interactive browser, as Validation does, with a progress panel above
+  the browser: `ReleaseRunProgress` (`gui/release_progress.go`) reads the three
+  files directly every 2 s, and the time left is the pace so far, shown after 5
+  lines.
+- **A stopped run can resume.** `qar release-progress --status` reports what an
+  earlier session logged; `--resume` keeps the log, and the skill skips each line
+  that has a result. A resumed session counts its pace from the resume, checks
+  `qar deployed-release` against the tag first, and builds a new study by replaying
+  the `> Next:` steps. Each logged result carries its line's title: ids are
+  positions in the plan, so after a plan edit a result whose title no longer
+  matches is "stale" and the line is tested again.
 - `plan.md` has five fixed sections: Summary, Baseline, Changes, Security,
   Technical appendix. Baseline and Security lines are `- [BASELINE] …` and
   `- [S-<n>] <title> — <steps>`; `(staging only)` at the end marks an active probe

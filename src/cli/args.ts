@@ -34,6 +34,7 @@ const COMMAND_BOOLEANS: Partial<Record<CommandName, readonly string[]>> = {
     'jira-attachments': ['download'],
     clock: ['report'],
     'release-download': ['force', 'remote-only'],
+    'release-progress': ['start', 'resume', 'status'],
 }
 
 // `help` MUST be here: otherwise `qar session --help` parses `--help` as a key

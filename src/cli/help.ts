@@ -314,6 +314,34 @@ export const COMMANDS = [
             'when the run has S- results. Prints {"output","asset","securityOutput"}.',
     },
     {
+        name: 'release-progress',
+        usage: 'qar release-progress --tag <tag> --env <env> (--status | --start | --resume | --line <id> | --step setup|cleanup|report) [--note <text>]',
+        summary: 'Tell the GUI what a release run is doing now (the progress panel reads it).',
+        details:
+            'Writes .tmp/release/<tag>/progress-<env>.json. --status writes nothing: it prints ' +
+            '{"total","done","counts","remaining","loggedAt"} for an earlier run. --start begins a ' +
+            'new run: it keeps the previous results-<env>.jsonl under a stamped name. --resume ' +
+            'keeps the log, so the lines that have a result are skipped. --line names the plan ' +
+            'line being tested; --step a step between lines. --note is a short sentence for the panel.',
+    },
+    {
+        name: 'release-result',
+        usage: 'qar release-result --tag <tag> --env <env> --id <id> --result PASS|FAIL|"NOT TESTED" --evidence <text> [--severity blocker|major|minor] [--area <area>] [--approved-by <name>]',
+        summary: "Append one line's result to .tmp/release/<tag>/results-<env>.jsonl.",
+        details:
+            'Checks the entry with the results-check rules before it is written: a FAIL needs ' +
+            '--severity and --area, a NOT TESTED needs --approved-by. A second result for a line ' +
+            'replaces the first. Prints {"id","result","counts"}.',
+    },
+    {
+        name: 'release-results',
+        usage: 'qar release-results --tag <tag> --env <env> [--stopped-by <runner>]',
+        summary: 'Write results-<env>.json from the run log, in run order.',
+        details:
+            'Refuses when a line has no result, unless --stopped-by names the runner who stopped ' +
+            'the run: each such line is then NOT TESTED, approved by that runner.',
+    },
+    {
         name: 'release-status',
         usage: 'qar release-status --tag <tag>',
         summary: 'Report the assets on a release, upload rights, and the local plan/results files.',

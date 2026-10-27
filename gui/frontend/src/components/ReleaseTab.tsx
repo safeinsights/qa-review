@@ -29,27 +29,32 @@ function useReleaseSession() {
     const [starting, setStarting] = useState(false)
     const [ownedByOther, setOwnedByOther] = useState<SessionKind | null>(null)
     const [tag, setTag] = useState('')
+    // The shared browser's screencast, shown in the Run phase.
+    const [screencastPort, setScreencastPort] = useState<number | null>(null)
     const token = useRef<string | null>(null)
 
     useEffect(() => {
         let unReady: (() => void) | undefined
         let unEnded: (() => void) | undefined
         ;(async () => {
-            unReady = await onSessionReady(({ kind }) => {
+            unReady = await onSessionReady(({ kind, screencastPort: port }) => {
                 if (!MY_KINDS.includes(kind)) {
                     setOwnedByOther(kind)
                     setLive(null)
                     setStarting(false)
+                    setScreencastPort(null)
                     return
                 }
                 setOwnedByOther(null)
                 setLive(kind)
                 setStarting(false)
+                setScreencastPort(port || null)
             })
             unEnded = await onSessionEnded(() => {
                 setOwnedByOther(null)
                 setLive(null)
                 setStarting(false)
+                setScreencastPort(null)
             })
         })()
         return () => {
@@ -74,12 +79,13 @@ function useReleaseSession() {
         token.current = null
         setLive(null)
         setTag('')
+        setScreencastPort(null)
     }
     const takeOver = async () => {
         await stopSession()
         setOwnedByOther(null)
     }
-    return { live, tag, starting, ownedByOther, start, stop, takeOver }
+    return { live, tag, starting, ownedByOther, screencastPort, start, stop, takeOver }
 }
 
 export function ReleaseTab() {
@@ -293,11 +299,13 @@ function PhaseView({
             />
         )
     }
+    const runLive = session.live === 'release-run' && session.tag === tag
     return (
         <ReleaseRun
             tag={tag}
             status={status}
-            sessionLive={session.live === 'release-run' && session.tag === tag}
+            sessionLive={runLive}
+            screencastPort={runLive ? session.screencastPort : null}
             onStart={onStartRun}
             onStop={onStop}
             onStatusStale={onStatusStale}

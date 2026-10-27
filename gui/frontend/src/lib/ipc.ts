@@ -133,6 +133,7 @@ interface WailsApp {
     UnwatchPlan(): Promise<void>
     StartReleasePlanSession(tag: string, regenerate: boolean): Promise<string>
     StartReleaseRunSession(tag: string, env: string): Promise<string>
+    ReleaseRunProgress(tag: string, env: string): Promise<RunProgress>
     RunBaseline(tag: string, env: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
@@ -458,6 +459,34 @@ export async function writePlan(tag: string, text: string): Promise<string> {
 
 export async function discardLocalPlan(tag: string): Promise<void> {
     await app().DiscardLocalPlan(tag)
+}
+
+export interface RunLine {
+    id: string
+    title: string
+    section: string
+    role: string
+    needs: string
+    group: string
+}
+
+// What a release run session is doing now: gui/release_progress.go.
+export interface RunProgress {
+    started: boolean
+    line: RunLine | null
+    step: '' | 'setup' | 'cleanup' | 'report'
+    note: string
+    position: number
+    done: number
+    total: number
+    counts: Record<string, number>
+    startedAt: string
+    at: string
+    remainingSec: number
+}
+
+export async function releaseRunProgress(tag: string, env: string): Promise<RunProgress> {
+    return app().ReleaseRunProgress(tag, env)
 }
 
 export interface PlanLinesCheck {
