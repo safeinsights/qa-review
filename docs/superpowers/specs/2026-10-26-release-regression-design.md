@@ -316,3 +316,75 @@ and `Bash(qar results-render*)`, and the opening prompt from
 - `gui/release_test.go` — `ReleaseStatus` from a fake asset list and a temp
   dir.
 - Manual: generate the plan for v1.6.9, run it on staging.
+
+## Amendments (2026-10-26, after the first end-to-end run)
+
+### The editor appears only when the plan exists
+
+While the plan session is generating (no `plan.md` yet), the Plan phase shows
+only the terminal, with a one-line "Generating the plan…" note where the editor
+will be. The editor and its status row appear once `plan.md` exists. A plan
+that is downloaded from the release shows the editor at once.
+
+### Save also writes the summary into the release description
+
+On "save the plan", after the asset upload, the plan's `## Summary` section is
+written into the GitHub release description (`body`) as a block:
+
+```
+<!-- regression-summary -->
+## What changed
+<the Summary section's text>
+<!-- /regression-summary -->
+```
+
+Placement: if the markers already exist, the block between them is replaced.
+Otherwise the block is inserted before the first line that is exactly `------`
+(the separator between "Related Releases" and the PR table in the generated
+notes). If there is no such line, the block is appended to the end. The rest of
+the body is never changed. `qar release-summary --tag <tag> --input <plan.md>`
+does this (`gh release edit <tag> --notes-file`), and the plan skill runs it as
+the step after `release-upload`.
+
+### Changes are ordered by impact
+
+Each per-PR subagent rates the PR's `impact`: `high` (a user-visible behaviour
+change, a data migration, auth or permission change, or a security fix),
+`medium` (a visible UI change with no behaviour change, an email change, an
+admin-only change), `low` (a dependency bump, CI, lint, docs, tests only). The
+plan's Summary lists the feature groups with high-impact items first, and the
+Changes section orders its `### #<pr>` subsections by impact (high, medium,
+low), then by PR number within an impact. Each subsection heading ends with the
+impact in brackets, e.g. `### #1110 OTTER-794 … [high]`. The Technical appendix
+stays in PR-number order. Security is ordered by severity as before.
+
+### Decisions after the final review
+
+1. **The public asset is `testing-plan.md`** (replaces `regression-plan.md`) and
+   carries Summary, Baseline, Changes and Technical appendix only. The repo is
+   public, so the Security section stays local in `.tmp/release/<tag>/plan.md`
+   and is never uploaded; `release-upload` refuses a file that contains one.
+   The release description gets only the Summary.
+2. **Security lines run on staging only**, only from the machine that holds the
+   local plan. Their results go to a local `security-results-<env>.md`, shown to
+   the human runner in the session, never uploaded. On request the session may
+   file one Jira card with them (`qar jira-create-issue`), the run session's
+   only Jira write. On production they are `NOT TESTED`.
+3. **The baseline suite runs from the GUI.** The Run phase's Start runs
+   `release-happy-path` through Go (`RunBaseline(tag, env)`, the Testing tab's
+   engine spawn, outside the sandbox), streams step progress, writes
+   `.tmp/release/<tag>/baseline-<env>.json`, then starts the Claude run session,
+   which reads that file for the `BASELINE` line and never runs `qar run`.
+4. **Writes to management-app**: `gh release upload` and
+   `gh release edit --notes-file` only. Release sessions get a release-specific
+   allowlist (read-only Jira issue tool, `gh pr view/diff`, the `qar release-*`,
+   `plan-lines`, `results-*`, `session-login` commands, `jira-create-issue` in
+   the run session, Read/Write/Edit, Agent in the plan session, chrome-devtools
+   in the run session), not the Validation list.
+5. **Completeness is gated**: `plan-lines` reads `prs.json` beside the plan and
+   reports every PR without an `R-<n>-*` line, and any `R-` line whose PR is not
+   in the compare.
+
+Clarification: because the public asset cannot list Security lines, a production
+run has none to record — they are absent from the public results, not
+`NOT TESTED`. The local `security-results-<env>.md` exists only for staging.
