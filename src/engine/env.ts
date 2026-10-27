@@ -1,4 +1,4 @@
-import { totp } from '@/engine/totp'
+import { freshTotp, totp } from '@/engine/totp'
 import type { EnvConfig, Role } from '@/engine/types'
 import {
     ENVIRONMENTS,
@@ -58,6 +58,10 @@ function resolveAccount(
         password: read(vars, passwordVar(a, accEnv)),
         get mfaCode(): string {
             return seed ? totp(seed) : (fixedCode as string)
+        },
+        // What a sign-in submits. Unlike mfaCode it may wait: see freshTotp.
+        nextMfaCode(): Promise<string> {
+            return seed ? freshTotp(seed) : Promise.resolve(fixedCode as string)
         },
         privateKey: vars[privateKeyVar(a, accEnv)] || undefined,
     }

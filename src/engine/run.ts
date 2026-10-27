@@ -497,7 +497,12 @@ export async function runEngine(
             // ctx-construction time.
             get account() {
                 const a = env.accounts[currentRole]
-                return { email: a.email, password: a.password, mfaCode: a.mfaCode }
+                return {
+                    email: a.email,
+                    password: a.password,
+                    mfaCode: a.mfaCode,
+                    nextMfaCode: a.nextMfaCode,
+                }
             },
             // Live-attempt check for suite bodies. Captured at property-read time, so a
             // body that grabbed `ctx.signal` before its deadline fired still sees
