@@ -609,10 +609,8 @@ export const newUserSignupFlowsSuite: Suite = {
                     // The account menu is a popover of links and buttons, not an ARIA menu,
                     // so its entries have no menuitem role.
                     const settings = page.getByRole('button', { name: 'Settings', exact: true })
-                    await clickUntil(
-                        page.getByRole('button', { name: /toggle profile menu/i }),
-                        settings
-                    )
+                    // Named "<first name> profile menu", so only the suffix is stable.
+                    await clickUntil(page.getByRole('button', { name: /profile menu$/i }), settings)
                     await settings.click()
                     const account = page
                         .getByRole('dialog')
