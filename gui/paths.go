@@ -653,6 +653,12 @@ func qarBinEnvIn(res string) []string {
 // args. In a packaged .app it runs the shipped node against qar.bundle.mjs; under
 // `wails dev` (no Resources) it falls back to `pnpm qar` from the cloned repo so
 // development still works. cmd.Dir and QAR_REPO_DIR both point at the clone.
+// guiPidEnv names this app's pid to a child that must not outlive it: the child
+// watches the pid and stops itself (src/engine/gui-parent.ts).
+func guiPidEnv() string {
+	return fmt.Sprintf("QAR_GUI_PID=%d", os.Getpid())
+}
+
 func engineCmd(args ...string) *exec.Cmd {
 	res := resourcesDir()
 	var cmd *exec.Cmd

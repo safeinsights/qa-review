@@ -135,6 +135,15 @@ export const COMMANDS = [
         ].join('\n'),
     },
     {
+        name: 'session-run-suite',
+        usage: 'qar session-run-suite --suite <name> --role <role>',
+        summary: "Run a whole suite on the running session's streamed browser.",
+        details:
+            'The session prints the step and result lines (the run --json format) on its ' +
+            'stdout, which the GUI reads; this prints {"ok","bundleDir"}. The release run ' +
+            'uses it for its baseline, so the baseline shows in the browser pane.',
+    },
+    {
         name: 'session-create-study',
         usage: 'qar session-create-study',
         summary: 'Submit a full study proposal. Prints {"studyId"}.',
@@ -332,6 +341,15 @@ export const COMMANDS = [
             'Checks the entry with the results-check rules before it is written: a FAIL needs ' +
             '--severity and --area, a NOT TESTED needs --approved-by. A second result for a line ' +
             'replaces the first. Prints {"id","result","counts"}.',
+    },
+    {
+        name: 'release-baseline',
+        usage: 'qar release-baseline --tag <tag> --env <env> [--wait <seconds>]',
+        summary: "Print the release run's baseline result, waiting for it if asked.",
+        details:
+            "The GUI runs release-happy-path in the run session's browser and writes " +
+            '.tmp/release/<tag>/baseline-<env>.json when it ends. Prints that summary with ' +
+            '"done":true, or {"done":false} if it is still running after --wait seconds.',
     },
     {
         name: 'release-results',

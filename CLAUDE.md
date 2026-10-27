@@ -316,6 +316,14 @@ What it captures that is otherwise unrecoverable:
   on a real machine (18 of them, one pinned to a long-gone port), which is itself a
   plausible contributor to "the MCP server didn't come up".
 
+**A session stops itself when its app is gone.** The GUI passes its pid in
+`QAR_GUI_PID` (`guiPidEnv`, `gui/paths.go`) to `qar session` and to the baseline's
+`qar session-run-suite`, and both exit once that pid has gone
+(`src/engine/gui-parent.ts`). An app exit that skips `shutdown()` — every `wails dev`
+rebuild, a force quit, a crash — sends no signal, and left the session running with
+its Chrome and the session lock, so the next session would not start. Observed twice
+in one afternoon.
+
 **App quit reaps synchronously.** `teardownSession()`/`pty.stop()` only SIGTERM and
 defer the SIGKILL to goroutines that fire 2–3s later. That's fine for a session
 switch, but at quit the process exits before those goroutines run — so anything
@@ -895,18 +903,25 @@ Builds and runs a regression plan for one management-app release. Spec:
   `release-saved {tag, asset, url}`. `StartReleasePlanSession(tag, false)` with no
   `plan.md` uses the GENERATION prompt (`releasePlanOpening`): that is the Retry
   after a session died mid-generation, and it reuses the `pr-<n>.json` files.
-- **The baseline runs from the GUI, not the session.** `RunBaseline(tag, env)`
-  (`gui/baseline.go`) spawns `run --suite release-happy-path --json` through
-  `engineCmd` in its own process group, outside the Claude sandbox, and takes the
-  ONE tracked-run slot (`ErrRunInProgress` both ways with the Testing tab; `StopRun`
-  stops it). Nobody is at a Retry button, so it answers `step-failed` with
-  `give-up` and `error-hold` with `resume`; without that the held browser waits
-  forever. It emits `baseline-step {tag, env, index, total, name, status}` (index is
-  positional: study-happy-path repeats step names) and `baseline-done`, and writes
-  `baseline-<env>.json` `{passed, steps, failedStep, error, reportPath,
-  finishedAt}`. Passing needs a zero exit AND an ok result line: a stopped engine
-  exits 0 with none. The UI then starts the run session, which reads that file for
-  its `BASELINE` line and never runs `qar run`.
+- **The baseline runs in the run session's browser, started by Go.** Start run
+  starts the run session at once; `StartReleaseRunSession` then calls
+  `startSessionBaseline` (`gui/baseline.go`), which spawns `qar session-run-suite
+  --suite release-happy-path` (outside the Claude sandbox). That asks the session to
+  run the suite on its held, streamed page (`runSuiteOnPage`,
+  `src/engine/session-suite.ts`), so every step shows in the browser pane. It used
+  to run in a browser of its own BEFORE the session: ten or more minutes of a blank
+  terminal with the testing off screen, which the spec never allowed. The session
+  prints the suite's `run --json` step lines on its stdout; `sessionLineHook` feeds
+  them to the tracker, which emits `baseline-step {tag, env, index, total, name,
+  status}` (index is positional: study-happy-path repeats step names). When the
+  client exits, Go writes `baseline-<env>.json` `{passed, steps, failedStep, error,
+  reportPath, finishedAt}` and emits `baseline-done`. The client's own last line
+  `{"ok","bundleDir"}` decides the outcome: the session's result line can still be
+  in flight on the other pipe. Meanwhile Claude does Phase 1, which needs no
+  browser, and waits with `qar release-baseline --wait` before Phase 2; the skill
+  keeps it out of the browser until then. All sign-ins happen in the one session
+  process, so `freshTotp` sees every code used. Teardown kills the client with the
+  session.
 - **Each release session has its own allowlist** (`releasePlanAllowedTools`,
   `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
   pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`

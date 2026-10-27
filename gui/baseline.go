@@ -1,25 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// The release run's baseline: release-happy-path, run by Go the way the Testing tab
-// runs a suite. It used to be a `qar run` inside the Claude session, which put a
-// 10-minute browser run under the sandbox and behind a permission prompt; here it
-// runs outside both, and the session only reads the summary file it leaves.
+// The release run's baseline: release-happy-path, run on the run session's streamed
+// browser (startSessionBaseline). Go starts it, not Claude: a `qar run` inside the
+// Claude session put a long browser run under the sandbox and behind a permission
+// prompt. The session only reads the summary file it leaves.
 
 const baselineSuite = "release-happy-path"
 
@@ -179,67 +178,31 @@ func baselineStepCount() int {
 	return 0
 }
 
-// RunBaseline starts release-happy-path against env and returns once it is running.
-// It emits baseline-step per step and baseline-done at the end, after writing the
-// summary file. It takes the one tracked-run slot, so it is refused while a Testing
-// tab run is live (and the reverse), and StopRun stops it.
-func (a *App) RunBaseline(tag, env string) error {
-	dir, err := releaseDir(tag)
-	if err != nil {
-		return err
-	}
-	if env != "staging" && env != "production" {
-		return errors.New("a release runs against staging or production")
-	}
-	cmd := engineCmd("run", "--suite", baselineSuite, "--role", "researcher", "--env", env, "--json")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	cmd.Stderr = cmd.Stdout
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	// Own process group, as streamCmd does, so StopRun reaches the engine's helpers.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	a.runMu.Lock()
-	if a.runCmd != nil {
-		a.runMu.Unlock()
-		return ErrRunInProgress
-	}
-	a.runCmd = &exec.Cmd{}
-	a.runMu.Unlock()
+// startSessionBaseline runs release-happy-path INSIDE the release run session, on
+// its streamed browser, so every step shows in the GUI's browser pane. It used to
+// run in a browser of its own before the session started: ten or more minutes of a
+// blank terminal and no browser, with the testing off screen.
+//
+// The session prints the suite's step lines on its stdout (sessionLineHook feeds
+// them to the tracker); `qar session-run-suite` is the client that asks for the run
+// and waits for it. When the client exits, the summary is written for the session's
+// Phase 2 and baseline-done is emitted.
+func (a *App) startSessionBaseline(tag, env, dir string) error {
 	// A summary from an earlier run must not be read as this one's.
-	_ = os.Remove(baselineSummaryPath(dir, env))
-	if err := cmd.Start(); err != nil {
-		a.runMu.Lock()
-		a.runCmd = nil
-		a.runMu.Unlock()
-		_ = stdin.Close()
-		logDiag("engine", "FAIL could not start the baseline: %v", err)
-		return err
+	a.sessionMu.Lock()
+	live := a.sessionCmd != nil
+	a.sessionMu.Unlock()
+	if !live {
+		return errors.New("the run session is not running")
 	}
-	a.runMu.Lock()
-	a.runCmd = cmd
-	a.runStdin = stdin
-	a.runMu.Unlock()
-	logDiag("engine", "start: baseline %s %s", tag, env)
-	go a.followBaseline(tag, env, dir, cmd, stdout, stdin)
-	return nil
-}
-
-func (a *App) followBaseline(tag, env, dir string, cmd *exec.Cmd, stdout io.Reader, stdin io.Writer) {
+	_ = os.Remove(baselineSummaryPath(dir, env))
 	total := baselineStepCount()
+	var mu sync.Mutex
 	t := &baselineTracker{}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		step, reply := t.feed(scanner.Text())
-		if reply != "" {
-			_, _ = io.WriteString(stdin, reply+"\n")
-		}
+	hook := func(line string) {
+		mu.Lock()
+		step, _ := t.feed(line)
+		mu.Unlock()
 		if step != nil {
 			runtime.EventsEmit(a.ctx, "baseline-step", map[string]any{
 				"tag": tag, "env": env, "index": step.Index, "name": step.Name,
@@ -247,6 +210,41 @@ func (a *App) followBaseline(tag, env, dir string, cmd *exec.Cmd, stdout io.Read
 			})
 		}
 	}
+	cmd := engineCmd("session-run-suite", "--suite", baselineSuite, "--role", "researcher")
+	cmd.Env = append(cmd.Env, guiPidEnv())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	a.sessionMu.Lock()
+	if a.sessionCmd == nil {
+		a.sessionMu.Unlock()
+		return errors.New("the run session is not running")
+	}
+	a.sessionLineHook = hook
+	a.sessionMu.Unlock()
+	if err := cmd.Start(); err != nil {
+		a.sessionMu.Lock()
+		a.sessionLineHook = nil
+		a.sessionMu.Unlock()
+		logDiag("engine", "FAIL could not start the baseline: %v", err)
+		return err
+	}
+	a.sessionMu.Lock()
+	a.baselineCmd = cmd
+	a.sessionMu.Unlock()
+	logDiag("engine", "start: baseline %s %s (in the session browser)", tag, env)
+	runtime.EventsEmit(a.ctx, "baseline-step", map[string]any{
+		"tag": tag, "env": env, "index": 0, "name": "", "status": "starting", "total": total,
+	})
+	go a.finishSessionBaseline(tag, env, dir, cmd, &out, t, &mu)
+	return nil
+}
+
+func (a *App) finishSessionBaseline(
+	tag, env, dir string, cmd *exec.Cmd, out *strings.Builder, t *baselineTracker, mu *sync.Mutex,
+) {
 	code := 0
 	if err := cmd.Wait(); err != nil {
 		code = -1
@@ -255,16 +253,20 @@ func (a *App) followBaseline(tag, env, dir string, cmd *exec.Cmd, stdout io.Read
 			code = exitErr.ExitCode()
 		}
 	}
-	a.runMu.Lock()
-	if a.runCmd == cmd {
-		a.runCmd = nil
-		if a.runStdin != nil {
-			_ = a.runStdin.Close()
-			a.runStdin = nil
-		}
+	a.sessionMu.Lock()
+	owned := a.baselineCmd == cmd
+	if owned {
+		a.baselineCmd = nil
+		a.sessionLineHook = nil
 	}
-	a.runMu.Unlock()
-	s := t.summary(code, time.Now())
+	a.sessionMu.Unlock()
+	// The session tore down (Stop, or a new session): nobody reads this baseline.
+	if !owned {
+		return
+	}
+	mu.Lock()
+	s := sessionBaselineSummary(t, code, out.String(), time.Now())
+	mu.Unlock()
 	if err := writeBaselineSummary(dir, env, s); err != nil {
 		logDiag("engine", "FAIL could not write the baseline summary: %v", err)
 		s.Passed = false
@@ -274,4 +276,27 @@ func (a *App) followBaseline(tag, env, dir string, cmd *exec.Cmd, stdout io.Read
 	runtime.EventsEmit(a.ctx, "baseline-done", map[string]any{
 		"tag": tag, "env": env, "passed": s.Passed, "failedStep": s.FailedStep, "error": s.Error,
 	})
+}
+
+// sessionBaselineSummary folds the client's own answer into the tracker's. The
+// client's last line ({"ok","bundleDir"}) is the authority on the outcome: the
+// session's result line can still be in flight on the other pipe when the client
+// exits. A client that failed (no session, a timeout) has no such line; its output
+// is then the error.
+func sessionBaselineSummary(t *baselineTracker, exitCode int, clientOut string, finishedAt time.Time) BaselineSummary {
+	var answer struct {
+		OK        bool   `json:"ok"`
+		BundleDir string `json:"bundleDir"`
+	}
+	last := lastLine(clientOut)
+	if exitCode == 0 && json.Unmarshal([]byte(last), &answer) == nil {
+		t.resultSeen = true
+		t.resultOK = answer.OK
+		if answer.BundleDir != "" {
+			t.bundleDir = answer.BundleDir
+		}
+	} else if last != "" {
+		t.lastStray = last
+	}
+	return t.summary(exitCode, finishedAt)
 }

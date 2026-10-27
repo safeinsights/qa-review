@@ -1,4 +1,5 @@
 import type { RunProgress } from '../lib/ipc'
+import type { BaselineState } from './useBaseline'
 
 // Text for the progress panel above a release run's browser. A plain module, not the
 // component, so the engine's tsconfig (no --jsx) can typecheck its tests.
@@ -61,5 +62,22 @@ export function progressView(p: RunProgress): ProgressView {
         percent: p.total ? Math.round((p.done / p.total) * 100) : 0,
         countsText: countsText(p),
         remainingText: remainingText(p),
+    }
+}
+
+// The baseline suite, while it runs in the session's browser before the plan lines.
+export function baselineView(state: Extract<BaselineState, { phase: 'running' }>): {
+    headline: string
+    detail: string
+    percent: number
+} {
+    if (state.index === 0) {
+        return { headline: 'Baseline: starting', detail: 'release-happy-path', percent: 0 }
+    }
+    const of = state.total ? ` of ${state.total}` : ''
+    return {
+        headline: `Baseline · step ${state.index}${of}`,
+        detail: state.name,
+        percent: state.total ? Math.round((state.index / state.total) * 100) : 0,
     }
 }

@@ -350,6 +350,9 @@ export async function runEngine(
     // onErrorHold. Non-retryable failures (login / openBrowser) leave this false and
     // still get the error-hold.
     let stepFailureResolved = false
+    // Removes the console listeners at teardown. A page the run launched is closed
+    // anyway, but a held page (a suite run inside `qar session`) lives on.
+    let detachConsole: (() => void) | undefined
 
     try {
         handle = await deps.openBrowser({ name: env.name, baseURL: env.baseURL })
@@ -429,6 +432,10 @@ export async function runEngine(
             consoleBuf.push({ level: 'error', text: String(err?.stack || err), at: Date.now() })
         page.on('console', onConsole)
         page.on('pageerror', onPageError)
+        detachConsole = () => {
+            page.off('console', onConsole)
+            page.off('pageerror', onPageError)
+        }
         // Drain the console captured since the previous step (best-effort metadata;
         // undefined when a step logged nothing, matching currentUrl's optionality).
         const drainConsole = (): ConsoleLine[] | undefined => {
@@ -739,6 +746,7 @@ export async function runEngine(
             await deps.waitForResume?.()
         }
     } finally {
+        detachConsole?.()
         // Guaranteed teardown: cleanup runs no matter how we got here.
         cleanupResult = await deps.runCleanup(cleanup).catch((e): RunResult['cleanup'] => ({
             ok: false,

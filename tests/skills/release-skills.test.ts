@@ -54,7 +54,10 @@ describe('the security rule', () => {
             'utf8'
         )
         expect(src).not.toMatch(/qar run --suite/)
-        expect(src).toContain('baseline-<env>.json')
+        // The GUI runs the baseline in the session's browser; the skill only waits
+        // for its summary.
+        expect(src).not.toMatch(/qar session-run-suite --/)
+        expect(src).toContain('qar release-baseline --tag <tag> --env <env> --wait')
         expect(src).toContain('--remote-only')
         expect(src).toContain('Never upload `securityOutput`')
     })

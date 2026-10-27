@@ -31,6 +31,7 @@ import {
     releaseUploadCommand,
 } from '@/cli/commands/release'
 import {
+    releaseBaselineCommand,
     releaseProgressCommand,
     releaseResultCommand,
     releaseResultsCommand,
@@ -45,6 +46,7 @@ import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
+import { sessionRunSuiteCommand } from '@/cli/commands/session-run-suite'
 import { sessionSignInCommand } from '@/cli/commands/session-signin'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { shareWorkCommand } from '@/cli/commands/share-work'
@@ -111,6 +113,8 @@ async function main() {
             return sessionSignInCommand(opts)
         case 'session-create-user':
             return sessionCreateUserCommand(opts)
+        case 'session-run-suite':
+            return sessionRunSuiteCommand(opts)
         case 'session-create-study':
             return sessionCreateStudyCommand()
         case 'mail-inbox':
@@ -165,6 +169,8 @@ async function main() {
             return releaseResultCommand(opts)
         case 'release-results':
             return releaseResultsCommand(opts)
+        case 'release-baseline':
+            return releaseBaselineCommand(opts)
         case 'release-summary':
             return releaseSummaryCommand(opts, await loadSettings())
         case 'results-render':

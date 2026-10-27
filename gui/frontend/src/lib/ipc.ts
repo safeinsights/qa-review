@@ -134,7 +134,6 @@ interface WailsApp {
     StartReleasePlanSession(tag: string, regenerate: boolean): Promise<string>
     StartReleaseRunSession(tag: string, env: string): Promise<string>
     ReleaseRunProgress(tag: string, env: string): Promise<RunProgress>
-    RunBaseline(tag: string, env: string): Promise<void>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -516,10 +515,6 @@ export async function startReleaseRunSession(tag: string, env: string): Promise<
 
 // Runs release-happy-path through Go (outside the Claude session); progress arrives
 // as baseline-step events and the outcome as baseline-done.
-export async function runBaseline(tag: string, env: string): Promise<void> {
-    await app().RunBaseline(tag, env)
-}
-
 export interface BaselineStep {
     tag: string
     env: string

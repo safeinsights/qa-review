@@ -47,24 +47,20 @@ function useReleaseRun(
     onBaselineRunning: (running: boolean) => void
 ) {
     const [env, setEnv] = useState<string>('staging')
-    const [error, setError] = useState('')
-    const baseline = useBaseline(tag, onStart)
+    const baseline = useBaseline(tag)
     const runningCb = useRef(onBaselineRunning)
     runningCb.current = onBaselineRunning
     useEffect(() => runningCb.current(baseline.isRunning), [baseline.isRunning])
-    // Unmounting stops the baseline (useBaseline), so it is no longer running.
+    // The baseline runs inside the session, so it ends with the session.
     useEffect(() => () => runningCb.current(false), [])
     const blocked = startBlockedReason(status)
-    const busy = sessionLive || baseline.isRunning
-    const start = async () => {
-        setError('')
-        try {
-            await baseline.start(env)
-        } catch (e) {
-            setError(String(e))
-        }
+    const busy = sessionLive
+    // The session starts at once; Go then runs the baseline in its browser.
+    const start = () => {
+        baseline.reset()
+        onStart(env)
     }
-    const stop = () => (baseline.isRunning ? void baseline.stop() : onStop())
+    const stop = () => onStop()
     return {
         env,
         setEnv,
@@ -73,14 +69,14 @@ function useReleaseRun(
         busy,
         blocked,
         baselineText: baselineLabel(baseline.state),
+        baselineState: baseline.state,
         baselineRunning: baseline.isRunning,
-        error,
         results: status.assets.filter(a => a.name.startsWith('regression-results-')),
     }
 }
 
-// Pick the env, run the baseline from Go, then start the run session and watch the
-// terminal. History lists the results assets already on the release.
+// Pick the env and start the run session: the terminal beside the session's browser,
+// where Go runs the baseline first and Claude then tests the plan. History lists the results assets already on the release.
 export function ReleaseRun({
     tag,
     status,
@@ -146,12 +142,12 @@ export function ReleaseRun({
             </div>
             <Note text={run.blocked} />
             <Note text={run.baselineText} />
-            <Note text={run.error} danger />
             <ReleaseRunLive
                 tag={tag}
                 env={run.env}
                 sessionLive={sessionLive}
                 screencastPort={screencastPort}
+                baseline={run.baselineState}
             />
             <HistoryTable rows={run.results} />
         </div>

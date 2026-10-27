@@ -212,6 +212,11 @@ type App struct {
 	// changes, and the release-saved rendezvous file). Closed on teardown.
 	stopPlanWatch         chan struct{}
 	stopReleaseSavedWatch chan struct{}
+	// sessionLineHook sees every output line of the session after its ready line, so
+	// a suite run inside the session (the release baseline) can report its steps.
+	// baselineCmd is that run's client command. Both guarded by sessionMu.
+	sessionLineHook func(string)
+	baselineCmd     *exec.Cmd
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -279,6 +284,9 @@ func (a *App) livePids() []int {
 	a.sessionMu.Lock()
 	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
 		pids = append(pids, a.sessionCmd.Process.Pid)
+	}
+	if a.baselineCmd != nil && a.baselineCmd.Process != nil {
+		pids = append(pids, a.baselineCmd.Process.Pid)
 	}
 	a.sessionMu.Unlock()
 	if pid := a.pty.pid(); pid != 0 {
@@ -624,6 +632,10 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 		args = append(args, "--env", env)
 	}
 	cmd := engineCmd(args...)
+	// The session stops itself once this app is gone (src/engine/gui-parent.ts): an
+	// exit that skips shutdown() — a wails dev rebuild, a force quit, a crash — left
+	// it running with its Chrome, holding the session lock.
+	cmd.Env = append(cmd.Env, guiPidEnv())
 	// Own process group so teardown can kill the WHOLE tree (pnpm → tsx → node →
 	// Chrome), not just the top wrapper. In dev the session is spawned via `pnpm qar`,
 	// and pnpm does NOT forward SIGTERM to its child — so signalling only cmd.Process
@@ -668,6 +680,12 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 			lastOutput.WriteString(line + "\n")
 			// Surface any other engine output (login errors etc.) to the terminal.
 			runtime.EventsEmit(a.ctx, "session-log", line)
+			a.sessionMu.Lock()
+			hook := a.sessionLineHook
+			a.sessionMu.Unlock()
+			if hook != nil {
+				hook(line)
+			}
 		}
 	}()
 
@@ -962,8 +980,11 @@ func (a *App) teardownSession() bool {
 	a.sessionMu.Lock()
 	cmd := a.sessionCmd
 	mcpPath := a.sessionMcpPath
+	baseline := a.baselineCmd
 	a.sessionCmd = nil
 	a.sessionMcpPath = ""
+	a.sessionLineHook = nil
+	a.baselineCmd = nil
 	// Clear the active token: the session occupying the slot is gone. A new Start
 	// mints a fresh token immediately after calling teardownSession, so the eviction
 	// leaves no active owner in between.
@@ -983,6 +1004,10 @@ func (a *App) teardownSession() bool {
 			_ = syscall.Kill(-pid, syscall.SIGTERM)
 			go escalateKill(pid)
 		}
+	}
+	// The baseline's client waits on the session it just lost; stop it too.
+	if baseline != nil && baseline.Process != nil {
+		_ = syscall.Kill(-baseline.Process.Pid, syscall.SIGKILL)
 	}
 	if mcpPath != "" {
 		_ = os.Remove(mcpPath)

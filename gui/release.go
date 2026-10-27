@@ -399,11 +399,25 @@ func (a *App) StartReleasePlanSession(tag string, regenerate bool) (string, erro
 }
 
 func (a *App) StartReleaseRunSession(tag, env string) (string, error) {
-	if _, err := releaseDir(tag); err != nil {
+	dir, err := releaseDir(tag)
+	if err != nil {
 		return "", err
 	}
 	if env != "staging" && env != "production" {
 		return "", errors.New("a release runs against staging or production")
 	}
-	return a.startReleaseSession("release-run", env, composeReleaseRunPrompt(tag, env), releaseRunAllowedTools)
+	token, err := a.startReleaseSession("release-run", env, composeReleaseRunPrompt(tag, env), releaseRunAllowedTools)
+	if err != nil {
+		return "", err
+	}
+	// The baseline runs in the session's browser while Claude does Phase 1, which
+	// needs no browser. Claude waits for its summary before Phase 2.
+	if err := a.startSessionBaseline(tag, env, dir); err != nil {
+		summary := BaselineSummary{Error: "the baseline could not start: " + err.Error(), FinishedAt: time.Now().UTC().Format(time.RFC3339)}
+		_ = writeBaselineSummary(dir, env, summary)
+		runtime.EventsEmit(a.ctx, "baseline-done", map[string]any{
+			"tag": tag, "env": env, "passed": false, "failedStep": "", "error": summary.Error,
+		})
+	}
+	return token, nil
 }

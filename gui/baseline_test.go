@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,14 +103,39 @@ func TestBaselineSummaryNamesACrashBeforeTheFirstStep(t *testing.T) {
 	}
 }
 
-func TestRunBaselineRefusesWhileARunIsLive(t *testing.T) {
-	t.Setenv("QAR_REPO_DIR", t.TempDir())
-	a := &App{}
-	a.runCmd = &exec.Cmd{}
-	if err := a.RunBaseline("v1", "staging"); err != ErrRunInProgress {
-		t.Fatalf("err = %v, want ErrRunInProgress", err)
+func TestSessionBaselineSummaryTakesTheClientsAnswer(t *testing.T) {
+	// The session's step lines, as sessionLineHook feeds them; its result line has
+	// not arrived yet when the client exits.
+	tr, _, _ := feedAll(t, []string{
+		`{"type":"step","name":"Sign in as admin","status":"running"}`,
+		`{"type":"step","name":"Sign in as admin","status":"passed"}`,
+	})
+	s := sessionBaselineSummary(tr, 0, "$ tsx bin/qar.ts session-run-suite\n{\"ok\":true,\"bundleDir\":\"/r/b\"}\n", time.Now())
+	if !s.Passed || s.Steps != 1 || s.ReportPath != "/r/b/report.html" {
+		t.Fatalf("summary = %+v", s)
 	}
-	if err := a.RunBaseline("v1", "qa"); err == nil {
-		t.Fatal("qa is not a release env")
+
+	failed, _, _ := feedAll(t, []string{
+		`{"type":"step","name":"Sign in as researcher","status":"running"}`,
+		`{"type":"step","name":"Sign in as researcher","status":"failed","error":"Invalid code"}`,
+	})
+	s = sessionBaselineSummary(failed, 0, `{"ok":false,"bundleDir":"/r/c"}`, time.Now())
+	if s.Passed || s.FailedStep != "Sign in as researcher" || s.Error != "Invalid code" {
+		t.Fatalf("a failed suite: %+v", s)
+	}
+}
+
+func TestSessionBaselineSummaryWhenTheRequestFails(t *testing.T) {
+	tr := &baselineTracker{}
+	s := sessionBaselineSummary(tr, 1, "Error: timed out waiting for the session to run release-happy-path — is a `qar session` running?", time.Now())
+	if s.Passed || !strings.Contains(s.Error, "timed out waiting for the session") {
+		t.Fatalf("summary = %+v", s)
+	}
+}
+
+func TestStartSessionBaselineNeedsASession(t *testing.T) {
+	a := &App{}
+	if err := a.startSessionBaseline("v1", "staging", t.TempDir()); err == nil {
+		t.Fatal("a baseline with no run session must be refused")
 	}
 }

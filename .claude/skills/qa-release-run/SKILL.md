@@ -5,10 +5,11 @@ description: Execute a saved regression plan for a management-app release agains
 
 # qa-release-run
 
-You execute a **regression plan** that is already on the GitHub release. The GUI
-has already run the baseline suite; you record its result, drive a **live
-browser** through every Changes and `[S-…]` line, record one result per line, and
-upload the results as a release asset.
+You execute a **regression plan** that is already on the GitHub release. When the
+session starts, the GUI runs the baseline suite in your browser, where the runner
+watches it; you record its result, drive that **live browser** through every Changes
+and `[S-…]` line, record one result per line, and upload the results as a release
+asset.
 
 ## The environment you're in
 - A browser is **already launched but NOT logged in**. Drive it with the
@@ -27,7 +28,10 @@ upload the results as a release asset.
   `qar results-render`, `qar session-login`, `qar cleanup`, `gh pr view`/`gh pr diff`, read-only
   `mkdir`/`ls`/`cat`/`date`/`echo`, Read/Write/Edit, the chrome-devtools MCP tools
   and the Jira MCP's `jira_get_issue`.
-- **Never run `qar run`.** The GUI ran the baseline before this session started.
+- **Never run `qar run` or `qar session-run-suite`.** The GUI runs the baseline.
+- **Keep out of the browser until the baseline ends.** It drives the same browser
+  you use, so do not use the chrome-devtools tools, `qar session-login` or
+  `qar session-create-user` before Phase 2 says it has ended. Phase 1 needs no browser.
 - **Never post to Jira on your own.** The results go to the release only.
 - **Production is real, and the run may create data there.** Everything you
   create (studies, users, orgs, files) gets a natural title and description, as
@@ -128,17 +132,20 @@ log under a stamped name. When the runner chose to resume:
 `qar release-progress --tag <tag> --env <env> --resume` — it keeps the log. Then
 `qar release-progress --tag <tag> --env <env> --line BASELINE --note "Recording the baseline result"`.
 
-Read `.tmp/release/<tag>/baseline-<env>.json`
-(`{passed, steps, failedStep, error, reportPath, finishedAt}`). Record the
+Wait for the baseline: `qar release-baseline --tag <tag> --env <env> --wait 300`.
+It prints `{"done":false}` while the suite is still running in the browser; run it
+again until it prints `"done":true` with the summary
+(`{passed, steps, failedStep, error, reportPath, finishedAt}`). Tell the runner
+each time it is still running. Then record the
 `BASELINE` line with `qar release-result` (Phase 3): PASS with `reportPath` as evidence when `passed` is true;
 otherwise FAIL with `severity`, `area`, and `failedStep` and `error` in the
-evidence. If the file is missing, record `NOT TESTED` with `approvedBy: "gui"`
-and evidence "the baseline did not run". **A failed baseline does not stop the
+evidence. If the session ended and no summary came, record `NOT TESTED` with
+`approvedBy: "gui"` and evidence "the baseline did not run". **A failed baseline does not stop the
 run**; the other lines still need results.
 
 ## Phase 3: the lines
-The plan is in run order. Go from top to bottom; do not reorder. The GUI ran the
-baseline again for this session, so record `BASELINE` again on a resume too: the
+The plan is in run order. Go from top to bottom; do not reorder. The GUI runs the
+baseline again for each session, so record `BASELINE` again on a resume too: the
 new result replaces the old one.
 
 **On a resume**, skip every line that is not in `remaining` from the `--status`
