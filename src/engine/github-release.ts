@@ -45,7 +45,7 @@ export interface ReleaseStatus {
     exists: boolean
     canUpload: boolean
     assets: ReleaseAsset[]
-    local: { plan: boolean; planDiffers: boolean; results: string[] }
+    local: { plan: boolean; planDiffers: boolean; results: string[]; pages: RunPage[] }
 }
 
 const MERGE_SUBJECT = /^Merge pull request #(\d+)\b/
@@ -210,6 +210,40 @@ export function assertAssetSource(tag: string, file: string, asName: string): vo
     }
 }
 
+// A run's Confluence page, as release-confluence records it in confluence-<env>.json.
+export interface RunPage {
+    env: string
+    title: string
+    url: string
+    at: string
+}
+
+// Every run page published from this machine, newest first: the run History.
+export function runPages(dir: string): RunPage[] {
+    if (!fs.existsSync(dir)) return []
+    const pages: RunPage[] = []
+    for (const f of fs.readdirSync(dir)) {
+        const env = f.match(/^confluence-([a-z]+)\.json$/)?.[1]
+        if (!env) continue
+        try {
+            const list = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as Omit<
+                RunPage,
+                'env'
+            >[]
+            for (const p of list) pages.push({ env, title: p.title, url: p.url, at: p.at })
+        } catch {
+            // A half-written record is skipped, not fatal: History is informational.
+        }
+    }
+    // One entry per page: a republish of the same page records it again.
+    const latest = new Map<string, RunPage>()
+    for (const p of pages) {
+        const seen = latest.get(p.url)
+        if (!seen || seen.at < p.at) latest.set(p.url, p)
+    }
+    return [...latest.values()].sort((a, b) => b.at.localeCompare(a.at))
+}
+
 async function canUpload(gh: GhRunner, repo: string): Promise<boolean> {
     const out = await gh(['api', `repos/${repo}`, '--jq', '.permissions.push'])
     return out.trim() === 'true'
@@ -304,7 +338,7 @@ export async function releaseStatus(
         exists: assets !== null,
         canUpload: await canUpload(gh, repo),
         assets: assets ?? [],
-        local: { plan, planDiffers, results },
+        local: { plan, planDiffers, results, pages: runPages(dir) },
     }
 }
 

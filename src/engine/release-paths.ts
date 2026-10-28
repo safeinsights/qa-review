@@ -25,16 +25,16 @@ export function securityResultsFile(env: string): string {
     return `security-results-${env}.md`
 }
 
-const RESULTS_ASSET = /^regression-results-[a-z]+-\d{8}-\d{4}\.md$/
-
-// The only names release-upload will publish. A free-form --as could publish any
-// file in the release dir (security-results-*.md included) under any name.
+// The only name release-upload will publish. A free-form --as could publish any file
+// in the release dir (security-results-*.md included) under any name. Run results
+// are not release assets: they go to the private Confluence page (release-confluence),
+// so the public release holds the testing plan alone.
 export function isUploadableAssetName(name: string): boolean {
-    return name === PLAN_ASSET || RESULTS_ASSET.test(name)
+    return name === PLAN_ASSET
 }
 
-// The asset name for one run. The stamp is what keeps runs from replacing each
-// other; the env is in the name so History can group without opening the file.
+// The name of one run's local results report (results-render). The stamp keeps runs
+// apart; the env is in the name so they sort by env.
 export function resultsAssetName(env: string, when: Date): string {
     const p = (n: number) => String(n).padStart(2, '0')
     const stamp = `${when.getFullYear()}${p(when.getMonth() + 1)}${p(when.getDate())}-${p(when.getHours())}${p(when.getMinutes())}`

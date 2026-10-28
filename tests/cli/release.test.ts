@@ -115,6 +115,8 @@ describe('release commands', () => {
         'plan.txt',
         '../testing-plan.md',
         'regression-results-staging-1.md',
+        // Run results go to Confluence; the release holds the testing plan alone.
+        'regression-results-staging-20261026-1200.md',
     ])('release-upload rejects --as %s', async name => {
         const { releaseUploadCommand } = await import('@/cli/commands/release')
         const { releaseDir } = await import('@/engine/release-paths')
@@ -171,7 +173,7 @@ describe('release commands', () => {
             }
         )
 
-        it('refuses plan.md as a results asset', async () => {
+        it('refuses plan.md under a results name', async () => {
             const { releaseUploadCommand } = await import('@/cli/commands/release')
             const dir = await setup()
             const calls: string[][] = []
@@ -181,11 +183,11 @@ describe('release commands', () => {
                     vars,
                     gh(calls)
                 )
-            ).rejects.toThrow(/refusing to upload/)
+            ).rejects.toThrow(/not a release asset name/)
             expect(calls).toEqual([])
         })
 
-        it('uploads the plan from plan.md and a results file from its own name', async () => {
+        it('uploads the plan from plan.md and refuses a results file', async () => {
             const { releaseUploadCommand } = await import('@/cli/commands/release')
             const dir = await setup()
             const calls: string[][] = []
@@ -195,13 +197,11 @@ describe('release commands', () => {
                 vars,
                 gh(calls)
             )
-            await releaseUploadCommand(
-                { tag: 'v2', file: path.join(dir, results) },
-                vars,
-                gh(calls)
-            )
+            await expect(
+                releaseUploadCommand({ tag: 'v2', file: path.join(dir, results) }, vars, gh(calls))
+            ).rejects.toThrow(/not a release asset name/)
             const uploads = calls.filter(c => c[0] === 'release').map(c => path.basename(c[3]))
-            expect(uploads).toEqual(['testing-plan.md', results])
+            expect(uploads).toEqual(['testing-plan.md'])
         })
     })
 

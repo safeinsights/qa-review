@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
 import { onBaselineDone, onBaselineStep } from '../lib/ipc'
+import type { BaselineState } from './runProgressView'
 
-export type BaselineState =
-    | { phase: 'idle' }
-    | { phase: 'running'; index: number; total: number; name: string }
-    | { phase: 'done'; passed: boolean; failedStep: string; error: string }
+export type { BaselineState }
 
 // The release-happy-path baseline. Go starts it inside the run session, on the
 // session's streamed browser (gui/baseline.go startSessionBaseline); this only

@@ -61,7 +61,7 @@ export function jiraConfigFromEnv(env: NodeJS.ProcessEnv = process.env): JiraCon
     return jiraConfig(env)
 }
 
-function authHeader(config: JiraConfig): string {
+export function authHeader(config: JiraConfig): string {
     return `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')}`
 }
 
@@ -94,7 +94,7 @@ export async function jiraFetch(url: string, init: RequestInit): Promise<Respons
     }
 }
 
-async function assertOk(response: Response, what: string): Promise<void> {
+export async function assertOk(response: Response, what: string): Promise<void> {
     if (response.ok) return
     const body = await response.text().catch(() => '')
     throw new Error(`${what} failed (${response.status}): ${body.slice(0, 400)}`)
@@ -537,4 +537,22 @@ export async function linkIssues(
         }),
     })
     await assertOk(response, `Linking ${link.inward} to ${link.outward}`)
+}
+
+// A "web link" on an issue (Jira's remote link), shown in the card's links. The
+// globalId makes it idempotent: posting the same one again updates it in place.
+export async function addRemoteLink(
+    config: JiraConfig,
+    issueKey: string,
+    link: { url: string; title: string; summary?: string }
+): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/remotelink`, {
+        method: 'POST',
+        headers: jsonHeaders(config),
+        body: JSON.stringify({
+            globalId: `qa-review=${link.url}`,
+            object: { url: link.url, title: link.title, summary: link.summary },
+        }),
+    })
+    await assertOk(response, `Linking ${issueKey} to ${link.url}`)
 }

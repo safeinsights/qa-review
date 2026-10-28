@@ -515,9 +515,9 @@ var releasePlanAllowedTools = append(releaseShared(), "Agent", "Bash(qar plan-or
 // releaseRunAllowedTools adds the browser, the login helper, the disposable users the
 // skill uses instead of changing a shared account (session-create-user, invite and
 // totp for a hand-driven signup), deployed-release (a resume checks the env still runs
-// the build the earlier results came from), cleanup of the studies and users the run creates,
-// and the one Jira write the run may make: a single card for the security results,
-// and only on request.
+// the build the earlier results came from), and cleanup of the studies and users the run
+// creates. Its results go out through `qar release-*` (the release asset, and the private
+// Confluence page that links the FAIL cards), which releaseShared already allows.
 var releaseRunAllowedTools = append(releaseShared(),
 	"mcp__chrome-devtools",
 	"Bash(qar session-login:*)",
@@ -526,7 +526,6 @@ var releaseRunAllowedTools = append(releaseShared(),
 	"Bash(qar totp:*)",
 	"Bash(qar deployed-release:*)",
 	"Bash(qar cleanup:*)",
-	"Bash(qar jira-create-issue:*)",
 )
 
 // knownFigmaServers are the names a Figma MCP server is registered under: the

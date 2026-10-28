@@ -10,8 +10,8 @@ import {
 import { ReleaseRunLive } from './ReleaseRunLive'
 import { baselineLabel, useBaseline } from './useBaseline'
 
-// A finished run uploads its results asset; refresh so History shows it. The
-// release-saved event comes first (the session is still live), so both refresh.
+// A finished run publishes its Confluence page; refresh when the session ends so
+// History shows it. release-saved still refreshes after a plan save.
 function useRefreshOnRelease(onStatusStale: () => void) {
     const cb = useRef(onStatusStale)
     cb.current = onStatusStale
@@ -28,11 +28,10 @@ function useRefreshOnRelease(onStatusStale: () => void) {
     }, [])
 }
 
-// Why Start is off, or '' when it is not. A run uploads its results, so it needs the
-// push right; and it runs the saved asset, so local edits would go untested.
+// Why Start is off, or '' when it is not. A run tests the saved asset, so local edits
+// would go untested. It needs no push right: its results go to Confluence, not the
+// release.
 function startBlockedReason(status: ReleaseStatus): string {
-    if (!status.canUpload)
-        return 'gh has no push right on management-app — the results cannot be uploaded'
     if (status.local.planDiffers)
         return 'The local plan has edits that are not saved to the release — save or discard them first'
     return ''
@@ -71,7 +70,7 @@ function useReleaseRun(
         baselineText: baselineLabel(baseline.state),
         baselineState: baseline.state,
         baselineRunning: baseline.isRunning,
-        results: status.assets.filter(a => a.name.startsWith('regression-results-')),
+        pages: status.local.pages,
     }
 }
 
@@ -149,7 +148,7 @@ export function ReleaseRun({
                 screencastPort={screencastPort}
                 baseline={run.baselineState}
             />
-            <HistoryTable rows={run.results} />
+            <HistoryTable rows={run.pages} />
         </div>
     )
 }
@@ -171,24 +170,25 @@ function Note({ text, danger = false }: { text: string; danger?: boolean }) {
     )
 }
 
-function HistoryTable({ rows }: { rows: ReleaseStatus['assets'] }) {
+// The run pages published from this machine (confluence-<env>.json), newest first.
+function HistoryTable({ rows }: { rows: ReleaseStatus['local']['pages'] }) {
     if (!rows.length) return null
-    const body = rows.map(a => (
-        <Table.Tr key={a.name}>
+    const body = rows.map(p => (
+        <Table.Tr key={p.url}>
             <Table.Td>
-                <Button variant="subtle" size="compact-sm" onClick={() => openExternal(a.url)}>
-                    {a.name}
+                <Button variant="subtle" size="compact-sm" onClick={() => openExternal(p.url)}>
+                    {p.title}
                 </Button>
             </Table.Td>
-            <Table.Td>{a.updatedAt}</Table.Td>
+            <Table.Td>{p.at.slice(0, 16).replace('T', ' ')}</Table.Td>
         </Table.Tr>
     ))
     return (
         <Table mt="md" withTableBorder>
             <Table.Thead>
                 <Table.Tr>
-                    <Table.Th>Results</Table.Th>
-                    <Table.Th>Updated</Table.Th>
+                    <Table.Th>Run pages</Table.Th>
+                    <Table.Th>Published</Table.Th>
                 </Table.Tr>
             </Table.Thead>
             <Table.Tbody>{body}</Table.Tbody>

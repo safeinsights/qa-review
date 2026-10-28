@@ -435,7 +435,13 @@ export interface ReleaseStatus {
     exists: boolean
     canUpload: boolean
     assets: ReleaseAsset[]
-    local: { plan: boolean; planDiffers: boolean; results: string[] }
+    local: {
+        plan: boolean
+        planDiffers: boolean
+        results: string[]
+        // The run's Confluence pages, newest first (the Run screen's History).
+        pages: { env: string; title: string; url: string; at: string }[]
+    }
 }
 
 export async function listReleases(): Promise<string[]> {

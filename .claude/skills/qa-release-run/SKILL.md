@@ -1,6 +1,6 @@
 ---
 name: qa-release-run
-description: Execute a saved regression plan for a management-app release against staging or production — run the baseline suite, drive the browser through every plan line, gate the results, and upload them to the release. Use inside the QA Runner's Release tab.
+description: Execute a saved regression plan for a management-app release against staging or production — record the baseline the GUI runs, drive the browser through every plan line, gate the results, and publish them as a private Confluence page. Use inside the QA Runner's Release tab.
 ---
 
 # qa-release-run
@@ -8,8 +8,8 @@ description: Execute a saved regression plan for a management-app release agains
 You execute a **regression plan** that is already on the GitHub release. When the
 session starts, the GUI runs the baseline suite in your browser, where the runner
 watches it; you record its result, drive that **live browser** through every Changes
-and `[S-…]` line, record one result per line, and upload the results as a release
-asset.
+and `[S-…]` line, record one result per line, and publish the results as a private
+Confluence page. The GitHub release holds the testing plan alone: no results go there.
 
 ## The environment you're in
 - A browser is **already launched but NOT logged in**. Drive it with the
@@ -24,23 +24,32 @@ asset.
 - **Never prefix a command with `cd`.**
 - **Write every scratch file under `.tmp/release/<tag>/`.**
 - **One command per Bash call.** Pre-approved: every `qar` command whose name
-  starts with `release-`, `qar plan-lines`, `qar results-check`,
-  `qar results-render`, `qar session-login`, `qar cleanup`, `gh pr view`/`gh pr diff`, read-only
+  starts with `release-`, `qar plan-lines`, `qar results-check`, `qar session-login`,
+  `qar session-create-user`, `qar invite`, `qar totp`, `qar deployed-release`,
+  `qar cleanup`, `gh pr view`/`gh pr diff`, read-only
   `mkdir`/`ls`/`cat`/`date`/`echo`, Read/Write/Edit, the chrome-devtools MCP tools
   and the Jira MCP's `jira_get_issue`.
 - **Never run `qar run` or `qar session-run-suite`.** The GUI runs the baseline.
 - **Keep out of the browser until the baseline ends.** It drives the same browser
   you use, so do not use the chrome-devtools tools, `qar session-login` or
   `qar session-create-user` before Phase 2 says it has ended. Phase 1 needs no browser.
-- **Never post to Jira on your own.** The results go to the release only.
+- **Never post to Jira or Confluence on your own.** The results go only to the
+  private Confluence page, through `qar release-confluence` in Phase 4. It also adds
+  a link to the page on each card with a FAIL; that is the only Jira write.
+- **Never upload anything to the GitHub release.** It holds the testing plan alone,
+  which the plan session saves.
 - **Production is real, and the run may create data there.** Everything you
   create (studies, users, orgs, files) gets a natural title and description, as
   a real user would write it — never "test", "QA" or "asdf". Write each id to
   `.tmp/release/<tag>/created-<env>.json` as you create it, and delete all of
   it at the end (Phase 3, last step). A line marked `(staging only)` sends bad
   input and is NOT TESTED on production.
-- **management-app is public, and so is every release asset.** Security lines and
-  their results never leave this machine.
+- **management-app is public, and so is every release asset.** The results, the
+  security lines and the screenshots go only to the private Confluence page.
+- **Screenshots go on that page, so keep secrets out of them.** Never take a
+  screenshot that shows a private key, an authenticator setup key or QR code, or
+  recovery codes. Take the screenshot before the key appears, or after you leave the
+  page. Never type a password into a field that a screenshot shows unmasked.
 - **Write each result as soon as you have it**, with `qar release-result` (Phase 3).
   A long run can stop at any time, and a result that is only in the conversation is
   lost when it does.
@@ -222,23 +231,18 @@ baseline's study) unless the runner tells you to delete it.
 2. `qar release-results --tag <tag> --env <env> --stopped-by "<runner's name>"`.
    Every line with no result becomes `NOT TESTED`, approved by the runner, with
    the evidence "Run stopped by the runner before this line was tested."
-3. Do Phase 4 steps 2, 3 and 6. Ask before steps 4 and 5: a mostly NOT TESTED
-   result on a public release can look like a finished run.
+3. Do Phase 4 steps 2 to 4. The page shows the lines the run never reached in a
+   list of their own, so it does not read as a finished run.
 
-## Phase 4: gate, render, upload
-1. `qar release-progress --tag <tag> --env <env> --step report --note "Checking and writing the results"`,
+## Phase 4: gate and publish
+1. `qar release-progress --tag <tag> --env <env> --step report --note "Checking and publishing the results"`,
    then `qar release-results --tag <tag> --env <env>`. It writes
    `results-<env>.json` in run order and refuses while a line has no result.
 2. `qar results-check --inventory .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json --env <env>`
    — must print `"ok":true`. Fix every listed gap first.
-3. `qar results-render --tag <tag> --env <env> --plan .tmp/release/<tag>/run-plan-lines-<env>.json --results .tmp/release/<tag>/results-<env>.json`
-   — prints `{"output","asset","securityOutput"}`. `output` has no S- line.
-4. `qar release-upload --tag <tag> --file <output>` — `<output>` is the `output`
-   key printed by `results-render`. Never upload `securityOutput`.
-5. `qar release-saved --tag <tag> --asset <asset> --url <url>` — `<asset>` is the
-   `asset` key printed by `results-render`; `<url>` is the `url` key printed by
-   `release-upload`.
-6. If `securityOutput` is not empty, `cat` it and show the security results to the
-   runner here in the terminal. It stays on this machine.
-   Only if the runner asks for it, file one Jira card with them: `qar jira-create-issue --project <board> --summary "<tag> security results" --body-file <securityOutput>`.
-7. Report the counts and the asset URL. Then stop.
+3. `qar release-confluence --tag <tag> --env <env>` — publishes the private page:
+   every line with its screenshots, the testing plan attached, the security results
+   collapsed. It prints `{"url","title","images","linked","linkFailed"}`. `linked`
+   names the FAIL cards that now link to the page; report each entry of
+   `linkFailed` to the runner.
+4. Report the counts and the page URL. Then stop.

@@ -30,6 +30,7 @@ import {
     releaseStatusCommand,
     releaseUploadCommand,
 } from '@/cli/commands/release'
+import { releaseConfluenceCommand } from '@/cli/commands/release-confluence'
 import {
     releaseBaselineCommand,
     releaseProgressCommand,
@@ -171,6 +172,8 @@ async function main() {
             return releaseResultsCommand(opts)
         case 'release-baseline':
             return releaseBaselineCommand(opts)
+        case 'release-confluence':
+            return releaseConfluenceCommand(opts, await loadSettings())
         case 'release-summary':
             return releaseSummaryCommand(opts, await loadSettings())
         case 'results-render':

@@ -855,11 +855,9 @@ Builds and runs a regression plan for one management-app release. Spec:
   which `hasSecurityContent` finds an `S-<n>` token anywhere, a `-`/`*`/`+` or
   indented `[S-n]` bullet, a Security heading at any `#` depth in any case, or a
   `| S-n |` row. A false refusal costs one edit; a false pass makes a probe public.
-  The sources are pinned too (`assertAssetSource`): `testing-plan.md` comes only
-  from `<dir>/plan.md`, and a results asset is only the root-level file of that
-  name — a name-only check let `plan-lines.json` or `pr-<n>.json` go public under a
-  permitted name. Only `testing-plan.md` is replaced (`--clobber`); results are
-  never overwritten. Only files under `.tmp/release/<tag>/` are accepted (symlinks
+  The source is pinned too (`assertAssetSource`): `testing-plan.md` comes only
+  from `<dir>/plan.md` — a name-only check let `plan-lines.json` or `pr-<n>.json` go
+  public under a permitted name. It is replaced on each save (`--clobber`). Only files under `.tmp/release/<tag>/` are accepted (symlinks
   resolved). `release-summary` refuses a Summary with security content and an
   `--input` outside the release dir: the description is as public as the assets.
   `release-status`'s `planDiffers` compares the local plan WITHOUT its Security
@@ -881,11 +879,18 @@ Builds and runs a regression plan for one management-app release. Spec:
 - Security lines run **on staging only, from the machine that holds the local
   plan**. The run skill builds `run-plan-lines-<env>.json` from the downloaded asset
   and, on staging, merges the local S- lines with `plan-lines --security-from`.
-- `results-render` writes `regression-results-<env>-<YYYYMMDD-HHMM>.md` with no S-
+- **No results go on the GitHub release: it holds `testing-plan.md` alone.**
+  `isUploadableAssetName` accepts that one name, so `release-upload` refuses a results
+  file. A run's results go to its private Confluence page (below), and the Run
+  screen's History lists those pages from `confluence-<env>.json`
+  (`ReleaseStatus.local.pages`). A run needs no push right on management-app; saving
+  the plan still does.
+- `results-render` (a local report now; no session runs it) writes
+  `regression-results-<env>-<YYYYMMDD-HHMM>.md` with no S-
   line (rows, counts and section all left out), plus `security-results-<env>.md`
   (the S- rows alone) when the run has S- results. The second file is shown to the
-  runner in the terminal and never uploaded; on request only, the run session files
-  one Jira card with it (`qar jira-create-issue`, its only Jira write). Both files
+  runner in the terminal and never uploaded. `--page-url` adds a link to the run's
+  private Confluence page (below) to the public file. Both files
   redact every `*_PASSWORD`, `*_MFA_*`, `*_PRIVATE_KEY`, `*_TOKEN` and `*_SECRET`
   value (longest first). Unplanned results and lines without a section get their
   own headings, so nothing is hidden.
@@ -927,8 +932,22 @@ Builds and runs a regression plan for one management-app release. Spec:
   pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
   (per `knownJiraServers`), `gh pr view/diff`, `qar release-*`/`plan-lines`/
   `results-*`, read-only shell and file edits; the plan adds `Agent` and
-  `plan-order`; the run adds chrome-devtools, `session-login`, `cleanup` and
-  `jira-create-issue`.
+  `plan-order`; the run adds chrome-devtools, `session-login`, `session-create-user`,
+  `invite`, `totp`, `deployed-release` and `cleanup`. The run files no Jira card.
+- **Each run's full results go to a private Confluence page** (`qar
+  release-confluence`, `src/engine/release-confluence.ts`), because the public
+  release asset cannot carry screenshots: management-app is public, and an image
+  cannot be redacted the way text is. The page goes under the `RELEASE_CONFLUENCE_FOLDER`
+  folder (`config/settings.json`: "Management App Release Testing" in the SafeInsights
+  space; the id, or a folder URL): folder → `<tag>` → `<tag> <env> — <date> run`. It lists the failures first, then every line by PR, with a PR that has no
+  FAIL collapsed; each screenshot named in evidence is attached and shown inline,
+  and the security results are on the page, collapsed. The Jira API token works for
+  Confluence too (it is an account token), so there is no second secret. Each card
+  of a PR with a FAIL gets a Jira web link to the page; the card is the key in the
+  PR title, or the PR's first key when the title has none, because a description
+  that mentions "OTTER-99" is not that PR's card. Phase 4 ends with the page; nothing is
+  uploaded. The page attaches the testing plan as run (`testing-plan.md`) and the local
+  plan with its Security section (`testing-plan-with-security.md`).
 - **Why Save can be disabled with no session live:** Save is an instruction to the
   plan session ("save the plan" sent to the PTY), not an upload the GUI makes. With
   no live session nothing would receive it, so Save needs a session, the push right,

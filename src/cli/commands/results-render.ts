@@ -11,7 +11,8 @@ import {
 import type { ResultEntry } from '@/engine/results'
 import type { Vars } from '@/engine/settings'
 
-// `qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>`
+// `qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>
+//     [--page-url <url>]` — the url is the private Confluence page (release-confluence).
 // Writes .tmp/release/<tag>/<regression-results-<env>-<stamp>.md> without any S- line
 // (management-app is public), and, when the run has S- results, the local-only
 // security-results-<env>.md. Prints {"output","asset","securityOutput"}; release-upload
@@ -40,6 +41,7 @@ export async function resultsRenderCommand(
         results: parsed.results,
         secrets: secretValues(vars),
         now: new Date(),
+        pageUrl: (opts['page-url'] ?? '').trim() || undefined,
     }
     const dir = releaseDir(tag)
     fs.mkdirSync(dir, { recursive: true })

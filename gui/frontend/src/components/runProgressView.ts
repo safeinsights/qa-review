@@ -1,8 +1,14 @@
 import type { RunProgress } from '../lib/ipc'
-import type { BaselineState } from './useBaseline'
 
 // Text for the progress panel above a release run's browser. A plain module, not the
-// component, so the engine's tsconfig (no --jsx) can typecheck its tests.
+// component, so the engine's tsconfig (no --jsx) can typecheck its tests. It must not
+// import a module that imports React: the root typecheck runs without the frontend's
+// node_modules.
+
+export type BaselineState =
+    | { phase: 'idle' }
+    | { phase: 'running'; index: number; total: number; name: string }
+    | { phase: 'done'; passed: boolean; failedStep: string; error: string }
 
 const STEP_TEXT: Record<Exclude<RunProgress['step'], ''>, string> = {
     setup: 'Setting up',

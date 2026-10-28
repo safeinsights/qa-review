@@ -314,7 +314,7 @@ func (a *App) stopReleaseSavedWatcher() {
 // --permission-mode auto, a tool off the allowlist does not prompt the user: the
 // auto-mode classifier decides, and it could approve a direct `gh release upload`
 // of plan.md (Security section and all) or a Jira comment. A deny rule outranks
-// both. The qar release-* and jira-create-issue commands still work: qar's own gh
+// both. The qar release-* commands still work: qar's own gh
 // and Jira calls are child processes, not Bash tool calls.
 func releaseDisallowedTools() []string {
 	tools := []string{

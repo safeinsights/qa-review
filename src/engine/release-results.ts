@@ -12,6 +12,8 @@ export interface RenderInput {
     // The uploaded asset: management-app is public, so S- lines and their results
     // are left out entirely (rows, counts and the Security section).
     publicOnly: boolean
+    // The private Confluence page with the screenshots (qar release-confluence).
+    pageUrl?: string
 }
 
 // Values that must never reach a release asset. Names, not values, decide: every
@@ -128,6 +130,9 @@ function render(input: Omit<RenderInput, 'publicOnly'>, title: string): string {
         .join(' · ')
 
     const out: string[] = [title, '', `Run at ${stamp(input.now)}. ${countLine}`, '']
+    if (input.pageUrl) {
+        out.push(`Full results with screenshots (SafeInsights staff only): ${input.pageUrl}`, '')
+    }
     const section = (name: string, filter: (l: InventoryLine) => boolean) => {
         const lines = input.plan.lines.filter(filter)
         if (!lines.length) return

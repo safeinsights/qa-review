@@ -315,7 +315,7 @@ export const COMMANDS = [
     },
     {
         name: 'results-render',
-        usage: 'qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json>',
+        usage: 'qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json> [--page-url <url>]',
         summary: "Render a release run's results as the markdown asset, with secrets redacted.",
         details:
             'Writes regression-results-<env>-<stamp>.md under .tmp/release/<tag>/ with no S- line ' +
@@ -341,6 +341,17 @@ export const COMMANDS = [
             'Checks the entry with the results-check rules before it is written: a FAIL needs ' +
             '--severity and --area, a NOT TESTED needs --approved-by. A second result for a line ' +
             'replaces the first. Prints {"id","result","counts"}.',
+    },
+    {
+        name: 'release-confluence',
+        usage: 'qar release-confluence --tag <tag> --env <env> [--plan <run-plan-lines.json>] [--results <results.json>]',
+        summary: "Publish a release run's results, with screenshots, as a private Confluence page.",
+        details:
+            'The page goes under the RELEASE_CONFLUENCE_FOLDER folder (config/settings.json): ' +
+            'folder → <tag> → "<tag> <env> — <date> run". Each screenshot named in evidence ' +
+            '(.tmp/release/<tag>/shots/) is attached and shown inline; the security results are ' +
+            'on the page, collapsed. The Jira cards of the PRs with a FAIL get a link to the page. ' +
+            'Prints {"url","title","images","linked","linkFailed"}.',
     },
     {
         name: 'release-baseline',

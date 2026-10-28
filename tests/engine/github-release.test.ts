@@ -10,6 +10,7 @@ import {
     prNumbersFromBody,
     prNumbersFromSubjects,
     releaseStatus,
+    runPages,
     uploadAsset,
 } from '@/engine/github-release'
 import { releaseDir } from '@/engine/release-paths'
@@ -170,6 +171,7 @@ describe('releaseStatus', () => {
             plan: true,
             planDiffers: true,
             results: ['results-staging.json'],
+            pages: [],
         })
     })
 
@@ -230,7 +232,7 @@ describe('release error handling and upload guards', () => {
         expect((await releaseStatus(gone, 'r', 'v2', releaseDir('v2'))).exists).toBe(false)
     })
 
-    it('clobbers only the plan asset', async () => {
+    it('replaces the plan asset and refuses a results asset', async () => {
         const calls: string[][] = []
         const gh = async (args: string[]) => {
             calls.push(args)
@@ -253,10 +255,12 @@ describe('release error handling and upload guards', () => {
         fs.writeFileSync(plan, 'x')
         fs.writeFileSync(path.join(releaseDir('v2'), results), 'x')
         await uploadAsset(gh, 'r', 'v2', plan, 'testing-plan.md')
-        await uploadAsset(gh, 'r', 'v2', path.join(releaseDir('v2'), results), results)
+        await expect(
+            uploadAsset(gh, 'r', 'v2', path.join(releaseDir('v2'), results), results)
+        ).rejects.toThrow(/not a release asset name/)
         const uploads = calls.filter(c => c[0] === 'release')
+        expect(uploads).toHaveLength(1)
         expect(uploads[0]).toContain('--clobber')
-        expect(uploads[1]).not.toContain('--clobber')
     })
 
     it('refuses to upload a file that holds security lines', async () => {
@@ -281,15 +285,20 @@ describe('release error handling and upload guards', () => {
             return ''
         }
         const dir = releaseDir('v2')
-        const results = 'regression-results-staging-20261026-1200.md'
-        for (const sub of ['remote', 'public', 'upload']) {
+        for (const sub of ['remote', 'upload']) {
             fs.mkdirSync(path.join(dir, sub), { recursive: true })
-            fs.writeFileSync(path.join(dir, sub, results), 'x')
+            fs.writeFileSync(path.join(dir, sub, 'testing-plan.md'), 'x')
         }
         fs.writeFileSync(path.join(dir, 'plan.md'), 'x')
-        for (const sub of ['remote', 'public', 'upload']) {
+        for (const sub of ['remote', 'upload']) {
             await expect(
-                uploadAsset(gh, 'r', 'v2', path.join(dir, sub, results), results)
+                uploadAsset(
+                    gh,
+                    'r',
+                    'v2',
+                    path.join(dir, sub, 'testing-plan.md'),
+                    'testing-plan.md'
+                )
             ).rejects.toThrow(/only uploaded from/)
         }
         await expect(
@@ -308,6 +317,40 @@ describe('release error handling and upload guards', () => {
         const link = path.join(releaseDir('v2'), 'link.md')
         fs.symlinkSync(secret, link)
         expect(() => assertUnderReleaseDir('v2', link)).toThrow(/under/)
+    })
+
+    it('lists the run pages, one per page, newest first', () => {
+        const dir = releaseDir('v2')
+        fs.mkdirSync(dir, { recursive: true })
+        const page = (title: string, url: string, at: string) => ({ title, url, id: '1', at })
+        fs.writeFileSync(
+            path.join(dir, 'confluence-staging.json'),
+            JSON.stringify([
+                page('v2 staging — A', 'https://w/p?pageId=1', '2026-10-27T10:00:00Z'),
+                page('v2 staging — A', 'https://w/p?pageId=1', '2026-10-28T09:00:00Z'),
+            ])
+        )
+        fs.writeFileSync(
+            path.join(dir, 'confluence-production.json'),
+            JSON.stringify([
+                page('v2 production — B', 'https://w/p?pageId=2', '2026-10-27T12:00:00Z'),
+            ])
+        )
+        fs.writeFileSync(path.join(dir, 'confluence-qa.json'), '{not json')
+        expect(runPages(dir)).toEqual([
+            {
+                env: 'staging',
+                title: 'v2 staging — A',
+                url: 'https://w/p?pageId=1',
+                at: '2026-10-28T09:00:00Z',
+            },
+            {
+                env: 'production',
+                title: 'v2 production — B',
+                url: 'https://w/p?pageId=2',
+                at: '2026-10-27T12:00:00Z',
+            },
+        ])
     })
 
     it('rejects . and .. and slashes as tags', () => {

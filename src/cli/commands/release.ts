@@ -170,8 +170,8 @@ function assetNameFor(opts: Record<string, string>, file: string): string {
     const name = given || (base === PLAN_FILE ? PLAN_ASSET : base)
     if (name !== path.basename(name) || !isUploadableAssetName(name)) {
         throw new Error(
-            `${name} is not a release asset name: use ${PLAN_ASSET} or ` +
-                'regression-results-<env>-<YYYYMMDD-HHMM>.md'
+            `${name} is not a release asset name: only ${PLAN_ASSET} goes on the release ` +
+                '(run results go to Confluence: qar release-confluence)'
         )
     }
     return name

@@ -33,17 +33,17 @@ describe('jira-create-issue', () => {
     const read = (skill: string) =>
         fs.readFileSync(path.resolve(__dirname, `../../.claude/skills/${skill}/SKILL.md`), 'utf8')
 
-    it('is named once in the run skill, in the on-request sentence', () => {
-        const lines = read('qa-release-run')
-            .split('\n')
-            .filter(l => l.includes('jira-create-issue'))
-        expect(lines).toHaveLength(1)
-        expect(lines[0]).toMatch(/Only if the runner asks/)
-        expect(read('qa-release-run').match(/jira-create-issue/g)).toHaveLength(1)
+    // The run's private record is the Confluence page; neither skill files a card.
+    it('is never named in either release skill', () => {
+        expect(read('qa-release-run')).not.toContain('jira-create-issue')
+        expect(read('qa-release-plan')).not.toContain('jira-create-issue')
     })
 
-    it('is never named in the plan skill', () => {
-        expect(read('qa-release-plan')).not.toContain('jira-create-issue')
+    it('the run skill publishes the page and uploads nothing to the release', () => {
+        const src = read('qa-release-run')
+        expect(src).toContain('qar release-confluence --tag <tag> --env <env>')
+        expect(src).not.toContain('qar release-upload')
+        expect(src).not.toContain('qar results-render')
     })
 })
 
@@ -59,7 +59,6 @@ describe('the security rule', () => {
         expect(src).not.toMatch(/qar session-run-suite --/)
         expect(src).toContain('qar release-baseline --tag <tag> --env <env> --wait')
         expect(src).toContain('--remote-only')
-        expect(src).toContain('Never upload `securityOutput`')
     })
 
     it('the plan skill uploads testing-plan.md and says Security is stripped', () => {
