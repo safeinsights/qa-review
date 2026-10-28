@@ -135,6 +135,15 @@ export const COMMANDS = [
         ].join('\n'),
     },
     {
+        name: 'session-run-suite',
+        usage: 'qar session-run-suite --suite <name> --role <role>',
+        summary: "Run a whole suite on the running session's streamed browser.",
+        details:
+            'The session prints the step and result lines (the run --json format) on its ' +
+            'stdout, which the GUI reads; this prints {"ok","bundleDir"}. The release run ' +
+            'uses it for its baseline, so the baseline shows in the browser pane.',
+    },
+    {
         name: 'session-create-study',
         usage: 'qar session-create-study',
         summary: 'Submit a full study proposal. Prints {"studyId"}.',
@@ -255,13 +264,151 @@ export const COMMANDS = [
     },
     {
         name: 'results-check',
-        usage: 'qar results-check --inventory <path.json> --results <path.json>',
+        usage: 'qar results-check --inventory <path.json> --results <path.json> [--env <env>]',
         summary: 'Gate a validation report: every inventory line has one evidenced result.',
         details:
             'Results are {"results":[{"id","result":"PASS|FAIL|CONFLICT|UNCLEAR|NOT TESTED",' +
             '"evidence","severity?","area?","approvedBy?","decision?"}]}. FAIL needs severity and area; ' +
             'NOT TESTED needs approvedBy; a line with source type "observed" can only be a FAIL. ' +
-            'Fails listing every gap; prints {"ok","counts"} when clean.',
+            'Fails listing every gap; prints {"ok","counts"} when clean.' +
+            ' With --env production, a line flagged stagingOnly cannot be PASS or FAIL.',
+    },
+    {
+        name: 'plan-lines',
+        usage: 'qar plan-lines --input <plan.md> --tag <tag> [--output <path.json>] [--prs <prs.json>] [--security-from <plan.md>]',
+        summary: 'Parse the test lines out of a regression plan for results-check.',
+        details:
+            'Sections must be Summary, Baseline, Changes, Security, Technical appendix in that ' +
+            'order; Security may be absent (the public asset has none). Changes holds run ' +
+            'groups ("### <n>. <Role> · <no study | study with …>") of lines "- <n>.<n> <title> ' +
+            '— <steps> ([PR #<n>](<url>))"; Baseline and Security lines are "- [ID] <title> — ' +
+            '<steps>". "(staging only)" at the end marks an active probe or bad input. With ' +
+            'prs.json beside the input (or --prs), every PR needs a Changes line and every ' +
+            'Changes line needs a PR in the release. --security-from adds the S- lines of a ' +
+            'local plan. Default output is plan-lines.json beside the input.',
+    },
+    {
+        name: 'plan-order',
+        usage: 'qar plan-order --input <plan.md>',
+        summary: "Sort a regression plan's Changes section into run order, in place.",
+        details:
+            'Groups the checks by role and study stage so one study moves through its ' +
+            'lifecycle with the fewest sign-ins, writes the Next steps between groups, ' +
+            'renumbers every line and links every PR. A line marked "(ends the study)" ' +
+            'runs last or on a new study. Refuses, changing nothing, if Changes holds ' +
+            'anything other than run groups, test lines and Next notes.',
+    },
+    {
+        name: 'release-list',
+        usage: 'qar release-list',
+        summary: 'List management-app release tags, newest first.',
+    },
+    {
+        name: 'release-prs',
+        usage: 'qar release-prs --tag <tag>',
+        summary:
+            'Write the PR set of a release (from the tag compare) to .tmp/release/<tag>/prs.json.',
+        details:
+            'The set comes from compare/<previous>...<tag>, never from the release body alone: ' +
+            'the body is generated and has missed a third of a release. notesMissing lists ' +
+            'PRs the body omits. Each PR carries its Jira keys, files, and body.',
+    },
+    {
+        name: 'results-render',
+        usage: 'qar results-render --tag <tag> --env <env> --plan <plan-lines.json> --results <results.json> [--page-url <url>]',
+        summary: "Render a release run's results as the markdown asset, with secrets redacted.",
+        details:
+            'Writes regression-results-<env>-<stamp>.md under .tmp/release/<tag>/ with no S- line ' +
+            '(management-app is public), plus security-results-<env>.md (local only, never uploaded) ' +
+            'when the run has S- results. Prints {"output","asset","securityOutput"}.',
+    },
+    {
+        name: 'release-progress',
+        usage: 'qar release-progress --tag <tag> --env <env> (--status | --start | --resume | --line <id> | --step setup|cleanup|report) [--note <text>]',
+        summary: 'Tell the GUI what a release run is doing now (the progress panel reads it).',
+        details:
+            'Writes .tmp/release/<tag>/progress-<env>.json. --status writes nothing: it prints ' +
+            '{"total","done","counts","remaining","loggedAt"} for an earlier run. --start begins a ' +
+            'new run: it keeps the previous results-<env>.jsonl under a stamped name. --resume ' +
+            'keeps the log, so the lines that have a result are skipped. --line names the plan ' +
+            'line being tested; --step a step between lines. --note is a short sentence for the panel.',
+    },
+    {
+        name: 'release-result',
+        usage: 'qar release-result --tag <tag> --env <env> --id <id> --result PASS|FAIL|"NOT TESTED" --evidence <text> [--severity blocker|major|minor] [--area <area>] [--approved-by <name>]',
+        summary: "Append one line's result to .tmp/release/<tag>/results-<env>.jsonl.",
+        details:
+            'Checks the entry with the results-check rules before it is written: a FAIL needs ' +
+            '--severity and --area, a NOT TESTED needs --approved-by. A second result for a line ' +
+            'replaces the first. Prints {"id","result","counts"}.',
+    },
+    {
+        name: 'release-confluence',
+        usage: 'qar release-confluence --tag <tag> --env <env> [--plan <run-plan-lines.json>] [--results <results.json>]',
+        summary: "Publish a release run's results, with screenshots, as a private Confluence page.",
+        details:
+            'The page goes under the RELEASE_CONFLUENCE_FOLDER folder (config/settings.json): ' +
+            'folder → <tag> → "<tag> <env> — <date> run". Each screenshot named in evidence ' +
+            '(.tmp/release/<tag>/shots/) is attached and shown inline; the security results are ' +
+            'on the page, collapsed. The Jira cards of the PRs with a FAIL get a link to the page. ' +
+            'Prints {"url","title","images","linked","linkFailed"}.',
+    },
+    {
+        name: 'release-baseline',
+        usage: 'qar release-baseline --tag <tag> --env <env> [--wait <seconds>]',
+        summary: "Print the release run's baseline result, waiting for it if asked.",
+        details:
+            "The GUI runs release-happy-path in the run session's browser and writes " +
+            '.tmp/release/<tag>/baseline-<env>.json when it ends. Prints that summary with ' +
+            '"done":true, or {"done":false} if it is still running after --wait seconds.',
+    },
+    {
+        name: 'release-results',
+        usage: 'qar release-results --tag <tag> --env <env> [--stopped-by <runner>]',
+        summary: 'Write results-<env>.json from the run log, in run order.',
+        details:
+            'Refuses when a line has no result, unless --stopped-by names the runner who stopped ' +
+            'the run: each such line is then NOT TESTED, approved by that runner.',
+    },
+    {
+        name: 'release-status',
+        usage: 'qar release-status --tag <tag>',
+        summary: 'Report the assets on a release, upload rights, and the local plan/results files.',
+    },
+    {
+        name: 'release-download',
+        usage: 'qar release-download --tag <tag> [--asset testing-plan.md] [--remote-only] [--force]',
+        summary: 'Download one release asset into .tmp/release/<tag>/ (the plan lands as plan.md).',
+        details:
+            'The asset lands in remote/ first. An existing plan.md that differs from the asset ' +
+            '(beyond its local Security section) is not replaced unless --force. --remote-only ' +
+            'leaves plan.md alone.',
+    },
+    {
+        name: 'release-upload',
+        usage: 'qar release-upload --tag <tag> --file <path> [--as <asset name>]',
+        summary:
+            'Upload a file under .tmp/release/<tag>/ as a release asset (only testing-plan.md is replaced; other assets are never overwritten).',
+        details:
+            '--as is testing-plan.md or regression-results-<env>-<YYYYMMDD-HHMM>.md. testing-plan.md ' +
+            'is made only from .tmp/release/<tag>/plan.md, uploaded without its Security section; a ' +
+            'results asset is only the file of the same name in .tmp/release/<tag>/. Any file that ' +
+            'still holds security content (an S-<n> id, a Security heading) is refused, because ' +
+            'management-app is public. ' +
+            'Prints {"tag","asset","url","stripped"}.',
+    },
+    {
+        name: 'release-saved',
+        usage: 'qar release-saved --tag <tag> --asset <name> [--url <url>]',
+        summary: 'Tell the GUI a release asset was uploaded (clears the unsaved badge).',
+    },
+    {
+        name: 'release-summary',
+        usage: 'qar release-summary --tag <tag> [--input <plan.md>]',
+        summary:
+            "Write the plan's Summary section into the release description, above the PR table.",
+        details:
+            'Inserts a <!-- regression-summary --> block before the "------" separator (or replaces the existing block). Nothing else in the description changes. --input must be under .tmp/release/<tag>/, and a Summary with security content is refused.',
     },
     {
         name: 'clock',

@@ -135,6 +135,12 @@ export interface EnvConfig {
     // key, so an unset value must NOT fail other runs).
     accounts: Record<
         Role,
-        { email: string; password: string; mfaCode: string; privateKey?: string }
+        {
+            email: string
+            password: string
+            mfaCode: string
+            nextMfaCode: () => Promise<string>
+            privateKey?: string
+        }
     >
 }

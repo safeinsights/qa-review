@@ -30,6 +30,17 @@ export interface InventoryLine {
     text: string
     source: LineSource
     conflictWith?: string
+    // Release-plan lines only (plan-lines.ts). `stagingOnly` marks an active probe
+    // that must not run on production; results-check enforces it with --env.
+    section?: 'baseline' | 'changes' | 'security'
+    pr?: number
+    prUrl?: string
+    stagingOnly?: boolean
+    // Changes lines only: who runs the check and the study stage it needs
+    // (plan-order.ts). `endsStudy` marks a check after which the study cannot move on.
+    role?: string
+    needs?: string
+    endsStudy?: boolean
 }
 
 export interface Inventory {

@@ -1413,10 +1413,10 @@ async function signInToCoder(ctx: RunContext, ide: Page): Promise<void> {
     await passwordField.waitFor({ state: 'visible', timeout: 60_000 })
     await passwordField.fill(ctx.account.password)
     await ide.getByRole('button', { name: /^Continue$/i }).click()
-    // SMS MFA: the same fixed second-factor code the app login uses. Clerk renders a
-    // one-time-code input (a row of single-char boxes or one combined field); fill it
-    // and, if a submit button is shown rather than auto-advancing, click it.
-    await fillCoderMfa(ide, ctx.account.mfaCode)
+    // The same second factor the app login uses. Clerk renders a one-time-code input (a
+    // row of single-char boxes or one combined field); fill it and, if a submit button
+    // is shown rather than auto-advancing, click it.
+    await fillCoderMfa(ide, await ctx.account.nextMfaCode())
     // The verified login redirects back to Coder; the workbench assertion in the
     // caller confirms code-server actually rendered.
 }

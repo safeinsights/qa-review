@@ -17,7 +17,7 @@ import {
     listMessageIds,
     waitForMessage,
 } from '../engine/mailtm'
-import { totp } from '../engine/totp'
+import { freshTotp } from '../engine/totp'
 import type { RunContext, Suite } from './types'
 
 // Covers the three shapes an invitation landing page takes, and what a SECOND
@@ -79,8 +79,6 @@ const primaryInbox = (ctx: RunContext): Inbox => ctx.state.primaryInbox as Inbox
 const mergeInbox = (ctx: RunContext): Inbox => ctx.state.mergeInbox as Inbox
 const consumedInvites = (ctx: RunContext): string[] => ctx.state.consumedInvites as string[]
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
-
 // Pull the next NOT-YET-SEEN invitation URL out of an inbox.
 //
 // The primary address receives two invites within a minute of each other, and the
@@ -103,16 +101,6 @@ async function nextInviteUrl(inbox: Inbox, consumed: string[]): Promise<string> 
     const url = extractSignupUrl(message)
     consumed.push(url)
     return url
-}
-
-// A code computed in the last seconds of its 30s window can expire between fill and
-// submit, and a rejected code is indistinguishable from a slow page until the whole
-// action timeout has burned. Stepping over that boundary is deterministic and cheaper
-// than a retry loop that has to tell the two apart.
-async function freshTotp(secret: string): Promise<string> {
-    const msLeft = 30_000 - (Date.now() % 30_000)
-    if (msLeft < 8_000) await sleep(msLeft + 500)
-    return totp(secret)
 }
 
 // Mirrors management-app's fillPinInput: the test-id group when it is present, the

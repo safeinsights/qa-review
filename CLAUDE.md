@@ -316,6 +316,14 @@ What it captures that is otherwise unrecoverable:
   on a real machine (18 of them, one pinned to a long-gone port), which is itself a
   plausible contributor to "the MCP server didn't come up".
 
+**A session stops itself when its app is gone.** The GUI passes its pid in
+`QAR_GUI_PID` (`guiPidEnv`, `gui/paths.go`) to `qar session` and to the baseline's
+`qar session-run-suite`, and both exit once that pid has gone
+(`src/engine/gui-parent.ts`). An app exit that skips `shutdown()` — every `wails dev`
+rebuild, a force quit, a crash — sends no signal, and left the session running with
+its Chrome and the session lock, so the next session would not start. Observed twice
+in one afternoon.
+
 **App quit reaps synchronously.** `teardownSession()`/`pty.stop()` only SIGTERM and
 defer the SIGKILL to goroutines that fire 2–3s later. That's fine for a session
 switch, but at quit the process exits before those goroutines run — so anything
@@ -775,6 +783,186 @@ Where the numbers go:
 Adding a route means adding it to `ROUTES` in `src/suites/lighthouse.ts` and updating
 the pinned names in `tests/suites/step-names.test.ts`.
 
+## Release regression (the Release tab)
+
+Builds and runs a regression plan for one management-app release. Spec:
+`docs/superpowers/specs/2026-10-26-release-regression-design.md`.
+
+- **The PR set comes from the tag compare, never from the release body.** The
+  body is generated and has missed a third of a release (v1.6.9: 63 PRs in
+  `compare/v1.6.8...v1.6.9`, 43 in the body). `qar release-prs` reads commit
+  subjects (`Merge pull request #N`, squash `(#N)`) and reports `notesMissing`.
+- Everything for one release lives in `.tmp/release/<tag>/`: `prs.json`,
+  `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
+  `remote/testing-plan.md` (the downloaded asset), `public/testing-plan.md` (what
+  was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
+  `created-<env>.json` (what the run created, for cleanup), `results-<env>.json`,
+  `regression-results-<env>-<stamp>.md` and `security-results-<env>.md`.
+- **The run is logged as it goes, and the GUI shows it.** The run session writes
+  `progress-<env>.json` (`qar release-progress --start | --line <id> | --step …`)
+  and appends each result to `results-<env>.jsonl` (`qar release-result`, which
+  applies the results-check rules at once). `qar release-results` builds
+  `results-<env>.json` from the log; `--stopped-by <runner>` fills the lines a
+  stopped run never reached as NOT TESTED. The Run phase shows the terminal beside
+  the shared, interactive browser, as Validation does, with a progress panel above
+  the browser: `ReleaseRunProgress` (`gui/release_progress.go`) reads the three
+  files directly every 2 s, and the time left is the pace so far, shown after 5
+  lines.
+- **A stopped run can resume.** `qar release-progress --status` reports what an
+  earlier session logged; `--resume` keeps the log, and the skill skips each line
+  that has a result. A resumed session counts its pace from the resume, checks
+  `qar deployed-release` against the tag first, and builds a new study by replaying
+  the `> Next:` steps. Each logged result carries its line's title: ids are
+  positions in the plan, so after a plan edit a result whose title no longer
+  matches is "stale" and the line is tested again.
+- `plan.md` has five fixed sections: Summary, Baseline, Changes, Security,
+  Technical appendix. Baseline and Security lines are `- [BASELINE] …` and
+  `- [S-<n>] <title> — <steps>`; `(staging only)` at the end marks an active probe
+  or bad input. Changes lines are `- <g>.<n> <title> — <steps> ([PR #<pr>](<url>))`
+  under run group headings `### <g>. <Role> · <no study | study with …>`.
+  `qar plan-lines` parses them into an inventory-shaped file so `results-check`
+  gates a run unchanged (its `--inventory` flag accepts a plan-lines file);
+  `--env production` rejects PASS/FAIL on a staging-only line. `plan-lines`
+  rejects a malformed bullet that holds a bracketed token in Baseline, Changes or
+  Security, instead of dropping it. It accepts CRLF. Security is the one optional
+  section, because the public asset has none.
+- **The plan reads in the order it is run**, so a person can run it by hand as
+  efficiently as the session. `qar plan-order` (`src/engine/plan-order.ts`) sorts
+  Changes: no-study checks first, grouped by role; then ONE study moved through
+  the `study-happy-path` stages (`STAGES`), each check run while the study is at
+  the stage it needs. At a stage the groups start as the role already signed in
+  and end as the role that moves the study on, so each role signs in once per
+  stage at most. A check marked `(ends the study)` (a rejection, a delete) is
+  either the walk's last check or gets a study of its own. `plan-order` writes
+  the `> Next:` setup steps and the `> Last:` cleanup, numbers every line and
+  links every PR. It refuses, writing nothing, when Changes holds any other text,
+  since a rewrite would drop it. The plan skill runs it after writing the plan
+  and after every edit to Changes.
+- The ids are positions (`3.2` = group 3, check 2) so a tester sees where they
+  are. Security keeps `S-<n>`: `hasSecurityContent` finds a Security line by that
+  token, and a weaker token would weaken the public-asset guard.
+- **Production runs create data.** Only S- probes and bad-input checks are
+  staging only. What a run creates gets natural titles and descriptions and is
+  deleted at the end with `qar cleanup` as admin.
+- **Completeness is gated.** With `prs.json` beside the plan (or `--prs`),
+  `plan-lines` reports `PR #n has no test line` and `<g>.<n> <title>: PR #n is not
+  in the release`. The PR number comes from the line's `(PR #n)` link. A downloaded asset in `remote/` has no `prs.json` beside it, so a run
+  is not gated on it.
+- **management-app is public, so its release assets are too. The Security section
+  never leaves the machine.** The plan asset is `testing-plan.md`: `release-upload`
+  writes `stripSecurity(plan.md)` (`src/engine/public-plan.ts`) to
+  `public/testing-plan.md` and uploads that, and `uploadAsset` refuses any file in
+  which `hasSecurityContent` finds an `S-<n>` token anywhere, a `-`/`*`/`+` or
+  indented `[S-n]` bullet, a Security heading at any `#` depth in any case, or a
+  `| S-n |` row. A false refusal costs one edit; a false pass makes a probe public.
+  The source is pinned too (`assertAssetSource`): `testing-plan.md` comes only
+  from `<dir>/plan.md` — a name-only check let `plan-lines.json` or `pr-<n>.json` go
+  public under a permitted name. It is replaced on each save (`--clobber`). Only files under `.tmp/release/<tag>/` are accepted (symlinks
+  resolved). `release-summary` refuses a Summary with security content and an
+  `--input` outside the release dir: the description is as public as the assets.
+  `release-status`'s `planDiffers` compares the local plan WITHOUT its Security
+  section, or every local plan would read as unsaved.
+- Release sessions pass `--disallowedTools` for `gh release/api/pr merge/pr
+  close/issue` and for the Jira write tools under every name in
+  `knownJiraServers`. The allowlist is not a write boundary in auto mode — the
+  classifier can approve a tool that is not listed — but a deny rule outranks it.
+  qar's own gh and Jira calls are child processes, not Bash tool calls, so the
+  two permitted writes (`gh release upload`, `gh release edit`) still work.
+- `release-download` lands the asset in `remote/`, then places the plan as
+  `plan.md` only when there is none, it equals the asset, or `--force`. A local plan
+  that differs from the asset only by its Security section is kept as is.
+  `--remote-only` never touches `plan.md`: a run uses it, so it neither replaces nor
+  reads a plan someone is editing. `DiscardLocalPlan` passes `--force`, which
+  splices the local Security section back into the downloaded plan
+  (`extractSecurity`/`spliceSecurity`, after Changes): the asset never holds that
+  section, so the local plan is its only copy. The Discard button confirms first.
+- Security lines run **on staging only, from the machine that holds the local
+  plan**. The run skill builds `run-plan-lines-<env>.json` from the downloaded asset
+  and, on staging, merges the local S- lines with `plan-lines --security-from`.
+- **No results go on the GitHub release: it holds `testing-plan.md` alone.**
+  `isUploadableAssetName` accepts that one name, so `release-upload` refuses a results
+  file. A run's results go to its private Confluence page (below), and the Run
+  screen's History lists those pages from `confluence-<env>.json`
+  (`ReleaseStatus.local.pages`). A run needs no push right on management-app; saving
+  the plan still does.
+- `results-render` (a local report now; no session runs it) writes
+  `regression-results-<env>-<YYYYMMDD-HHMM>.md` with no S-
+  line (rows, counts and section all left out), plus `security-results-<env>.md`
+  (the S- rows alone) when the run has S- results. The second file is shown to the
+  runner in the terminal and never uploaded. `--page-url` adds a link to the run's
+  private Confluence page (below) to the public file. Both files
+  redact every `*_PASSWORD`, `*_MFA_*`, `*_PRIVATE_KEY`, `*_TOKEN` and `*_SECRET`
+  value (longest first). Unplanned results and lines without a section get their
+  own headings, so nothing is hidden.
+- The editor and the Claude session both write `plan.md`. `gui/release.go` polls
+  it every 500 ms and emits `plan-changed {tag, hash}`; `releaseSync.ts`
+  (`decideReload`) decides reload/ignore/ask. The editor's own autosave comes back
+  as an event and is ignored by hash. `PlanEditor.tsx` (CodeMirror 6) annotates an
+  external reload so it does not echo as an edit and keeps the caret.
+  `teardownSession` stops the watcher, so the UI calls `WatchPlan` again after
+  `session-ended`.
+- Go bindings in `gui/release.go`: `ListReleases`, `ReleaseStatus`, `ReadPlan`,
+  `WritePlan`, `DiscardLocalPlan`, `CheckPlanLines`, `WatchPlan`, `UnwatchPlan`,
+  `StartReleasePlanSession`, `StartReleaseRunSession`. After a save or upload the
+  skill writes `<repo>/results/release-saved.json` (`qar release-saved`); Go emits
+  `release-saved {tag, asset, url}`. `StartReleasePlanSession(tag, false)` with no
+  `plan.md` uses the GENERATION prompt (`releasePlanOpening`): that is the Retry
+  after a session died mid-generation, and it reuses the `pr-<n>.json` files.
+- **The baseline runs in the run session's browser, started by Go.** Start run
+  starts the run session at once; `StartReleaseRunSession` then calls
+  `startSessionBaseline` (`gui/baseline.go`), which spawns `qar session-run-suite
+  --suite release-happy-path` (outside the Claude sandbox). That asks the session to
+  run the suite on its held, streamed page (`runSuiteOnPage`,
+  `src/engine/session-suite.ts`), so every step shows in the browser pane. It used
+  to run in a browser of its own BEFORE the session: ten or more minutes of a blank
+  terminal with the testing off screen, which the spec never allowed. The session
+  prints the suite's `run --json` step lines on its stdout; `sessionLineHook` feeds
+  them to the tracker, which emits `baseline-step {tag, env, index, total, name,
+  status}` (index is positional: study-happy-path repeats step names). When the
+  client exits, Go writes `baseline-<env>.json` `{passed, steps, failedStep, error,
+  reportPath, finishedAt}` and emits `baseline-done`. The client's own last line
+  `{"ok","bundleDir"}` decides the outcome: the session's result line can still be
+  in flight on the other pipe. Meanwhile Claude does Phase 1, which needs no
+  browser, and waits with `qar release-baseline --wait` before Phase 2; the skill
+  keeps it out of the browser until then. All sign-ins happen in the one session
+  process, so `freshTotp` sees every code used. Teardown kills the client with the
+  session.
+- **Each release session has its own allowlist** (`releasePlanAllowedTools`,
+  `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
+  pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
+  (per `knownJiraServers`), `gh pr view/diff`, `qar release-*`/`plan-lines`/
+  `results-*`, read-only shell and file edits; the plan adds `Agent` and
+  `plan-order`; the run adds chrome-devtools, `session-login`, `session-create-user`,
+  `invite`, `totp`, `deployed-release` and `cleanup`. The run files no Jira card.
+- **Each run's full results go to a private Confluence page** (`qar
+  release-confluence`, `src/engine/release-confluence.ts`), because the public
+  release asset cannot carry screenshots: management-app is public, and an image
+  cannot be redacted the way text is. The page goes under the `RELEASE_CONFLUENCE_FOLDER`
+  folder (`config/settings.json`: "Management App Release Testing" in the SafeInsights
+  space; the id, or a folder URL): folder → `<tag>` → `<tag> <env> — <date> run`. It lists the failures first, then every line by PR, with a PR that has no
+  FAIL collapsed; each screenshot named in evidence is attached and shown inline,
+  and the security results are on the page, collapsed. The Jira API token works for
+  Confluence too (it is an account token), so there is no second secret. Each card
+  of a PR with a FAIL gets a Jira web link to the page; the card is the key in the
+  PR title, or the PR's first key when the title has none, because a description
+  that mentions "OTTER-99" is not that PR's card. Phase 4 ends with the page; nothing is
+  uploaded. The page attaches the testing plan as run (`testing-plan.md`) and the local
+  plan with its Security section (`testing-plan-with-security.md`).
+- **Why Save can be disabled with no session live:** Save is an instruction to the
+  plan session ("save the plan" sent to the PTY), not an upload the GUI makes. With
+  no live session nothing would receive it, so Save needs a session, the push right,
+  a written buffer and a green plan-lines. Start session (or Retry) gives it one.
+  Run… and Start run are disabled while the local plan differs from the asset: a run
+  tests the asset, so local edits would go untested.
+- UI: `ReleaseTab.tsx` (phases Picker, Plan, Run), `useReleasePlan.ts`. Skills:
+  `.claude/skills/qa-release-plan` and `qa-release-run`; prompts
+  `gui/prompts/release-plan.md` and `release-run.md`.
+- `release-happy-path` is the baseline suite: three sign-ins then
+  `study-happy-path`'s own steps (34 steps). It runs the full lifecycle on
+  production too, so `RESEARCHER_RESULTS_PRIVATE_KEY_PRODUCTION` must be set.
+- `JIRA_BOARDS` and `MANAGEMENT_APP_REPO` are in `config/settings.json`; Go keeps
+  its constants and `gui/shared_config_test.go` pins them to the file.
+
 ## Posting Jira comments with inline screenshots
 
 A QA validation is worth much more with the evidence embedded in the comment. The
@@ -924,5 +1112,16 @@ soft wrap had folded "Decisions needed" into one paragraph.
   timing for the report summary
 - `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
   files and link them from the comment
+- `pnpm qar release-list` — releases of management-app
+- `pnpm qar release-prs --tag v1.6.9` — the PR set of a release, from the tag compare
+- `pnpm qar release-status --tag v1.6.9` — assets, upload rights, local files
+- `pnpm qar release-download --tag v1.6.9 [--asset testing-plan.md] [--remote-only] [--force]`
+- `pnpm qar release-upload --tag v1.6.9 --file .tmp/release/v1.6.9/plan.md --as testing-plan.md`
+- `pnpm qar plan-lines --input .tmp/release/v1.6.9/plan.md --tag v1.6.9 [--prs …] [--security-from …]`
+- `pnpm qar plan-order --input .tmp/release/v1.6.9/plan.md` — sort Changes into run order
+- `pnpm qar results-check --inventory .tmp/release/v1.6.9/plan-lines.json --results … [--env production]`
+- `pnpm qar results-render --tag v1.6.9 --env staging --plan … --results …`
+- `pnpm qar release-saved --tag v1.6.9 --asset testing-plan.md [--url …]`
+- `pnpm qar run --suite release-happy-path --role researcher --env staging`
 - `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)

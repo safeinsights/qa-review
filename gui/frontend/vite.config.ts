@@ -7,6 +7,13 @@ const VENDOR_CHUNKS: Record<string, RegExp> = {
     mantine: /node_modules\/@mantine\//,
     xterm: /node_modules\/@xterm\//,
     markdown: /node_modules\/(react-markdown|remark-|rehype-|micromark|mdast-|hast-|unified|vfile)/,
+    // The editor core (view, state and their helpers) and everything built on it go
+    // in separate chunks; together they cross the limit. The split is by dependency
+    // direction: commands, the theme and the grammars all import @codemirror/language,
+    // so they must share its chunk or the two chunks import each other.
+    'codemirror-core':
+        /node_modules\/(@codemirror\/(view|state)\/|@marijn\/|style-mod|w3c-keyname|crelt)/,
+    codemirror: /node_modules\/(@codemirror|@lezer)\//,
 }
 
 function vendorChunk(id: string): string | undefined {

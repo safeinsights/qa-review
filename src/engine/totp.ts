@@ -40,3 +40,42 @@ export function totp(secret: string, options: TotpOptions = {}): string {
     const code = (hmac.readUInt32BE(offset) & 0x7fffffff) % 10 ** digits
     return code.toString().padStart(digits, '0')
 }
+
+export interface FreshTotpOptions {
+    now?: () => number
+    sleep?: (ms: number) => Promise<void>
+    // A code read this close to the end of its window can expire before it is typed.
+    minMsLeft?: number
+}
+
+const STEP_MS = 30_000
+
+// The last 30s window a code was handed out for, per secret. Clerk refuses a TOTP code
+// that was already accepted, so two sign-ins as the same account inside one window fail
+// the second with "Invalid verification code". release-happy-path hit exactly that: it
+// signs in as reviewer, then switches back to reviewer about 25 s later.
+const lastWindowBySecret = new Map<string, number>()
+
+// A TOTP code that is safe to submit: never one this process has already used, and never
+// one about to expire. Waits for the next window when either would happen.
+export async function freshTotp(secret: string, options: FreshTotpOptions = {}): Promise<string> {
+    const {
+        now = Date.now,
+        sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+        minMsLeft = 8_000,
+    } = options
+    let nowMs = now()
+    const window = Math.floor(nowMs / STEP_MS)
+    const msLeft = STEP_MS - (nowMs % STEP_MS)
+    if (lastWindowBySecret.get(secret) === window || msLeft < minMsLeft) {
+        await sleep(msLeft + 500)
+        nowMs = now()
+    }
+    lastWindowBySecret.set(secret, Math.floor(nowMs / STEP_MS))
+    return totp(secret, { nowMs })
+}
+
+// Tests only: forget which windows were used.
+export function resetFreshTotpForTests(): void {
+    lastWindowBySecret.clear()
+}

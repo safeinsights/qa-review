@@ -35,7 +35,21 @@ export interface SignInRequest {
     password: string
 }
 
-export type SessionAction = LoginRequest | CreateUserRequest | CreateStudyRequest | SignInRequest
+// Run a whole suite on the session's held page, so it shows in the streamed browser
+// (a release run's baseline). Its step lines go to the session's stdout, which the
+// GUI reads.
+export interface RunSuiteRequest {
+    action: 'run-suite'
+    suite: string
+    role: Role
+}
+
+export type SessionAction =
+    | LoginRequest
+    | CreateUserRequest
+    | CreateStudyRequest
+    | SignInRequest
+    | RunSuiteRequest
 
 export interface SessionRequest {
     id: string
@@ -55,6 +69,9 @@ export interface SessionResult {
     mfaSecret?: string
     studyId?: string
     atMfa?: boolean
+    // run-suite: whether the suite passed, and its result bundle.
+    runOk?: boolean
+    bundleDir?: string
 }
 
 // Write a request atomically and return its id so the caller can match the result.

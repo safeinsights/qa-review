@@ -208,6 +208,15 @@ type App struct {
 	// stopVerdictWatch stops the validation session's verdict-file poller (which
 	// emits "verdict-posted" when Claude records a verdict). Closed on teardown.
 	stopVerdictWatch chan struct{}
+	// stopPlanWatch / stopReleaseSavedWatch stop the Release tab's pollers (plan.md
+	// changes, and the release-saved rendezvous file). Closed on teardown.
+	stopPlanWatch         chan struct{}
+	stopReleaseSavedWatch chan struct{}
+	// sessionLineHook sees every output line of the session after its ready line, so
+	// a suite run inside the session (the release baseline) can report its steps.
+	// baselineCmd is that run's client command. Both guarded by sessionMu.
+	sessionLineHook func(string)
+	baselineCmd     *exec.Cmd
 	// the in-flight Suites/engine run (one at a time), so StopRun can kill it.
 	runMu  sync.Mutex
 	runCmd *exec.Cmd
@@ -275,6 +284,9 @@ func (a *App) livePids() []int {
 	a.sessionMu.Lock()
 	if a.sessionCmd != nil && a.sessionCmd.Process != nil {
 		pids = append(pids, a.sessionCmd.Process.Pid)
+	}
+	if a.baselineCmd != nil && a.baselineCmd.Process != nil {
+		pids = append(pids, a.baselineCmd.Process.Pid)
 	}
 	a.sessionMu.Unlock()
 	if pid := a.pty.pid(); pid != 0 {
@@ -463,6 +475,59 @@ var validationAllowedTools = append([]string{
 	"Edit",
 }, figmaReadTools()...)
 
+// knownJiraServers are the names the Jira MCP server is registered under: the
+// per-session config (writeValidationMcpConfig) and the package name a user-level
+// `claude mcp add` tends to use. --allowedTools matches by tool name, so each needs
+// its own entry.
+var knownJiraServers = []string{"jira-atlassian", "mcp-atlassian"}
+
+// releaseShared is what both release sessions may do without a prompt. It is NOT the
+// Validation set: that one pre-approves every Jira tool (comments, transitions),
+// every gh command and every qar command, while a release session's only writes to
+// management-app are `gh release upload` and `gh release edit`, both made by the
+// listed qar release-* commands, and it must never write to Jira on its own.
+func releaseShared() []string {
+	tools := []string{}
+	for _, server := range knownJiraServers {
+		tools = append(tools, mcpToolName(server, "jira_get_issue"))
+	}
+	return append(tools,
+		"Bash(gh pr view:*)",
+		"Bash(gh pr diff:*)",
+		"Bash(qar release-*:*)",
+		"Bash(qar plan-lines:*)",
+		"Bash(qar results-*:*)",
+		"Bash(mkdir:*)",
+		"Bash(ls:*)",
+		"Bash(cat:*)",
+		"Bash(date:*)",
+		"Bash(echo:*)",
+		"Read",
+		"Write",
+		"Edit",
+	)
+}
+
+// releasePlanAllowedTools adds the Agent tool (the plan skill reads each PR in its
+// own subagent) and plan-order, which sorts the plan into run order.
+var releasePlanAllowedTools = append(releaseShared(), "Agent", "Bash(qar plan-order:*)")
+
+// releaseRunAllowedTools adds the browser, the login helper, the disposable users the
+// skill uses instead of changing a shared account (session-create-user, invite and
+// totp for a hand-driven signup), deployed-release (a resume checks the env still runs
+// the build the earlier results came from), and cleanup of the studies and users the run
+// creates. Its results go out through `qar release-*` (the release asset, and the private
+// Confluence page that links the FAIL cards), which releaseShared already allows.
+var releaseRunAllowedTools = append(releaseShared(),
+	"mcp__chrome-devtools",
+	"Bash(qar session-login:*)",
+	"Bash(qar session-create-user:*)",
+	"Bash(qar invite:*)",
+	"Bash(qar totp:*)",
+	"Bash(qar deployed-release:*)",
+	"Bash(qar cleanup:*)",
+)
+
 // knownFigmaServers are the names a Figma MCP server is registered under: the
 // Claude Code plugin, the `claude mcp add … figma` the Doctor hint recommends, and
 // the claude.ai connector. The session does not run `claude mcp list` (it health-
@@ -566,6 +631,10 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 		args = append(args, "--env", env)
 	}
 	cmd := engineCmd(args...)
+	// The session stops itself once this app is gone (src/engine/gui-parent.ts): an
+	// exit that skips shutdown() — a wails dev rebuild, a force quit, a crash — left
+	// it running with its Chrome, holding the session lock.
+	cmd.Env = append(cmd.Env, guiPidEnv())
 	// Own process group so teardown can kill the WHOLE tree (pnpm → tsx → node →
 	// Chrome), not just the top wrapper. In dev the session is spawned via `pnpm qar`,
 	// and pnpm does NOT forward SIGTERM to its child — so signalling only cmd.Process
@@ -610,6 +679,12 @@ func (a *App) startSessionBrowser(tokenPrefix, env, pr string) (string, int, err
 			lastOutput.WriteString(line + "\n")
 			// Surface any other engine output (login errors etc.) to the terminal.
 			runtime.EventsEmit(a.ctx, "session-log", line)
+			a.sessionMu.Lock()
+			hook := a.sessionLineHook
+			a.sessionMu.Unlock()
+			if hook != nil {
+				hook(line)
+			}
 		}
 	}()
 
@@ -896,14 +971,19 @@ func (a *App) SendToPty(text string) error {
 // actually running (so callers can decide whether to emit "session-ended").
 func (a *App) teardownSession() bool {
 	a.stopVerdictWatcher()
+	a.stopReleaseSavedWatcher()
+	a.stopPlanWatcher()
 	running := a.pty.running()
 	a.pty.stop()
 
 	a.sessionMu.Lock()
 	cmd := a.sessionCmd
 	mcpPath := a.sessionMcpPath
+	baseline := a.baselineCmd
 	a.sessionCmd = nil
 	a.sessionMcpPath = ""
+	a.sessionLineHook = nil
+	a.baselineCmd = nil
 	// Clear the active token: the session occupying the slot is gone. A new Start
 	// mints a fresh token immediately after calling teardownSession, so the eviction
 	// leaves no active owner in between.
@@ -923,6 +1003,10 @@ func (a *App) teardownSession() bool {
 			_ = syscall.Kill(-pid, syscall.SIGTERM)
 			go escalateKill(pid)
 		}
+	}
+	// The baseline's client waits on the session it just lost; stop it too.
+	if baseline != nil && baseline.Process != nil {
+		_ = syscall.Kill(-baseline.Process.Pid, syscall.SIGKILL)
 	}
 	if mcpPath != "" {
 		_ = os.Remove(mcpPath)
@@ -2173,7 +2257,7 @@ const managementAppSlug = "safeinsights/management-app"
 // space separator, so "otter 644" and "OTTER-644" both resolve.
 // SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
 // still resolve, and normalizeJiraKey maps it back to the real board.
-var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP"}
+var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP", "SIINFOSEC"}
 
 var jiraKeyRE = regexp.MustCompile(
 	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)

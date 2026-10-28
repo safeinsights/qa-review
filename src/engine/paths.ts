@@ -68,6 +68,12 @@ export function verdictPostedPath(): string {
     return path.join(resultsRoot(), 'verdict-posted.json')
 }
 
+// Rendezvous file `qar release-saved` writes after an asset upload; the GUI's
+// release session polls it to clear the "unsaved edits" badge and list the asset.
+export function releaseSavedPath(): string {
+    return path.join(resultsRoot(), 'release-saved.json')
+}
+
 // Single-instance lock for `qar session`. The rendezvous above is ONE fixed path,
 // so a second session would consume requests meant for the first: `session-login`
 // would report success while logging in a browser nobody is attached to. The lock

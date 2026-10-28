@@ -123,6 +123,17 @@ interface WailsApp {
         force: boolean
     ): Promise<{ token: string; jiraCard: string }>
     CheckPrCI(pr: string): Promise<PrCIStatus>
+    ListReleases(): Promise<string[]>
+    ReleaseStatus(tag: string): Promise<string>
+    ReadPlan(tag: string): Promise<{ text: string; hash: string; exists: boolean }>
+    WritePlan(tag: string, text: string): Promise<string>
+    DiscardLocalPlan(tag: string): Promise<void>
+    CheckPlanLines(tag: string): Promise<{ ok: boolean; summary: string }>
+    WatchPlan(tag: string): Promise<void>
+    UnwatchPlan(): Promise<void>
+    StartReleasePlanSession(tag: string, regenerate: boolean): Promise<string>
+    StartReleaseRunSession(tag: string, env: string): Promise<string>
+    ReleaseRunProgress(tag: string, env: string): Promise<RunProgress>
     WriteToPty(b64: string): Promise<void>
     ResizePty(rows: number, cols: number): Promise<void>
     SendToPty(text: string): Promise<void>
@@ -365,7 +376,7 @@ export async function onPtyExit(cb: (code: number | null) => void): Promise<Unli
 // The kind of session that owns the single shared PTY + browser. Both the Author
 // and Validation tabs listen to the same global session events, so each uses `kind`
 // to tell whether the live session is its own or the other tab's.
-export type SessionKind = 'authoring' | 'validation' | 'companion'
+export type SessionKind = 'authoring' | 'validation' | 'companion' | 'release-plan' | 'release-run'
 
 export interface SessionReady {
     kind: SessionKind
@@ -402,6 +413,180 @@ export async function onVerdictPosted(cb: (v: VerdictPosted) => void): Promise<U
             issue: String(p.issue ?? ''),
             result: p.result === 'rejected' ? 'rejected' : 'validated',
         })
+    })
+}
+
+// The plan's release asset. It is plan.md without its Security section, because
+// management-app (and so its releases) is public.
+export const PLAN_ASSET = 'testing-plan.md'
+
+// The envs a release plan can run against. qa and demo are not release targets.
+export const RELEASE_ENVS = ['staging', 'production'] as const
+
+export interface ReleaseAsset {
+    name: string
+    url: string
+    size: number
+    updatedAt: string
+}
+
+export interface ReleaseStatus {
+    tag: string
+    exists: boolean
+    canUpload: boolean
+    assets: ReleaseAsset[]
+    local: {
+        plan: boolean
+        planDiffers: boolean
+        results: string[]
+        // The run's Confluence pages, newest first (the Run screen's History).
+        pages: { env: string; title: string; url: string; at: string }[]
+    }
+}
+
+export async function listReleases(): Promise<string[]> {
+    return app().ListReleases()
+}
+
+export async function releaseStatus(tag: string): Promise<ReleaseStatus> {
+    return JSON.parse(await app().ReleaseStatus(tag)) as ReleaseStatus
+}
+
+export async function readPlan(
+    tag: string
+): Promise<{ text: string; hash: string; exists: boolean }> {
+    return app().ReadPlan(tag)
+}
+
+export async function writePlan(tag: string, text: string): Promise<string> {
+    return app().WritePlan(tag, text)
+}
+
+export async function discardLocalPlan(tag: string): Promise<void> {
+    await app().DiscardLocalPlan(tag)
+}
+
+export interface RunLine {
+    id: string
+    title: string
+    section: string
+    role: string
+    needs: string
+    group: string
+}
+
+// What a release run session is doing now: gui/release_progress.go.
+export interface RunProgress {
+    started: boolean
+    line: RunLine | null
+    step: '' | 'setup' | 'cleanup' | 'report'
+    note: string
+    position: number
+    done: number
+    total: number
+    counts: Record<string, number>
+    startedAt: string
+    at: string
+    remainingSec: number
+}
+
+export async function releaseRunProgress(tag: string, env: string): Promise<RunProgress> {
+    return app().ReleaseRunProgress(tag, env)
+}
+
+export interface PlanLinesCheck {
+    ok: boolean
+    summary: string
+}
+
+export async function checkPlanLines(tag: string): Promise<PlanLinesCheck> {
+    return app().CheckPlanLines(tag)
+}
+
+export async function watchPlan(tag: string): Promise<void> {
+    await app().WatchPlan(tag)
+}
+
+export async function unwatchPlan(): Promise<void> {
+    await app().UnwatchPlan()
+}
+
+export async function startReleasePlanSession(tag: string, regenerate: boolean): Promise<string> {
+    return app().StartReleasePlanSession(tag, regenerate)
+}
+
+export async function startReleaseRunSession(tag: string, env: string): Promise<string> {
+    return app().StartReleaseRunSession(tag, env)
+}
+
+// Runs release-happy-path through Go (outside the Claude session); progress arrives
+// as baseline-step events and the outcome as baseline-done.
+export interface BaselineStep {
+    tag: string
+    env: string
+    index: number
+    total: number
+    name: string
+    status: string
+}
+
+export async function onBaselineStep(cb: (s: BaselineStep) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('baseline-step', (...data) => {
+        const p = (data[0] ?? {}) as Partial<BaselineStep>
+        cb({
+            tag: String(p.tag ?? ''),
+            env: String(p.env ?? ''),
+            index: Number(p.index ?? 0),
+            total: Number(p.total ?? 0),
+            name: String(p.name ?? ''),
+            status: String(p.status ?? ''),
+        })
+    })
+}
+
+export interface BaselineDone {
+    tag: string
+    env: string
+    passed: boolean
+    failedStep: string
+    error: string
+}
+
+export async function onBaselineDone(cb: (d: BaselineDone) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('baseline-done', (...data) => {
+        const p = (data[0] ?? {}) as Partial<BaselineDone>
+        cb({
+            tag: String(p.tag ?? ''),
+            env: String(p.env ?? ''),
+            passed: p.passed === true,
+            failedStep: String(p.failedStep ?? ''),
+            error: String(p.error ?? ''),
+        })
+    })
+}
+
+export interface PlanChanged {
+    tag: string
+    hash: string
+}
+
+export async function onPlanChanged(cb: (p: PlanChanged) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('plan-changed', (...data) => {
+        const p = (data[0] ?? {}) as Partial<PlanChanged>
+        cb({ tag: String(p.tag ?? ''), hash: String(p.hash ?? '') })
+    })
+}
+
+export interface ReleaseSaved {
+    tag: string
+    asset: string
+    url: string
+}
+
+export async function onReleaseSaved(cb: (s: ReleaseSaved) => void): Promise<UnlistenFn> {
+    return rt().EventsOn('release-saved', (...data) => {
+        const p = (data[0] ?? {}) as Partial<ReleaseSaved>
+        cb({ tag: String(p.tag ?? ''), asset: String(p.asset ?? ''), url: String(p.url ?? '') })
     })
 }
 

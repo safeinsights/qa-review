@@ -1,6 +1,9 @@
 {
   "DEMO_BASE_URL": "https://app.demo.safeinsights.org",
+  "JIRA_BOARDS": "OTTER,SHRIMP,SHRMP,SIINFOSEC",
+  "MANAGEMENT_APP_REPO": "safeinsights/management-app",
   "PRODUCTION_BASE_URL": "https://app.safeinsights.org",
   "QA_BASE_URL": "https://app.qa.safeinsights.org",
+  "RELEASE_CONFLUENCE_FOLDER": "3667755009",
   "STAGING_BASE_URL": "https://app.staging.safeinsights.org"
 }

@@ -1,0 +1,1 @@
+/qa-release-plan Build the regression plan for management-app release {{tag}}. Write it to .tmp/release/{{tag}}/plan.md, run `qar plan-lines` on it, then tell me the counts and wait. I will edit the file in the editor above you or ask you for changes; re-read the file before every edit. When I say "save the plan", upload it with `qar release-upload` and run `qar release-saved`.

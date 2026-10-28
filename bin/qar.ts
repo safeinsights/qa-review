@@ -20,14 +20,34 @@ import { loginCommand } from '@/cli/commands/login'
 import { mailInboxCommand, mailWaitCommand } from '@/cli/commands/mail'
 import { migrateCommand } from '@/cli/commands/migrate'
 import { openAccessPrCommand } from '@/cli/commands/open-access-pr'
+import { planLinesCommand } from '@/cli/commands/plan-lines'
+import { planOrderCommand } from '@/cli/commands/plan-order'
 import { rekeyCommand } from '@/cli/commands/rekey'
+import {
+    releaseDownloadCommand,
+    releaseListCommand,
+    releasePrsCommand,
+    releaseStatusCommand,
+    releaseUploadCommand,
+} from '@/cli/commands/release'
+import { releaseConfluenceCommand } from '@/cli/commands/release-confluence'
+import {
+    releaseBaselineCommand,
+    releaseProgressCommand,
+    releaseResultCommand,
+    releaseResultsCommand,
+} from '@/cli/commands/release-run-log'
+import { releaseSavedCommand } from '@/cli/commands/release-saved'
+import { releaseSummaryCommand } from '@/cli/commands/release-summary'
 import { requestAccessCommand } from '@/cli/commands/request-access'
 import { resultsCheckCommand } from '@/cli/commands/results-check'
+import { resultsRenderCommand } from '@/cli/commands/results-render'
 import { runCommand } from '@/cli/commands/run'
 import { sessionCommand } from '@/cli/commands/session'
 import { sessionCreateStudyCommand } from '@/cli/commands/session-create-study'
 import { sessionCreateUserCommand } from '@/cli/commands/session-create-user'
 import { sessionLoginCommand } from '@/cli/commands/session-login'
+import { sessionRunSuiteCommand } from '@/cli/commands/session-run-suite'
 import { sessionSignInCommand } from '@/cli/commands/session-signin'
 import { setSecretCommand } from '@/cli/commands/set-secret'
 import { shareWorkCommand } from '@/cli/commands/share-work'
@@ -94,6 +114,8 @@ async function main() {
             return sessionSignInCommand(opts)
         case 'session-create-user':
             return sessionCreateUserCommand(opts)
+        case 'session-run-suite':
+            return sessionRunSuiteCommand(opts)
         case 'session-create-study':
             return sessionCreateStudyCommand()
         case 'mail-inbox':
@@ -126,6 +148,36 @@ async function main() {
             return inventoryRenderCommand(opts)
         case 'results-check':
             return resultsCheckCommand(opts)
+        case 'plan-lines':
+            return planLinesCommand(opts)
+        case 'plan-order':
+            return planOrderCommand(opts, await loadSettings())
+        case 'release-list':
+            return releaseListCommand(opts, await loadSettings())
+        case 'release-prs':
+            return releasePrsCommand(opts, await loadSettings())
+        case 'release-status':
+            return releaseStatusCommand(opts, await loadSettings())
+        case 'release-download':
+            return releaseDownloadCommand(opts, await loadSettings())
+        case 'release-upload':
+            return releaseUploadCommand(opts, await loadSettings())
+        case 'release-saved':
+            return releaseSavedCommand(opts)
+        case 'release-progress':
+            return releaseProgressCommand(opts)
+        case 'release-result':
+            return releaseResultCommand(opts)
+        case 'release-results':
+            return releaseResultsCommand(opts)
+        case 'release-baseline':
+            return releaseBaselineCommand(opts)
+        case 'release-confluence':
+            return releaseConfluenceCommand(opts, await loadSettings())
+        case 'release-summary':
+            return releaseSummaryCommand(opts, await loadSettings())
+        case 'results-render':
+            return resultsRenderCommand(opts, await loadSettings())
         case 'clock':
             return clockCommand(opts)
         default:
