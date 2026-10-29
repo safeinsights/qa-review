@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
-import { clickUntil } from '../engine/flows/interactions'
+import { clickUntil, openAccountMenu } from '../engine/flows/interactions'
 import {
     completeSignup,
     INVITE_EMAIL_TIMEOUT_MS,
@@ -609,10 +609,7 @@ export const newUserSignupFlowsSuite: Suite = {
                     // The account menu is a popover of links and buttons, not an ARIA menu,
                     // so its entries have no menuitem role.
                     const settings = page.getByRole('button', { name: 'Settings', exact: true })
-                    await clickUntil(
-                        page.getByRole('button', { name: /toggle profile menu/i }),
-                        settings
-                    )
+                    await openAccountMenu(page, settings)
                     await settings.click()
                     const account = page
                         .getByRole('dialog')
