@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { checkpoint } from '../engine/flows/accessibility'
 import { clickUntil, waitForHydration } from '../engine/flows/interactions'
 import {
     beginProposal,
@@ -651,8 +652,10 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                         .click()
                     // Delete is now gated behind a "Delete file" confirm modal; scope to the
                     // dialog because the row's own trash control shares the accessible name.
-                    await ctx.page
-                        .getByRole('dialog', { name: 'Delete file' })
+                    const deleteDialog = ctx.page.getByRole('dialog', { name: 'Delete file' })
+                    await deleteDialog.waitFor({ state: 'visible' })
+                    await checkpoint('delete file confirm dialog')
+                    await deleteDialog
                         .getByRole('button', { name: 'Delete file', exact: true })
                         .click()
                     await expect(strayRow).toHaveCount(0)
@@ -661,8 +664,12 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
                     // Scoped to the dialog: the page's own "Submit code for review" button
                     // also matches a bare "Submit code" name.
-                    await ctx.page
-                        .getByRole('dialog', { name: 'Submit code for review?' })
+                    const submitDialog = ctx.page.getByRole('dialog', {
+                        name: 'Submit code for review?',
+                    })
+                    await submitDialog.waitFor({ state: 'visible' })
+                    await checkpoint('submit code confirm dialog')
+                    await submitDialog
                         .getByRole('button', { name: 'Submit code', exact: true })
                         .click()
                     // Submission no longer lands on CodePostSubmissionView and its
@@ -1220,6 +1227,7 @@ export async function gotoReview(ctx: RunContext, studyId: string): Promise<void
 export async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void> {
     const dialog = ctx.page.getByRole('dialog')
     await dialog.waitFor({ state: 'visible' })
+    await checkpoint(`confirm dialog (${confirmName.source})`)
     for (let attempt = 0; attempt < 3; attempt++) {
         await dialog
             .getByRole('button', { name: confirmName })
@@ -1260,7 +1268,7 @@ export async function submitProposalDecision(
 
 // /review renders the code-review editor directly: the reviewer agreements page it once
 // passed through (OTTER-727) is gone.
-async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
+export async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     await gotoReview(ctx, studyId)
     await ctx.page.getByTestId('code-review-section').waitFor({ state: 'visible' })
     // The criteria radios are server-rendered and controlled: one checked before
