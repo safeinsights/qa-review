@@ -21,10 +21,8 @@ import type { RunContext, Step, Suite } from './types'
 // Unlike Lighthouse scores, axe violations are deterministic for a given build, so
 // failing on them is a real verdict, not a flaky threshold.
 //
-// Study pages are reached through the FIRST study on the role's dashboard rather
-// than one the suite creates: the scan cares about the page's structure, and
-// creating a study would make an accessibility sweep depend on the whole proposal
-// flow working.
+// Study pages are not scanned here: shared-dashboard studies change from run to run,
+// so accessibility-lifecycle scans them on a study it creates.
 
 const LAB = DEFAULT_RESEARCHER_ORG
 const DATA_ORG = 'openstax'
@@ -212,31 +210,6 @@ function signInStep(role: Role): Step {
     return { name: `Sign in as ${role}`, run: ctx => ctx.step(() => ctx.loginAs(role)) }
 }
 
-// A study id in the path, so the lab dashboard's "Propose a study" link
-// (/<lab>/study/request) is not mistaken for a study.
-const STUDY_HREF = /\/study\/[0-9a-f-]{36}(\/|$)/
-
-// Path of the first study linked from a dashboard, with the per-stage suffix
-// (/view, /review, /edit…) the dashboard itself chose for this role.
-async function firstStudyPath(ctx: RunContext, dashboard: string): Promise<string> {
-    await ctx.page.goto(`${ctx.baseURL}${dashboard}`)
-    const rows = ctx.page.getByRole('main').locator('tbody a[href*="/study/"]')
-    await expect(rows.first()).toBeVisible()
-    const hrefs = await rows.evaluateAll(links => links.map(a => a.getAttribute('href') ?? ''))
-    const href = hrefs.find(h => STUDY_HREF.test(h))
-    if (!href) throw new Error(`No study is linked from ${dashboard}`)
-    return href
-}
-
-function studyPath(ctx: RunContext, key: string): string {
-    return ctx.state[key] as string
-}
-
-// "/openstax/study/<id>/review" -> "/openstax/study/<id>"
-function studyRoot(ctx: RunContext, key: string): string {
-    return studyPath(ctx, key).replace(/(\/study\/[^/]+).*$/, '$1')
-}
-
 export const accessibilitySuite: Suite = {
     name: 'accessibility',
     description:
@@ -262,14 +235,6 @@ export const accessibilitySuite: Suite = {
             page.getByRole('button', { name: /profile menu/i })
         ),
         scanStep('Scan researcher: new study proposal', `/${LAB}/study/request`),
-        {
-            name: "Find the researcher's first study",
-            run: ctx =>
-                ctx.step(async () => {
-                    ctx.state.researcherStudy = await firstStudyPath(ctx, `/${LAB}/dashboard`)
-                }),
-        },
-        scanStep('Scan researcher: study page', ctx => studyPath(ctx, 'researcherStudy')),
         scanStep('Scan researcher: account keys', '/account/keys'),
         scanStep('Scan researcher: existing security key', '/user-key'),
         scanStep('Scan researcher: MFA status', '/account/mfa'),
@@ -303,18 +268,6 @@ export const accessibilitySuite: Suite = {
         signInStep('reviewer'),
         scanStep('Scan reviewer: My studies', '/dashboard'),
         scanStep('Scan reviewer: org dashboard', `/${DATA_ORG}/dashboard`),
-        {
-            name: "Find the reviewer's first study",
-            run: ctx =>
-                ctx.step(async () => {
-                    ctx.state.reviewerStudy = await firstStudyPath(ctx, `/${DATA_ORG}/dashboard`)
-                }),
-        },
-        scanStep('Scan reviewer: study review', ctx => studyPath(ctx, 'reviewerStudy')),
-        scanStep(
-            'Scan reviewer: researcher profile',
-            ctx => `${studyRoot(ctx, 'reviewerStudy')}/researcher-profile`
-        ),
         signInStep('admin'),
         scanStep('Scan admin: org settings', SETTINGS),
         stateStep('Scan admin: org details in edit mode', SETTINGS, page =>

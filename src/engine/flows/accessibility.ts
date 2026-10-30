@@ -51,10 +51,13 @@ export interface PageScan {
 
 let axeSource: string | undefined
 
-function loadAxeSource(): string {
+// Resolved from lighthouse's own location: pnpm does not hoist transitive deps to the
+// root, so a bare resolve fails in a dev checkout and finds an unlocked copy in the app.
+export function loadAxeSource(): string {
     if (!axeSource) {
         const require = createRequire(import.meta.url)
-        axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8')
+        const fromLighthouse = createRequire(require.resolve('lighthouse/package.json'))
+        axeSource = fs.readFileSync(fromLighthouse.resolve('axe-core/axe.min.js'), 'utf8')
     }
     return axeSource
 }
@@ -230,6 +233,12 @@ let activeCheckpoint: Checkpoint | undefined
 
 export async function checkpoint(label: string, opts: Omit<ScanOptions, 'label'> = {}) {
     if (activeCheckpoint) await activeCheckpoint({ ...opts, label })
+}
+
+// The engine calls this when a run ends, so a long-lived process does not keep
+// scanning into a finished run.
+export function resetCheckpoints(): void {
+    activeCheckpoint = undefined
 }
 
 export const enableCheckpoints: Step = {

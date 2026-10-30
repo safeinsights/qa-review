@@ -160,13 +160,17 @@ export async function completeSignup(
     await checkpoint('MFA recovery codes', { as: 'invitee', redactHtml: true })
     await goToApp.click()
     const recoveryDialog = page.getByRole('dialog').filter({ hasText: /recovery codes/i })
-    if (await recoveryDialog.isVisible()) {
+    const shown = await recoveryDialog.waitFor({ state: 'visible' }).then(
+        () => true,
+        () => false
+    )
+    if (shown) {
         await checkpoint('MFA recovery codes confirm dialog', { as: 'invitee', redactHtml: true })
+        await recoveryDialog
+            .getByRole('button', { name: /go to safeinsights/i })
+            .click()
+            .catch(() => {})
     }
-    await recoveryDialog
-        .getByRole('button', { name: /go to safeinsights/i })
-        .click()
-        .catch(() => {})
 
     // 6. Security-key screen: a one-time private key that must be stored, or the
     //    account can never decrypt an output.

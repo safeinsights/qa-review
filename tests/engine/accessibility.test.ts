@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { describeViolations, type PageScan, withInserts } from '@/engine/flows/accessibility'
+import {
+    describeViolations,
+    loadAxeSource,
+    type PageScan,
+    withInserts,
+} from '@/engine/flows/accessibility'
 import { accessibilitySuite } from '@/suites/accessibility'
 import { accessibilityAgreementsSuite } from '@/suites/accessibility-agreements'
 import { accessibilityDecisionsSuite } from '@/suites/accessibility-decisions'
@@ -22,6 +27,13 @@ describe('withInserts', () => {
         expect(() => withInserts([step('A')], [{ after: 'Gone', steps: [step('Scan')] }])).toThrow(
             /No step #1 named "Gone"/
         )
+    })
+})
+
+// pnpm does not hoist axe-core, so a bare resolve passes only in the npm-built app.
+describe('loadAxeSource', () => {
+    it('finds the axe-core that lighthouse depends on', () => {
+        expect(loadAxeSource()).toContain('axe.run')
     })
 })
 

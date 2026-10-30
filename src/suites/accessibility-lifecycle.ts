@@ -72,6 +72,7 @@ const INSERTS: Insert[] = [
             scanStep('reviewer proposal approved'),
             scanRoute('reviewer full proposal', DATA_ORG, 'review/proposal'),
             scanRoute('reviewer agreements', DATA_ORG, 'agreements/reviewer'),
+            scanRoute('reviewer, researcher profile', DATA_ORG, 'researcher-profile'),
         ],
     },
     {
