@@ -5,6 +5,7 @@ import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
 import { totp } from '../totp'
 import type { EnvConfig } from '../types'
+import { checkpoint } from './accessibility'
 import { checkUntilEnabled, clickUntil } from './interactions'
 
 // Shared signup-flow helpers, extracted from src/suites/signup.ts so BOTH the
@@ -111,9 +112,14 @@ export async function completeSignup(
 
     // 1. Invitation landing -> Create New Account
     await page.goto(invitationUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('link', { name: /create new account/i }).click()
+    const createNew = page.getByRole('link', { name: /create new account/i })
+    await createNew.waitFor({ state: 'visible' })
+    await checkpoint('invitation landing (signed out)', { as: 'invitee' })
+    await createNew.click()
 
     // 2. Signup form (email is pre-filled + disabled)
+    await page.getByLabel('First name').waitFor({ state: 'visible' })
+    await checkpoint('signup form, empty', { as: 'invitee' })
     await page.getByLabel('First name').fill('Qar')
     await page.getByLabel('Last name').fill('Tester')
     await page.getByLabel('Enter password').fill(password)
@@ -125,14 +131,17 @@ export async function completeSignup(
     // rather than once — see checkUntilEnabled.
     const createAccount = page.getByRole('button', { name: /create account/i })
     await checkUntilEnabled(page.getByRole('checkbox', { name: /i agree/i }), createAccount)
+    await checkpoint('signup form, filled', { as: 'invitee', redactHtml: true })
     await createAccount.click()
 
     // 3. Mandatory MFA setup — choose the authenticator-app path, which shows the
     //    TOTP secret in plaintext so we can derive codes headlessly.
     const authenticatorLink = page.getByRole('link', { name: /authenticator app/i })
     await authenticatorLink.waitFor({ state: 'visible' })
+    await checkpoint('MFA method choice', { as: 'invitee' })
     await authenticatorLink.click()
     await page.getByRole('button', { name: /verify code/i }).waitFor({ state: 'visible' })
+    await checkpoint('MFA authenticator-app enrolment', { as: 'invitee', redactHtml: true })
 
     // Enter the authenticator code. enterTotp re-reads the secret from the page on
     // each attempt — the page can re-render/regenerate the secret after first paint.
@@ -146,11 +155,14 @@ export async function completeSignup(
     //    the same name and the page one sits behind the modal, so target the
     //    dialog's button specifically (not .first(), which grabs the obscured page
     //    button and silently no-ops).
-    await page
-        .getByRole('button', { name: /go to safeinsights/i })
-        .first()
-        .click()
+    const goToApp = page.getByRole('button', { name: /go to safeinsights/i }).first()
+    await goToApp.waitFor({ state: 'visible' })
+    await checkpoint('MFA recovery codes', { as: 'invitee', redactHtml: true })
+    await goToApp.click()
     const recoveryDialog = page.getByRole('dialog').filter({ hasText: /recovery codes/i })
+    if (await recoveryDialog.isVisible()) {
+        await checkpoint('MFA recovery codes confirm dialog', { as: 'invitee', redactHtml: true })
+    }
     await recoveryDialog
         .getByRole('button', { name: /go to safeinsights/i })
         .click()
@@ -175,6 +187,7 @@ export async function completeSignup(
     // "Next" is gated behind copying, so copy first.
     const copyKey = page.getByRole('button', { name: /copy key/i })
     await copyKey.waitFor({ state: 'visible' })
+    await checkpoint('security key setup', { as: 'invitee', redactHtml: true })
     await copyKey.click()
     // "Next" is revealed only once the copy attempt settles, and under automation the
     // clipboard write can REJECT — which still reveals it, because the page gates on
@@ -183,11 +196,10 @@ export async function completeSignup(
     // The dialog's confirm is the ONLY caller of setUserPublicKeyAction, so it is not
     // best-effort — it is the step. Scoped to the dialog so a page-level button of the
     // same name can never shadow it, the trap step 5 documents.
-    await page
-        .getByRole('dialog')
-        .filter({ hasText: /stored your security key/i })
-        .getByRole('button', { name: /yes, i have stored my key/i })
-        .click()
+    const storedKey = page.getByRole('dialog').filter({ hasText: /stored your security key/i })
+    await storedKey.waitFor({ state: 'visible' })
+    await checkpoint('security key stored? confirm dialog', { as: 'invitee', redactHtml: true })
+    await storedKey.getByRole('button', { name: /yes, i have stored my key/i }).click()
     // The key screen tears down only once the mutation resolves and the app routes on.
     await expect(copyKey).toBeHidden()
 

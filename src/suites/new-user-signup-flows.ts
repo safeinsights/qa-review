@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { checkpoint } from '../engine/flows/accessibility'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil } from '../engine/flows/interactions'
 import {
@@ -133,6 +134,7 @@ async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Prom
 // accounts, and their second factor comes from settings; this one's TOTP secret was
 // minted during signup and lives in ctx.state.
 async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
+    await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill(SIGNUP_PASSWORD)
     await page.getByRole('button', { name: 'Login' }).click()
@@ -144,6 +146,7 @@ async function signInWithTotp(page: Page, email: string, mfaSecret: string): Pro
     // so it would re-click the picker until the budget ran out on a control that was
     // never going to enable itself before we typed.
     await clickUntil(authenticator, page.locator('[role="group"] input').first())
+    await checkpoint('sign in, authenticator code entry', { as: 'invitee' })
     await fillPin(page, await freshTotp(mfaSecret))
     await page.getByRole('button', { name: /verify code/i }).click()
 }
@@ -391,6 +394,7 @@ export const newUserSignupFlowsSuite: Suite = {
                         waitUntil: 'domcontentloaded',
                     })
                     await page.getByText(SIGNED_OUT_GATE).waitFor(VISIBLE)
+                    await checkpoint('invitation refused while signed in as someone else')
                     // Same URL either side of the sign-out, so there is no navigation to
                     // wait on — only a re-render once Clerk has torn the session down.
                     // clickUntil is the bounded way to sit out that gap; the button
@@ -456,6 +460,7 @@ export const newUserSignupFlowsSuite: Suite = {
                         page.getByRole('button', { name: 'Decline invitation' })
                     ).toBeVisible()
                     await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
+                    await checkpoint('join-team invitation', { as: 'invitee' })
 
                     await page.getByRole('button', { name: 'Accept invitation' }).click()
                     await page.getByText(`You have been added to ${DP_ORG}.`).waitFor(VISIBLE)
@@ -556,6 +561,7 @@ export const newUserSignupFlowsSuite: Suite = {
                     // The invited address is not on the account yet, so the app asks to
                     // verify it before folding the invite in.
                     await linkHeading.waitFor(VISIBLE)
+                    await checkpoint('link your email addresses', { as: 'invitee' })
                     const message = await waitForMessage(
                         merge,
                         m => !earlier.has(m.id) && isVerificationEmail(m),
