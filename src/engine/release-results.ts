@@ -34,8 +34,10 @@ function redact(text: string, secrets: string[]): string {
     return out
 }
 
+// Backslashes first: escaping only the pipe turns evidence's own `\|` into `\\|`, an
+// escaped backslash and a bare pipe, which splits the table cell.
 function cell(text: string): string {
-    return text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+    return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
 }
 
 function stamp(d: Date): string {

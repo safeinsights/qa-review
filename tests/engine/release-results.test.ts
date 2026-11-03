@@ -143,6 +143,20 @@ describe('renderResults edge cases', () => {
     const mk = (lines: object[]) =>
         ({ card: 'v', target: 'release', lines }) as unknown as Inventory
 
+    it('keeps a backslash-pipe in evidence inside its table cell', () => {
+        const md = renderResults({
+            ...base,
+            plan,
+            results: [{ id: 'R-1110-1', result: 'PASS', evidence: 'path a\\|b' }],
+        })
+        const row = md.split('\n').find(l => l.includes('path a'))
+        expect(row).toContain('path a\\\\\\|b')
+        // Unescaped pipes are the cell borders: the row keeps its column count.
+        const header = md.split('\n').find(l => l.startsWith('| ') && l.includes('Result'))
+        const borders = (l: string) => l.replace(/\\./g, '').split('|').length
+        expect(borders(row!)).toBe(borders(header!))
+    })
+
     it('redacts the longest secret first', () => {
         const md = renderResults({
             ...base,
