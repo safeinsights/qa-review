@@ -58,7 +58,13 @@ export interface RunContext {
     // needs these when it has to drive a login form the engine's own loginAs()
     // doesn't cover — e.g. the Coder IDE's Clerk-hosted OIDC sign-in, which forces
     // a fresh interactive login (prompt=login) outside the app.
-    account: { email: string; password: string; mfaCode: string }
+    // Submit nextMfaCode(), not mfaCode: Clerk refuses a TOTP code it already accepted.
+    account: {
+        email: string
+        password: string
+        mfaCode: string
+        nextMfaCode: () => Promise<string>
+    }
     // Per-run mutable scratch bag. Steps are separate objects now (see Step), so a
     // value one step captures (e.g. a created study's id) is stashed here for a
     // later step to read: `ctx.state.studyId = id` … `ctx.state.studyId as string`.

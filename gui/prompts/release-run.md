@@ -1,0 +1,1 @@
+/qa-release-run Run the regression plan for management-app release {{tag}} against --env {{env}}. Download the plan (testing-plan.md), record the baseline result, then execute every line in the browser. The app is running the baseline suite in the browser now: do not use the browser until it ends. Show me the line count and wait for my go before you log in or run anything.

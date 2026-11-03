@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import type { Inventory } from '@/engine/inventory'
 import { checkResults, type ResultEntry } from '@/engine/results'
 
-// `qar results-check --inventory <path.json> --results <path.json>`
+// `qar results-check --inventory <path.json> --results <path.json> [--env <env>]`
 //
 // The gate before a verdict is posted: every check line has one evidenced result,
 // FAILs carry severity and area, NOT TESTED carries the approver, observed lines
@@ -22,7 +22,10 @@ export async function resultsCheckCommand(opts: Record<string, string>): Promise
     if (!Array.isArray(parsed.results)) {
         throw new Error('results-check: --results JSON must have a "results" array')
     }
-    const report = checkResults(inventory as Inventory, parsed.results as ResultEntry[])
+    const env = (opts.env ?? '').trim()
+    const report = checkResults(inventory as Inventory, parsed.results as ResultEntry[], {
+        env: env && env !== 'true' ? env : undefined,
+    })
     if (!report.ok) {
         throw new Error(
             `results-check found ${report.problems.length} problem(s):\n${report.problems.join('\n')}`

@@ -74,7 +74,15 @@ function inventoryProblems(
     return problems
 }
 
-export function checkResults(inventory: Inventory, results: ResultEntry[]): ResultsReport {
+export interface CheckOptions {
+    env?: string
+}
+
+export function checkResults(
+    inventory: Inventory,
+    results: ResultEntry[],
+    options: CheckOptions = {}
+): ResultsReport {
     const problems: string[] = []
     const counts = Object.fromEntries(RESULT_VALUES.map(v => [v, 0])) as Record<ResultValue, number>
     const lines = new Map(inventory.lines.map(line => [line.id, line]))
@@ -96,6 +104,13 @@ export function checkResults(inventory: Inventory, results: ResultEntry[]): Resu
             continue
         }
         counts[entry.result] += 1
+        if (
+            options.env === 'production' &&
+            line.stagingOnly &&
+            (entry.result === 'PASS' || entry.result === 'FAIL')
+        ) {
+            problems.push(`${entry.id}: a (staging only) line cannot be PASS or FAIL on production`)
+        }
         if (isBlank(entry.evidence)) problems.push(`${entry.id}: no evidence`)
         if (entry.result === 'FAIL') {
             if (!SEVERITIES.includes(entry.severity as Severity)) {

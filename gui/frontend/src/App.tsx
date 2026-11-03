@@ -6,6 +6,7 @@ import { HelpDrawer } from './components/HelpDrawer'
 import { KeyringAccessGate } from './components/KeyringAccessGate'
 import { Logo } from './components/Logo'
 import { PerformanceTab } from './components/PerformanceTab'
+import { ReleaseTab } from './components/ReleaseTab'
 import { ReportIssueButton } from './components/ReportIssueButton'
 import { SettingsTab } from './components/SettingsTab'
 import { SetupGate } from './components/SetupGate'
@@ -92,6 +93,7 @@ export function App() {
                     <Tabs value={tab} onChange={setTab} mt="lg" keepMountedMode="display-none">
                         <Tabs.List>
                             <Tabs.Tab value="validation">Validation</Tabs.Tab>
+                            <Tabs.Tab value="release">Release</Tabs.Tab>
                             <Tabs.Tab value="suites">Testing</Tabs.Tab>
                             <Tabs.Tab value="exploratory">Author</Tabs.Tab>
                             <Tabs.Tab value="performance">Performance</Tabs.Tab>
@@ -112,6 +114,9 @@ export function App() {
                         </Tabs.Panel>
                         <Tabs.Panel value="validation" pt="lg" keepMounted>
                             <ValidationTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="release" pt="lg" keepMounted>
+                            <ReleaseTab />
                         </Tabs.Panel>
                         <Tabs.Panel value="performance" pt="lg" keepMounted>
                             <PerformanceTab />
