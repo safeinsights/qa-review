@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
-import { clickUntil } from '../engine/flows/interactions'
+import { openAccountMenu } from '../engine/flows/interactions'
 import { dismissToasts, TOAST } from '../engine/flows/toasts'
 import type { RunContext, Suite } from './types'
 
@@ -229,9 +229,9 @@ async function originalName(
 async function gotoProfile(ctx: RunContext): Promise<void> {
     const { page } = ctx
     // The account menu is a dialog of plain links, not a role=menu, so its entries
-    // carry no menuitem role. The toggle is server-rendered, hence clickUntil.
+    // carry no menuitem role.
     const profileLink = page.getByRole('link', { name: 'Professional profile', exact: true })
-    await clickUntil(page.getByRole('button', { name: 'Toggle profile menu' }), profileLink)
+    await openAccountMenu(page, profileLink)
     await profileLink.click()
     // Wait on the destination heading, never the URL — the SPA router can swap the
     // path before this card tree is interactive.

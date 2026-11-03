@@ -2,6 +2,7 @@ import path from 'node:path'
 import { AuthError, loginAs } from '@/engine/auth'
 import { CleanupClient } from '@/engine/cleanup'
 import { resolveEnv } from '@/engine/env'
+import { resetCheckpoints } from '@/engine/flows/accessibility'
 import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import { Recorder } from '@/engine/recorder'
 import { buildRunState, truncateEventsToPosition } from '@/engine/run-state'
@@ -747,6 +748,7 @@ export async function runEngine(
         }
     } finally {
         detachConsole?.()
+        resetCheckpoints()
         // Guaranteed teardown: cleanup runs no matter how we got here.
         cleanupResult = await deps.runCleanup(cleanup).catch((e): RunResult['cleanup'] => ({
             ok: false,

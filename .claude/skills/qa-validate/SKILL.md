@@ -506,7 +506,10 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      "Unclear requirements" is long.
 
    If you post something wrong, remove it yourself rather than leaving it for the
-   user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
+   user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`. That leaves the
+   deleted comment's screenshots and `--attach` files on the card; find their ids
+   with `qar jira-attachments --issue <CARD>` and remove them with
+   `qar jira-delete-attachment --issue <CARD> --ids <id1,id2>`.
 
    **Voice: conversational.** First person, full sentences, says what you tried
    and why it matters, one short paragraph per finding. Example FAIL line:

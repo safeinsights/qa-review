@@ -391,6 +391,17 @@ export async function deleteComment(
     await assertOk(response, `Deleting comment ${commentId}`)
 }
 
+// Jira's attachment endpoint is keyed by id alone, with no issue in the path, so
+// this deletes whatever the id names. Callers scope it to a card first.
+export async function deleteAttachment(config: JiraConfig, attachmentId: string): Promise<void> {
+    const response = await jiraFetch(`${config.baseUrl}/rest/api/3/attachment/${attachmentId}`, {
+        method: 'DELETE',
+        headers: { Authorization: authHeader(config) },
+    })
+    if (response.status === 404) return
+    await assertOk(response, `Deleting attachment ${attachmentId}`)
+}
+
 export interface JiraAttachment {
     id: string
     filename: string

@@ -53,6 +53,10 @@ export async function clickUntil(
     }).toPass({ timeout: timeoutMs })
 }
 
+// The app names the toggle "<first name> profile menu", so only the suffix is stable.
+export const openAccountMenu = (page: Page, until: Locator) =>
+    clickUntil(page.getByRole('button', { name: /profile menu$/i }), until)
+
 // Tick every consent box a form renders until `gate` (its submit) goes enabled.
 //
 // Same shell-level cause as clickUntil, one layer up: a form's agreement boxes are

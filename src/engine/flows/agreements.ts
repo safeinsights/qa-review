@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { checkpoint } from './accessibility'
 
 // Study and org agreements raise the same modal over the page (it intercepts every
 // click beneath it): a link to the agreement, an acknowledgement box, and a Continue
@@ -12,6 +13,7 @@ import { expect, type Page } from '@playwright/test'
 export async function acknowledgeAgreement(page: Page, agreement: string): Promise<void> {
     const modal = page.getByRole('dialog').filter({ hasText: agreement })
     await modal.waitFor({ state: 'visible' })
+    await checkpoint(`${agreement} acknowledgement modal`)
     await expect(modal.getByRole('link', { name: agreement })).toBeVisible()
     const proceed = modal.getByRole('button', { name: 'Continue', exact: true })
     await expect(proceed).toBeDisabled()
