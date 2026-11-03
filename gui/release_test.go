@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -219,7 +220,17 @@ func TestReleaseSessionsDenyDirectWrites(t *testing.T) {
 	if denied == "" {
 		t.Fatal("release session args lack --disallowedTools")
 	}
-	want := []string{"Bash(gh release:*)", "Bash(gh api:*)", "Bash(gh pr merge:*)", "Bash(gh pr close:*)", "Bash(gh issue:*)"}
+	// Without it, user-level MCP servers load alongside the session's own, with write
+	// tools the deny list does not name.
+	if !slices.Contains(args, "--strict-mcp-config") {
+		t.Error("release session args lack --strict-mcp-config")
+	}
+	want := []string{
+		"Bash(gh release:*)", "Bash(gh api:*)", "Bash(gh auth:*)", "Bash(gh pr merge:*)",
+		"Bash(gh pr close:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)",
+		"Bash(gh pr edit:*)", "Bash(gh pr create:*)", "Bash(gh issue:*)", "Bash(gh gist:*)",
+		"Bash(gh repo:*)", "Bash(curl:*)",
+	}
 	for _, server := range knownJiraServers {
 		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
 			want = append(want, mcpToolName(server, tool))

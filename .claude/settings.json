@@ -30,6 +30,8 @@
                 "app.demo.safeinsights.org",
                 "app.safeinsights.org",
                 "api.github.com",
+                "uploads.github.com",
+                "*.githubusercontent.com",
                 "api.media.atlassian.com",
                 "api.mail.tm"
             ]

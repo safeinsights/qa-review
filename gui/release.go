@@ -313,16 +313,39 @@ func (a *App) stopReleaseSavedWatcher() {
 // releaseDisallowedTools are denied outright in both release sessions. Under
 // --permission-mode auto, a tool off the allowlist does not prompt the user: the
 // auto-mode classifier decides, and it could approve a direct `gh release upload`
-// of plan.md (Security section and all) or a Jira comment. A deny rule outranks
-// both. The qar release-* commands still work: qar's own gh
-// and Jira calls are child processes, not Bash tool calls.
+// of plan.md (Security section and all), a PR comment on the public management-app
+// repo, or a Jira comment. A deny rule outranks both. The qar release-* commands
+// still work: qar's own gh and Jira calls are child processes, not Bash tool calls.
+//
+// The sessions only ever READ GitHub (`gh pr view`/`gh pr diff`), so every other gh
+// command that writes, or hands out the token that would let curl write, is listed.
+// A blocklist cannot be complete, which is why releaseClaudeArgs also passes
+// --strict-mcp-config: user-level MCP servers (the claude.ai Atlassian connector,
+// an unscoped mcp-atlassian) carry write tools nobody here would think to name.
 func releaseDisallowedTools() []string {
 	tools := []string{
 		"Bash(gh release:*)",
 		"Bash(gh api:*)",
+		"Bash(gh auth:*)",
 		"Bash(gh pr merge:*)",
 		"Bash(gh pr close:*)",
+		"Bash(gh pr reopen:*)",
+		"Bash(gh pr comment:*)",
+		"Bash(gh pr review:*)",
+		"Bash(gh pr edit:*)",
+		"Bash(gh pr create:*)",
+		"Bash(gh pr ready:*)",
 		"Bash(gh issue:*)",
+		"Bash(gh gist:*)",
+		"Bash(gh repo:*)",
+		"Bash(gh workflow:*)",
+		"Bash(gh run:*)",
+		"Bash(gh secret:*)",
+		"Bash(gh variable:*)",
+		"Bash(gh label:*)",
+		"Bash(gh project:*)",
+		"Bash(curl:*)",
+		"Bash(wget:*)",
 	}
 	for _, server := range knownJiraServers {
 		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
@@ -339,6 +362,7 @@ func releaseClaudeArgs(allowed []string, mcpPath string) []string {
 		"--disallowedTools", strings.Join(releaseDisallowedTools(), ","),
 		"--add-dir", repoDir(),
 		"--mcp-config", mcpPath,
+		"--strict-mcp-config",
 	}
 }
 

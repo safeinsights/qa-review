@@ -405,6 +405,11 @@ so each one gets retried, guessed at, or reported as a bug in `qar`:
   (currently `api.mail.tm`, the signup suite's disposable-inbox API, and
   `api.media.atlassian.com`, where `jira-attachments --download` is redirected for
   the bytes) — a new outbound host in the engine needs a matching entry here.
+  The same goes for hosts `gh` reaches beyond `api.github.com`: `gh release upload`
+  posts to `uploads.github.com`, and `gh release download` is redirected to
+  `*.githubusercontent.com` for the bytes. The release sessions' Save (`qar
+  release-upload`) and Phase 1 download both run sandboxed, so without those two
+  entries they fail with a transport error that names neither host.
 - **`sandbox.excludedCommands` did NOT take effect.** The key is schema-valid and has
   listed `qar`/`pnpm qar`/`gh` since the file was created, yet sandboxed `gh` still
   failed the keychain check while its host WAS allowlisted — proof the command ran
@@ -926,7 +931,11 @@ Builds and runs a regression plan for one management-app release. Spec:
   browser, and waits with `qar release-baseline --wait` before Phase 2; the skill
   keeps it out of the browser until then. All sign-ins happen in the one session
   process, so `freshTotp` sees every code used. Teardown kills the client with the
-  session.
+  session. **The client has no deadline** (`dispatchSessionActionUntilDone`): it waits
+  while the session's lock pid is alive. It used to give up after an hour, but the
+  engine cannot cancel a run, so a timed-out client reported the baseline done while
+  the suite kept driving the held page, and Claude, cleared for Phase 2, drove the
+  same browser underneath it.
 - **Each release session has its own allowlist** (`releasePlanAllowedTools`,
   `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
   pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
