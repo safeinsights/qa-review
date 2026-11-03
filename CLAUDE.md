@@ -799,8 +799,10 @@ Builds and runs a regression plan for one management-app release. Spec:
   subjects (`Merge pull request #N`, squash `(#N)`) and reports `notesMissing`.
 - Everything for one release lives in `.tmp/release/<tag>/`: `prs.json`,
   `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
-  `remote/testing-plan.md` (the downloaded asset), `public/testing-plan.md` (what
-  was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
+  `remote/testing-plan.md` (the downloaded asset, which a run tests and
+  release-confluence attaches as "the plan as run"), `status/testing-plan.md`
+  (`release-status`'s own copy, kept apart so a status check cannot replace the
+  run's), `public/testing-plan.md` (what was uploaded), `baseline-<env>.json`, `run-plan-lines-<env>.json`,
   `created-<env>.json` (what the run created, for cleanup), `results-<env>.json`,
   `regression-results-<env>-<stamp>.md` and `security-results-<env>.md`.
 - **The run is logged as it goes, and the GUI shows it.** The run session writes
@@ -939,17 +941,20 @@ Builds and runs a regression plan for one management-app release. Spec:
 - **Each release session has its own allowlist** (`releasePlanAllowedTools`,
   `releaseRunAllowedTools` in `gui/app.go`), not the Validation set, which
   pre-approves every Jira tool, `gh` and `qar` command. Both get `jira_get_issue`
-  (per `knownJiraServers`), `gh pr view/diff`, `qar release-*`/`plan-lines`/
-  `results-*`, read-only shell and file edits; the plan adds `Agent` and
-  `plan-order`; the run adds chrome-devtools, `session-login`, `session-create-user`,
-  `invite`, `totp`, `deployed-release` and `cleanup`. The run files no Jira card.
+  (per `knownJiraServers`), `gh pr view/diff`, `qar release-status/list/download`,
+  `plan-lines`, `results-*`, read-only shell and file edits; the plan adds `Agent`,
+  `plan-order` and `release-prs/saved/summary/upload`; the run adds chrome-devtools,
+  `release-baseline/progress/result/results/confluence`, `session-login`,
+  `session-create-user`, `invite`, `totp`, `deployed-release` and `cleanup`. There is
+  no `qar release-*` wildcard: it let the run session write the public release, which
+  its skill forbade only in prose. The run files no Jira card.
 - **Each run's full results go to a private Confluence page** (`qar
   release-confluence`, `src/engine/release-confluence.ts`), because the public
   release asset cannot carry screenshots: management-app is public, and an image
   cannot be redacted the way text is. The page goes under the `RELEASE_CONFLUENCE_FOLDER`
   folder (`config/settings.json`: "Management App Release Testing" in the SafeInsights
-  space; the id, or a folder URL): folder → `<tag>` → `<tag> <env> — <date> run`. It lists the failures first, then every line by PR, with a PR that has no
-  FAIL collapsed; each screenshot named in evidence is attached and shown inline,
+  space; the id, or a folder URL): folder → `<tag>` → `<tag> <env> — <date> run`. It lists the failures first, then every tested line by the plan's run group,
+  each group collapsed (the failures are already above); each screenshot named in evidence is attached and shown inline,
   and the security results are on the page, collapsed. The Jira API token works for
   Confluence too (it is an account token), so there is no second secret. Each card
   of a PR with a FAIL gets a Jira web link to the page; the card is the key in the

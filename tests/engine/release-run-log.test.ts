@@ -7,6 +7,7 @@ import {
     buildResults,
     readResultsLog,
     recordProgress,
+    resultsLogFile,
     resumeRun,
     runStatus,
     STOPPED_EVIDENCE,
@@ -101,6 +102,33 @@ describe('release run results', () => {
             area: 'headers',
         })
         expect(readResultsLog(dir, 'staging').get('1.1')?.result).toBe('FAIL')
+    })
+
+    it('refuses a PASS or FAIL for a (staging only) line on production when it is recorded', () => {
+        const lines = [{ id: '1.1', title: 'Line 1.1', stagingOnly: true }]
+        fs.writeFileSync(
+            path.join(dir, 'run-plan-lines-production.json'),
+            JSON.stringify({ lines })
+        )
+        startRun(dir, 'production')
+        expect(() =>
+            appendResult(dir, 'production', { id: '1.1', result: 'PASS', evidence: 'seen' })
+        ).toThrow(/staging only/)
+        appendResult(dir, 'production', {
+            id: '1.1',
+            result: 'NOT TESTED',
+            evidence: 'staging only',
+            approvedBy: 'Runner',
+        })
+        expect(readResultsLog(dir, 'production').get('1.1')?.result).toBe('NOT TESTED')
+    })
+
+    it('skips a line torn by a crash mid-append instead of failing the whole log', () => {
+        appendResult(dir, 'staging', { id: '1.1', result: 'PASS', evidence: 'seen' })
+        fs.appendFileSync(path.join(dir, resultsLogFile('staging')), '{"id":"1.2","resu')
+        const log = readResultsLog(dir, 'staging')
+        expect([...log.keys()]).toEqual(['1.1'])
+        expect(runStatus(dir, 'staging')).toBeTruthy()
     })
 
     it('refuses to build results with a line missing, unless the runner stopped the run', () => {

@@ -87,11 +87,31 @@ export function previousTag(tagsNewestFirst: string[], tag: string): string {
 interface ReleaseRow {
     tag_name: string
     body: string | null
+    draft?: boolean
+    prerelease?: boolean
 }
 
+// Every release, newest first, one JSON object per line. A single page of 50 made
+// an older tag "not a release of this repo".
 async function listReleaseRows(gh: GhRunner, repo: string): Promise<ReleaseRow[]> {
-    const out = await gh(['api', `repos/${repo}/releases?per_page=50`])
-    return JSON.parse(out) as ReleaseRow[]
+    const out = await gh([
+        'api',
+        `repos/${repo}/releases?per_page=100`,
+        '--paginate',
+        '--jq',
+        '.[] | {tag_name, body, draft, prerelease} | tojson',
+    ])
+    return out
+        .split('\n')
+        .filter(l => l.trim())
+        .map(l => JSON.parse(l) as ReleaseRow)
+}
+
+// The tags a release can be compared against: published, non-prerelease releases,
+// plus the tag under test itself (which may still be a draft). A draft's tag may not
+// exist yet, and a prerelease is not what the previous release shipped.
+export function compareBaseTags(rows: ReleaseRow[], tag: string): string[] {
+    return rows.filter(r => r.tag_name === tag || (!r.draft && !r.prerelease)).map(r => r.tag_name)
 }
 
 export async function listReleases(gh: GhRunner, repo: string): Promise<string[]> {
@@ -146,10 +166,7 @@ export async function collectReleasePrs(
     boards: string[]
 ): Promise<ReleasePrs> {
     const rows = await listReleaseRows(gh, repo)
-    const prev = previousTag(
-        rows.map(r => r.tag_name),
-        tag
-    )
+    const prev = previousTag(compareBaseTags(rows, tag), tag)
     const numbers = prNumbersFromSubjects(await compareSubjects(gh, repo, prev, tag))
     const prs: ReleasePr[] = []
     for (const n of numbers) {
@@ -324,7 +341,10 @@ export async function releaseStatus(
     const plan = fs.existsSync(planPath)
     let planDiffers = false
     if (plan && assets?.some(a => a.name === PLAN_ASSET)) {
-        const remote = await downloadAsset(gh, repo, tag, PLAN_ASSET, path.join(dir, 'remote'))
+        // Not remote/: that copy is the plan a run tested, and release-confluence
+        // attaches it as "the plan as run". A status check after a re-save must not
+        // swap it for the newer asset.
+        const remote = await downloadAsset(gh, repo, tag, PLAN_ASSET, path.join(dir, 'status'))
         planDiffers = localPlanDiffers(
             fs.readFileSync(planPath, 'utf8'),
             fs.readFileSync(remote, 'utf8')

@@ -26,10 +26,12 @@ describe('release commands', () => {
         const gh = async (args: string[]) => {
             const j = args.join(' ')
             if (j.startsWith('api repos/r/releases?'))
-                return JSON.stringify([
+                return [
                     { tag_name: 'v2', body: '' },
                     { tag_name: 'v1', body: '' },
-                ])
+                ]
+                    .map(r => JSON.stringify(r))
+                    .join('\n')
             if (j.includes('/compare/')) return 'Merge pull request #1 from x'
             return JSON.stringify({
                 number: 1,

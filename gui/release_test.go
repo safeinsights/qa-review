@@ -202,6 +202,22 @@ func TestReleaseAllowlistsAreNarrow(t *testing.T) {
 			t.Errorf("%s belongs to the run session only", tool)
 		}
 	}
+	for name, list := range lists {
+		if strings.Contains(","+strings.Join(list, ",")+",", ",Bash(qar release-*:*),") {
+			t.Errorf("%s list pre-approves every qar release-* command", name)
+		}
+	}
+	// The public release is written only from the plan session.
+	for _, tool := range []string{"Bash(qar release-upload:*)", "Bash(qar release-summary:*)", "Bash(qar release-prs:*)"} {
+		if !strings.Contains(plan, ","+tool+",") || strings.Contains(run, ","+tool+",") {
+			t.Errorf("%s belongs to the plan session only", tool)
+		}
+	}
+	for _, tool := range []string{"Bash(qar release-baseline:*)", "Bash(qar release-progress:*)", "Bash(qar release-result:*)", "Bash(qar release-results:*)", "Bash(qar release-confluence:*)"} {
+		if !strings.Contains(run, ","+tool+",") || strings.Contains(plan, ","+tool+",") {
+			t.Errorf("%s belongs to the run session only", tool)
+		}
+	}
 	if !strings.Contains(plan, ",Bash(qar plan-order:*),") || strings.Contains(run, ",Bash(qar plan-order:*),") {
 		t.Error("plan-order belongs to the plan session only: the run tests the asset as uploaded")
 	}

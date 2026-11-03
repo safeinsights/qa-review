@@ -30,6 +30,7 @@ export interface RunProgress {
 interface PlanLine {
     id: string
     title: string
+    stagingOnly?: boolean
 }
 
 export function runPlanLinesFile(env: string): string {
@@ -174,9 +175,19 @@ function isBlank(value: unknown): boolean {
 
 // The rules results-check applies to one entry, checked when the result is written so
 // a bad entry is fixed while the line is still on screen, not at the end of the run.
-export function entryProblems(entry: ResultEntry, ids: Set<string>): string[] {
+export function entryProblems(entry: ResultEntry, lines: PlanLine[], env: string): string[] {
     const problems: string[] = []
-    if (!ids.has(entry.id)) problems.push(`${entry.id} is not a line of the run`)
+    const line = lines.find(l => l.id === entry.id)
+    if (!line) problems.push(`${entry.id} is not a line of the run`)
+    // The same rule as results-check, applied when the result is recorded rather than
+    // only at the end of the run, so the runner hears it on the first such line.
+    if (
+        env === 'production' &&
+        line?.stagingOnly &&
+        (entry.result === 'PASS' || entry.result === 'FAIL')
+    ) {
+        problems.push(`${entry.id} is (staging only): it cannot be PASS or FAIL on production`)
+    }
     if (!RESULT_VALUES.includes(entry.result as ResultValue)) {
         problems.push(`--result is one of ${RESULT_VALUES.join(', ')}`)
     }
@@ -194,12 +205,12 @@ export function entryProblems(entry: ResultEntry, ids: Set<string>): string[] {
 }
 
 export function appendResult(dir: string, env: string, entry: ResultEntry): void {
-    const ids = new Set(readRunLines(dir, env).map(l => l.id))
-    const problems = entryProblems(entry, ids)
+    const lines = readRunLines(dir, env)
+    const problems = entryProblems(entry, lines, env)
     if (problems.length) throw new Error(problems.join('\n'))
     // The title goes into the log so a resume can tell a result for this check from
     // one for a check that had the same id before the plan was edited.
-    const title = readRunLines(dir, env).find(l => l.id === entry.id)?.title
+    const title = lines.find(l => l.id === entry.id)?.title
     const clean = Object.fromEntries(
         Object.entries({ ...entry, title }).filter(
             ([, v]) => typeof v === 'string' && v.trim() !== ''
@@ -215,8 +226,16 @@ export function readResultsLog(dir: string, env: string): Map<string, ResultEntr
     if (!fs.existsSync(file)) return byId
     for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
         if (!raw.trim()) continue
-        const entry = JSON.parse(raw) as ResultEntry
-        byId.set(entry.id, entry)
+        // A line torn by a crash mid-append is skipped, as the Go reader does, so one
+        // bad line cannot break status, resume and results at once. That check then
+        // reads as untested and is run again.
+        let entry: ResultEntry
+        try {
+            entry = JSON.parse(raw) as ResultEntry
+        } catch {
+            continue
+        }
+        if (typeof entry?.id === 'string' && entry.id) byId.set(entry.id, entry)
     }
     return byId
 }
