@@ -2255,19 +2255,19 @@ const managementAppSlug = "safeinsights/management-app"
 // bogus card that sends the validator chasing a ticket that doesn't exist.
 // Anchoring on real boards also lets the match be case-insensitive and accept a
 // space separator, so "otter 644" and "OTTER-644" both resolve.
-// SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
-// still resolve, and normalizeJiraKey maps it back to the real board.
-var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP", "SIINFOSEC"}
+// SHRMP is the real board key; people often spell it out as SHRIMP in PR text, so
+// that is matched too and normalizeJiraKey maps it back to SHRMP.
+var jiraBoards = []string{"OTTER", "SHRMP", "SHRIMP", "SIINFOSEC"}
 
 var jiraKeyRE = regexp.MustCompile(
 	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)
 
 // normalizeJiraKey renders a matched key canonically: uppercase board, hyphen
-// separator, and the SHRMP typo corrected to SHRIMP.
+// separator, and the SHRIMP spelling corrected to the real SHRMP board.
 func normalizeJiraKey(board, number string) string {
 	board = strings.ToUpper(board)
-	if board == "SHRMP" {
-		board = "SHRIMP"
+	if board == "SHRIMP" {
+		board = "SHRMP"
 	}
 	return board + "-" + number
 }
@@ -2782,8 +2782,8 @@ const jiraAccessHint = "Ask a Jira admin to grant your account write access to t
 	jiraProbeProject + " project (add comments, create attachments, transition issues)."
 
 // The project the permission probe runs against. Deliberately NOT jiraBoards: that
-// list exists to MATCH ticket keys in PR text and includes SHRMP, a typo alias, plus
-// SHRIMP — both 404 on /mypermissions (verified against live Jira), which would make
+// list exists to MATCH ticket keys in PR text and includes SHRIMP, a misspelling
+// alias, plus SHRMP — both 404 on /mypermissions (verified against live Jira), which would make
 // the doctor report a failure that says nothing about the user's actual access.
 const jiraProbeProject = "OTTER"
 

@@ -18,11 +18,17 @@ export function managementAppRepo(vars: Vars): string {
     return slug
 }
 
-// SHRMP is a recurring typo for SHRIMP in real commits; it is matched so those PRs
-// still resolve, and normalized back to the real board.
+// SHRMP is the real board key; PR text often spells it out as SHRIMP, so that is
+// matched too and normalized back to SHRMP. Every key that reaches Jira goes through
+// here, so a write never targets a SHRIMP-n issue that does not exist.
 function normalize(board: string, number: string): string {
     const upper = board.toUpperCase()
-    return `${upper === 'SHRMP' ? 'SHRIMP' : upper}-${number}`
+    return `${upper === 'SHRIMP' ? 'SHRMP' : upper}-${number}`
+}
+
+export function normalizeJiraKey(key: string): string {
+    const dash = key.lastIndexOf('-')
+    return dash < 0 ? key : normalize(key.slice(0, dash), key.slice(dash + 1))
 }
 
 export function extractJiraKeys(text: string, boards: string[]): string[] {

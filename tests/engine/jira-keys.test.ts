@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { extractJiraKeys, jiraBoardsFrom, managementAppRepo } from '@/engine/jira-keys'
 
-const BOARDS = ['OTTER', 'SHRIMP', 'SHRMP', 'SIINFOSEC']
+const BOARDS = ['OTTER', 'SHRMP', 'SHRIMP', 'SIINFOSEC']
 
 describe('extractJiraKeys', () => {
     it('finds keys with a hyphen or a space, any case, and normalizes them', () => {
@@ -13,8 +13,9 @@ describe('extractJiraKeys', () => {
         ])
     })
 
-    it('maps the SHRMP typo to SHRIMP', () => {
-        expect(extractJiraKeys('SHRMP-328 Update TO email', BOARDS)).toEqual(['SHRIMP-328'])
+    it('keeps the real SHRMP board and maps the SHRIMP spelling to it', () => {
+        expect(extractJiraKeys('SHRMP-328 Update TO email', BOARDS)).toEqual(['SHRMP-328'])
+        expect(extractJiraKeys('shrimp 329 follow-up', BOARDS)).toEqual(['SHRMP-329'])
     })
 
     it('returns each key once, in order of appearance', () => {

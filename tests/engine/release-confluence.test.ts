@@ -140,6 +140,12 @@ describe('shotsIn', () => {
 })
 
 describe('prCards', () => {
+    it('files a title SHRIMP-n under the real SHRMP board', () => {
+        expect(
+            prCards({ title: 'SHRIMP-412 tidy', jiraKeys: ['SHRMP-412'] }, ['SHRMP', 'SHRIMP'])
+        ).toEqual(['SHRMP-412'])
+    })
+
     it('prefers the keys in the title over keys the description mentions', () => {
         expect(
             prCards({ title: 'OTTER-698 follow-up', jiraKeys: ['OTTER-698', 'OTTER-746'] })

@@ -15,7 +15,7 @@ import {
 } from '@/engine/github-release'
 import { releaseDir } from '@/engine/release-paths'
 
-const BOARDS = ['OTTER', 'SHRIMP', 'SHRMP', 'SIINFOSEC']
+const BOARDS = ['OTTER', 'SHRMP', 'SHRIMP', 'SIINFOSEC']
 
 describe('prNumbersFromSubjects', () => {
     it('reads merge commits and squash commits, once each, in order', () => {
