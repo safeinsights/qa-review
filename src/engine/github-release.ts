@@ -26,6 +26,9 @@ export interface ReleasePr {
 export interface ReleasePrs {
     tag: string
     previousTag: string
+    // The compare's head: the tag, or for a release not created yet, the commit
+    // release:create must tag.
+    head: string
     prs: ReleasePr[]
     // In the tag compare but not in the release body — the body is generated and
     // has been seen to miss a third of a release (v1.6.9: 63 PRs, 43 listed).
@@ -84,12 +87,13 @@ export function previousTag(tagsNewestFirst: string[], tag: string): string {
     return prev
 }
 
-interface ReleaseRow {
+export interface ReleaseRow {
     tag_name: string
     body: string | null
+    draft: boolean
 }
 
-async function listReleaseRows(gh: GhRunner, repo: string): Promise<ReleaseRow[]> {
+export async function listReleaseRows(gh: GhRunner, repo: string): Promise<ReleaseRow[]> {
     const out = await gh(['api', `repos/${repo}/releases?per_page=50`])
     return JSON.parse(out) as ReleaseRow[]
 }
@@ -98,7 +102,7 @@ export async function listReleases(gh: GhRunner, repo: string): Promise<string[]
     return (await listReleaseRows(gh, repo)).map(r => r.tag_name)
 }
 
-async function compareSubjects(
+export async function compareSubjects(
     gh: GhRunner,
     repo: string,
     from: string,
@@ -114,7 +118,7 @@ async function compareSubjects(
     return out.split('\n').filter(Boolean)
 }
 
-interface PrView {
+export interface PrView {
     number: number
     title: string
     author: { login: string }
@@ -126,7 +130,7 @@ interface PrView {
     deletions: number
 }
 
-async function viewPr(gh: GhRunner, repo: string, n: number): Promise<PrView> {
+export async function viewPr(gh: GhRunner, repo: string, n: number): Promise<PrView> {
     const out = await gh([
         'pr',
         'view',
@@ -139,6 +143,33 @@ async function viewPr(gh: GhRunner, repo: string, n: number): Promise<PrView> {
     return JSON.parse(out) as PrView
 }
 
+// Rejects anything but a 404: offline or expired auth must not read as "missing".
+export async function exists(gh: GhRunner, endpoint: string): Promise<boolean> {
+    try {
+        await gh(['api', endpoint, '--jq', '.url'])
+        return true
+    } catch (e) {
+        if (isNotFound(e)) return false
+        throw e
+    }
+}
+
+// What a release with no GitHub release yet is compared to: its git tag when one was
+// pushed, else the default branch's commit NOW. The commit is recorded in prs.json so
+// release:create tags exactly the commit the plan was written for.
+async function unreleasedRange(
+    gh: GhRunner,
+    repo: string,
+    tag: string,
+    rows: ReleaseRow[]
+): Promise<{ prev: string; head: string }> {
+    const prev = rows.find(r => !r.draft)?.tag_name
+    if (!prev) throw new Error(`${repo} has no release to compare ${tag} against`)
+    if (await exists(gh, `repos/${repo}/git/ref/tags/${tag}`)) return { prev, head: tag }
+    const sha = (await gh(['api', `repos/${repo}/commits/HEAD`, '--jq', '.sha'])).trim()
+    return { prev, head: sha }
+}
+
 export async function collectReleasePrs(
     gh: GhRunner,
     repo: string,
@@ -146,11 +177,17 @@ export async function collectReleasePrs(
     boards: string[]
 ): Promise<ReleasePrs> {
     const rows = await listReleaseRows(gh, repo)
-    const prev = previousTag(
-        rows.map(r => r.tag_name),
-        tag
-    )
-    const numbers = prNumbersFromSubjects(await compareSubjects(gh, repo, prev, tag))
+    const released = rows.some(r => r.tag_name === tag)
+    const { prev, head } = released
+        ? {
+              prev: previousTag(
+                  rows.map(r => r.tag_name),
+                  tag
+              ),
+              head: tag,
+          }
+        : await unreleasedRange(gh, repo, tag, rows)
+    const numbers = prNumbersFromSubjects(await compareSubjects(gh, repo, prev, head))
     const prs: ReleasePr[] = []
     for (const n of numbers) {
         const v = await viewPr(gh, repo, n)
@@ -169,12 +206,16 @@ export async function collectReleasePrs(
         })
     }
     const inBody = prNumbersFromBody(rows.find(r => r.tag_name === tag)?.body ?? '')
+    // A body with no PR table (no release yet, or one release:create wrote) lists no
+    // PRs on purpose; comparing against it would report every PR as missing.
+    const hasTable = inBody.length > 0
     return {
         tag,
         previousTag: prev,
+        head,
         prs,
-        notesMissing: numbers.filter(n => !inBody.includes(n)),
-        notesExtra: inBody.filter(n => !numbers.includes(n)),
+        notesMissing: hasTable ? numbers.filter(n => !inBody.includes(n)) : [],
+        notesExtra: hasTable ? inBody.filter(n => !numbers.includes(n)) : [],
     }
 }
 
@@ -208,6 +249,25 @@ export function assertAssetSource(tag: string, file: string, asName: string): vo
             `refusing to upload ${file} as ${asName}: that asset is only uploaded from ${expected}`
         )
     }
+}
+
+// Writes the plan without its Security section under public/, which is the file that
+// is uploaded. Only the release's own plan.md is read: any other file named as the
+// plan asset (prs.json, a results file) would be published under the plan's name.
+export function publicPlan(tag: string, file: string): { source: string; stripped: boolean } {
+    assertUnderReleaseDir(tag, file)
+    const plan = path.join(fs.realpathSync(releaseDir(tag)), PLAN_FILE)
+    if (!fs.existsSync(file) || fs.realpathSync(file) !== plan) {
+        throw new Error(
+            `refusing to upload ${file} as ${PLAN_ASSET}: the plan asset is made from ${plan} only`
+        )
+    }
+    const text = fs.readFileSync(file, 'utf8')
+    const pub = stripSecurity(text)
+    const source = path.join(releaseDir(tag), PUBLIC_DIR, PLAN_ASSET)
+    fs.mkdirSync(path.dirname(source), { recursive: true })
+    fs.writeFileSync(source, pub)
+    return { source, stripped: pub !== text }
 }
 
 // A run's Confluence page, as release-confluence records it in confluence-<env>.json.
@@ -251,7 +311,7 @@ async function canUpload(gh: GhRunner, repo: string): Promise<boolean> {
 
 // Only a 404 means "no such release"; offline, expired auth or a rate limit must
 // surface, or they would read as a release that does not exist.
-function isNotFound(e: unknown): boolean {
+export function isNotFound(e: unknown): boolean {
     return e instanceof Error && /HTTP 404/.test(e.message)
 }
 

@@ -792,6 +792,34 @@ Builds and runs a regression plan for one management-app release. Spec:
   body is generated and has missed a third of a release (v1.6.9: 63 PRs in
   `compare/v1.6.8...v1.6.9`, 43 in the body). `qar release-prs` reads commit
   subjects (`Merge pull request #N`, squash `(#N)`) and reports `notesMissing`.
+- **A maintainer creates the release with `pnpm release:create --tag vX.Y.Z
+  [--dry-run]`** (`scripts/create-release.ts` → `src/engine/release-create.ts`;
+  with no `--tag` it prints the next patch version). It is a standalone script, NOT
+  a `qar` command and not in the GUI, on purpose: the app and its sessions must not
+  be able to publish a release (`releaseDisallowedTools` also denies `pnpm
+  release:create`, since auto mode can approve an unlisted command). This replaces `~/code/versionista` for
+  management-app only; its other repos, `hotfix` and `append` still use versionista.
+  **The `release-create` skill drives it** (`/release-create v1.7.1`, in a plain
+  Claude Code session in this checkout): it runs `qa-release-plan` Phases 1–3 to
+  write `plan.md` and `prs.json`, shows the Summary as the changelog, takes edits,
+  and on the user's go-ahead runs the script with `--dry-run` and then for real. The
+  plan is made in the terminal, not the Release tab: the app has no path to an
+  unreleased tag at all. The script stays the only write, in one step: it checks
+  the plan with the same `parsePlanLines` gate Save runs, writes
+  the description as Related Releases (`RELATED_RELEASE_REPOS`) + the plan's
+  Summary in the `regression-summary` block (the v1.7.0 layout), publishes the
+  release, and uploads `testing-plan.md` (Security stripped).
+  **There is NO PR table.** versionista's table inlined every PR body; v1.7.1's came
+  to 204,546 characters and GitHub refused it with a bare `422 Validation Failed`
+  (the limit is 125,000). The changelog replaces it, and `release-prs` reports an
+  empty `notesMissing` for a body with no table rather than every PR as missing.
+  For a tag with no release, `release-prs` compares the newest non-draft release
+  with the tag if it was pushed, else with the default branch's commit at that
+  moment, recorded as `head` in `prs.json`. `release:create` tags exactly that
+  commit (`target_commitish`), so a merge after planning is not in the release,
+  and refuses when a pushed tag is on a different commit or a newer release
+  appeared since: either means the plan describes a different build.
+  Published at once (`draft:false`); run `--dry-run` first: management-app is public.
 - Everything for one release lives in `.tmp/release/<tag>/`: `prs.json`,
   `pr-<n>.json` (one per subagent), `plan.md` (the editor's file), `plan-lines.json`,
   `remote/testing-plan.md` (the downloaded asset), `public/testing-plan.md` (what
@@ -1113,6 +1141,9 @@ soft wrap had folded "Decisions needed" into one paragraph.
 - `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
   files and link them from the comment
 - `pnpm qar release-list` — releases of management-app
+- `pnpm release:create --tag v1.7.1 [--dry-run]` — publish a new management-app
+  release from its finished plan: changelog + `testing-plan.md` (body in
+  `.tmp/release/<tag>/release-created.md`); not a `qar` command
 - `pnpm qar release-prs --tag v1.6.9` — the PR set of a release, from the tag compare
 - `pnpm qar release-status --tag v1.6.9` — assets, upload rights, local files
 - `pnpm qar release-download --tag v1.6.9 [--asset testing-plan.md] [--remote-only] [--force]`

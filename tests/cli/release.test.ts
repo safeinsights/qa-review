@@ -27,7 +27,8 @@ describe('release commands', () => {
             const j = args.join(' ')
             if (j.startsWith('api repos/r/releases?'))
                 return JSON.stringify([
-                    { tag_name: 'v2', body: '' },
+                    // A PR table without #1: a body with no table reports nothing missing.
+                    { tag_name: 'v2', body: '| PR # |\n|---|\n| #9 |' },
                     { tag_name: 'v1', body: '' },
                 ])
             if (j.includes('/compare/')) return 'Merge pull request #1 from x'

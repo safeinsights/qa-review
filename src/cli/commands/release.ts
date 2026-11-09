@@ -4,23 +4,22 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
 import {
-    assertUnderReleaseDir,
     collectReleasePrs,
     downloadAsset,
     listReleases,
     localPlanDiffers,
+    publicPlan,
     releaseStatus,
     uploadAsset,
 } from '@/engine/github-release'
 import { jiraBoardsFrom, managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
-import { extractSecurity, spliceSecurity, stripSecurity } from '@/engine/public-plan'
+import { extractSecurity, spliceSecurity } from '@/engine/public-plan'
 import {
     isUploadableAssetName,
     PLAN_ASSET,
     PLAN_FILE,
     PRS_FILE,
-    PUBLIC_DIR,
     releaseDir,
 } from '@/engine/release-paths'
 import type { Vars } from '@/engine/settings'
@@ -142,25 +141,6 @@ export async function releaseDownloadCommand(
     const dest = path.join(dir, PLAN_FILE)
     const plan = placePlan(file, dest, opts.force === 'true')
     print({ tag, asset, output: dest, plan })
-}
-
-// Writes the plan without its Security section under public/, which is the file that
-// is uploaded. Only the release's own plan.md is read: any other file named as the
-// plan asset (prs.json, a results file) would be published under the plan's name.
-function publicPlan(tag: string, file: string): { source: string; stripped: boolean } {
-    assertUnderReleaseDir(tag, file)
-    const plan = path.join(fs.realpathSync(releaseDir(tag)), PLAN_FILE)
-    if (!fs.existsSync(file) || fs.realpathSync(file) !== plan) {
-        throw new Error(
-            `refusing to upload ${file} as ${PLAN_ASSET}: the plan asset is made from ${plan} only`
-        )
-    }
-    const text = fs.readFileSync(file, 'utf8')
-    const pub = stripSecurity(text)
-    const source = path.join(releaseDir(tag), PUBLIC_DIR, PLAN_ASSET)
-    fs.mkdirSync(path.dirname(source), { recursive: true })
-    fs.writeFileSync(source, pub)
-    return { source, stripped: pub !== text }
 }
 
 function assetNameFor(opts: Record<string, string>, file: string): string {

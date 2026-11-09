@@ -323,6 +323,9 @@ func releaseDisallowedTools() []string {
 		"Bash(gh pr merge:*)",
 		"Bash(gh pr close:*)",
 		"Bash(gh issue:*)",
+		// Publishing a release is the release-create skill's step, run by a
+		// maintainer in their own terminal, never by an app session.
+		"Bash(pnpm release:create:*)",
 	}
 	for _, server := range knownJiraServers {
 		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {

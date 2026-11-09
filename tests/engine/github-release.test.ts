@@ -119,6 +119,62 @@ describe('collectReleasePrs', () => {
         // Every gh call names the repo explicitly.
         for (const c of calls) expect(c.join(' ')).toMatch(/repos\/r|--repo r/)
     })
+
+    // v3 has no release: the compare runs from the newest release (v2) to main's
+    // commit, which is recorded so release:create tags exactly that commit.
+    const SHA = 'a'.repeat(40)
+    function unreleasedGh(calls: string[][], tagPushed: boolean) {
+        const base = fakeGh(calls)
+        return async (args: string[]): Promise<string> => {
+            const joined = args.join(' ')
+            if (joined.startsWith('api repos/r/git/ref/tags/v3')) {
+                calls.push(args)
+                if (tagPushed) return 'x'
+                throw new Error('gh: Not Found (HTTP 404)')
+            }
+            if (joined.startsWith('api repos/r/commits/HEAD')) {
+                calls.push(args)
+                return `${SHA}\n`
+            }
+            if (joined.includes('/compare/v2...')) {
+                calls.push(args)
+                return 'Merge pull request #10 from x'
+            }
+            return base(args)
+        }
+    }
+
+    it('compares a tag with no release against main, and records the commit', async () => {
+        const calls: string[][] = []
+        const result = await collectReleasePrs(unreleasedGh(calls, false), 'r', 'v3', BOARDS)
+        expect(result.previousTag).toBe('v2')
+        expect(result.head).toBe(SHA)
+        expect(calls.flat().some(a => a.includes(`/compare/v2...${SHA}`))).toBe(true)
+        expect(result.prs.map(p => p.number)).toEqual([10])
+        expect(result.notesMissing).toEqual([])
+    })
+
+    it('compares against a pushed tag that has no release yet', async () => {
+        const calls: string[][] = []
+        const result = await collectReleasePrs(unreleasedGh(calls, true), 'r', 'v3', BOARDS)
+        expect(result.head).toBe('v3')
+        expect(calls.some(c => c.join(' ').includes('commits/HEAD'))).toBe(false)
+    })
+
+    it('reports nothing missing for a release body with no PR table', async () => {
+        const calls: string[][] = []
+        const base = fakeGh(calls)
+        const gh = async (args: string[]) =>
+            args.join(' ').startsWith('api repos/r/releases?')
+                ? JSON.stringify([
+                      { tag_name: 'v2', body: '## Related Releases\n\n## What changed\n' },
+                      { tag_name: 'v1', body: '' },
+                  ])
+                : base(args)
+        const result = await collectReleasePrs(gh, 'r', 'v2', BOARDS)
+        expect(result.notesMissing).toEqual([])
+        expect(result.notesExtra).toEqual([])
+    })
 })
 
 describe('releaseStatus', () => {

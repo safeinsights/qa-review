@@ -4,6 +4,7 @@
   "MANAGEMENT_APP_REPO": "safeinsights/management-app",
   "PRODUCTION_BASE_URL": "https://app.safeinsights.org",
   "QA_BASE_URL": "https://app.qa.safeinsights.org",
+  "RELATED_RELEASE_REPOS": "safeinsights/setup-app=Setup App,safeinsights/trusted-output-app=Trusted Output App,safeinsights/encryption=SI Encryption Library,safeinsights/qa-review=qa-review",
   "RELEASE_CONFLUENCE_FOLDER": "3667755009",
   "STAGING_BASE_URL": "https://app.staging.safeinsights.org"
 }

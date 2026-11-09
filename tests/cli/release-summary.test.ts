@@ -59,6 +59,24 @@ describe('release-summary command', () => {
         expect(calls).toEqual([])
     })
 
+    it('refuses a description GitHub would reject as too long, before editing', async () => {
+        const { releaseSummaryCommand } = await import('@/cli/commands/release-summary')
+        const { releaseDir } = await import('@/engine/release-paths')
+        const dir = releaseDir('v1')
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, 'plan.md'), '## Summary\n\nWhat changed.\n\n## Baseline\n')
+        const edits: string[][] = []
+        const gh = async (args: string[]) => {
+            if (args[0] === 'api') return `${BODY}${'x'.repeat(125_000)}\n`
+            edits.push(args)
+            return ''
+        }
+        await expect(releaseSummaryCommand({ tag: 'v1' }, vars, gh)).rejects.toThrow(
+            /GitHub allows 125000/
+        )
+        expect(edits).toEqual([])
+    })
+
     it('refuses an --input outside the release dir', async () => {
         const { releaseSummaryCommand } = await import('@/cli/commands/release-summary')
         const outside = path.join(repo, 'plan.md')

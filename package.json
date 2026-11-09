@@ -13,7 +13,8 @@
         "lint:fix": "biome check --write",
         "format": "biome format --write",
         "qa": "tsx src/cli/index.ts",
-        "qar": "tsx bin/qar.ts"
+        "qar": "tsx bin/qar.ts",
+        "release:create": "tsx scripts/create-release.ts"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.5",
