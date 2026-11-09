@@ -151,8 +151,8 @@ to the UI in `ValidationStart{token, jiraCard}` because the GUI needs it: the
 Verdict button is disabled without a card, and the `verdict-posted` event is
 matched by issue key.
 
-The matcher is anchored to a **known board list** (`jiraBoards` — OTTER, SHRIMP,
-plus the recurring SHRMP typo), the approach `versionista`'s `changelog.go` uses.
+The matcher is anchored to a **known board list** (`jiraBoards` — OTTER, SHRMP,
+plus SHRIMP, the spelled-out form PRs use, normalized back to SHRMP), the approach `versionista`'s `changelog.go` uses.
 This is not incidental: management-app history is full of ticket-shaped noise
 (`fixes-2026`, `node-7`, `haiku-4`, `pages-6`), and a generic `\w+-\d+` pattern
 turns each into a bogus card that sends the validator chasing a ticket that

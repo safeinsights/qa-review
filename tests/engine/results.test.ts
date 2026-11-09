@@ -220,3 +220,41 @@ describe('checkResults', () => {
         expect(checkResults(self, good).problems).toContain('A.2: conflictWith points at itself')
     })
 })
+
+describe('the production rule for staging-only lines', () => {
+    const plan: Inventory = {
+        card: 'v1',
+        target: 'release',
+        lines: [
+            {
+                id: 'S-1',
+                title: 'Probe',
+                kind: 'check',
+                text: 'x',
+                source: { type: 'card', ref: 'plan' },
+                stagingOnly: true,
+            },
+        ],
+    }
+    it('rejects PASS or FAIL on production', () => {
+        const r = checkResults(plan, [{ id: 'S-1', result: 'PASS', evidence: 'e' }], {
+            env: 'production',
+        })
+        expect(r.problems).toEqual([
+            'S-1: a (staging only) line cannot be PASS or FAIL on production',
+        ])
+    })
+    it('accepts NOT TESTED on production and PASS on staging', () => {
+        expect(
+            checkResults(
+                plan,
+                [{ id: 'S-1', result: 'NOT TESTED', evidence: 'e', approvedBy: 'plan' }],
+                { env: 'production' }
+            ).ok
+        ).toBe(true)
+        expect(
+            checkResults(plan, [{ id: 'S-1', result: 'PASS', evidence: 'e' }], { env: 'staging' })
+                .ok
+        ).toBe(true)
+    })
+})

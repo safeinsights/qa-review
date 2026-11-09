@@ -6,6 +6,7 @@ import { launchChromeWithCdp } from '@/engine/cdp-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { createUserViaInvite } from '@/engine/flows/signup'
 import { createStudyFromScratch } from '@/engine/flows/study'
+import { onGuiGone } from '@/engine/gui-parent'
 import { resultsRoot, sessionRequestPath, sessionRequestResultPath } from '@/engine/paths'
 import { ScreencastServer } from '@/engine/screencast'
 import { acquireSessionLock } from '@/engine/session-lock'
@@ -16,6 +17,7 @@ import {
     type SessionResult,
     writeSessionResult,
 } from '@/engine/session-rpc'
+import { runSuiteOnPage } from '@/engine/session-suite'
 import type { Vars } from '@/engine/settings'
 import type { EnvConfig } from '@/engine/types'
 
@@ -30,6 +32,7 @@ import type { EnvConfig } from '@/engine/types'
 //   - login        (`qar session-login`)        — log in as a role
 //   - create-user  (`qar session-create-user`)  — invite + full signup from scratch
 //   - create-study (`qar session-create-study`) — create a study proposal from scratch
+//   - run-suite    (`qar session-run-suite`)    — run a whole suite on the held page
 // This lets Claude read a Jira ticket, infer what it needs, and only THEN trigger the
 // work on the SAME browser being streamed in the Validation pane — reusing the tested
 // flows instead of hand-driving selectors via the chrome-devtools MCP. `--role` is
@@ -68,7 +71,7 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
 
     // Poll the rendezvous file for on-demand action requests. A single attachment
     // (screencast) survives navigations + loginAs(), so no re-attach is needed.
-    const stopWatching = watchForRequests(page, env)
+    const stopWatching = watchForRequests({ page, cdpPort, env, vars })
 
     // Stay alive until told to stop. Shutdown signals:
     //  - SIGTERM/SIGINT (Go sends SIGTERM; Ctrl-C for manual testing).
@@ -86,6 +89,11 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
         }
         process.on('SIGTERM', stop)
         process.on('SIGINT', stop)
+        // An app exit that skipped its shutdown sends no signal at all.
+        onGuiGone(() => {
+            process.stderr.write('The QA Runner app that started this session is gone; stopping.\n')
+            stop()
+        })
     })
 
     stopWatching()
@@ -100,7 +108,14 @@ export async function sessionCommand(opts: Record<string, string>, vars: Vars): 
 // command can report success/failure. Actions are serialized (a request that
 // arrives mid-action is picked up on the next tick). Returns a stopper that clears
 // the poll timer.
-function watchForRequests(page: Page, env: EnvConfig): () => void {
+interface Held {
+    page: Page
+    cdpPort: number
+    env: EnvConfig
+    vars: Vars
+}
+
+function watchForRequests(held: Held): () => void {
     fs.mkdirSync(resultsRoot(), { recursive: true })
     // Clear any stale request/result from a previous session so we don't act on it.
     fs.rmSync(sessionRequestPath(), { force: true })
@@ -115,7 +130,7 @@ function watchForRequests(page: Page, env: EnvConfig): () => void {
         // Consume the request immediately so a slow action isn't re-triggered.
         consumeSessionRequest()
         try {
-            const result = await runAction(page, env, request.action)
+            const result = await runAction(held, request.action)
             writeSessionResult({ id: request.id, ok: true, ...result })
         } catch (e) {
             writeSessionResult({ id: request.id, ok: false, error: (e as Error).message })
@@ -128,11 +143,8 @@ function watchForRequests(page: Page, env: EnvConfig): () => void {
 }
 
 // Run one action on the held page and return the success fields for its result.
-async function runAction(
-    page: Page,
-    env: EnvConfig,
-    action: SessionAction
-): Promise<Partial<SessionResult>> {
+async function runAction(held: Held, action: SessionAction): Promise<Partial<SessionResult>> {
+    const { page, env } = held
     switch (action.action) {
         case 'login':
             await loginAs(page, env, action.role)
@@ -148,6 +160,10 @@ async function runAction(
         case 'signin': {
             await signInStopAtMfa(page, env, action.email, action.password)
             return { email: action.email, atMfa: true }
+        }
+        case 'run-suite': {
+            const result = await runSuiteOnPage(page, held.cdpPort, env, held.vars, action)
+            return { runOk: result.ok, bundleDir: result.bundleDir }
         }
         default: {
             // Exhaustive at the type level, but the action arrives from a JSON file that

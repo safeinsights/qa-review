@@ -102,6 +102,12 @@ func verdictPostedPath() string {
 	return filepath.Join(repoDir(), "results", "verdict-posted.json")
 }
 
+// Written by `qar release-saved` (src/engine/paths.ts releaseSavedPath). Keep in
+// sync with the TS path, as verdictPostedPath is.
+func releaseSavedPath() string {
+	return filepath.Join(repoDir(), "results", "release-saved.json")
+}
+
 // resourcesDir returns the .app's Contents/Resources dir (where the engine bundle
 // + shipped node + Playwright node_modules live), or "" when not running from an
 // .app bundle (e.g. `wails dev`), in which case callers fall back to `pnpm qar`.
@@ -641,6 +647,12 @@ func qarBinEnvIn(res string) []string {
 		return nil
 	}
 	return []string{"QAR_NODE=" + node, "QAR_BUNDLE=" + bundle}
+}
+
+// guiPidEnv names this app's pid to a child that must not outlive it: the child
+// watches the pid and stops itself (src/engine/gui-parent.ts).
+func guiPidEnv() string {
+	return fmt.Sprintf("QAR_GUI_PID=%d", os.Getpid())
 }
 
 // engineCmd builds the command that runs the bundled engine with the given qar

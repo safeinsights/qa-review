@@ -32,11 +32,13 @@ describe('resolveEnv', () => {
             email: 'a@example.com',
             password: 'pw-a',
             mfaCode: '111111',
+            nextMfaCode: expect.any(Function),
         })
         expect(cfg.accounts.researcher).toEqual({
             email: 'r@example.com',
             password: 'pw-r',
             mfaCode: '222222',
+            nextMfaCode: expect.any(Function),
         })
         expect(cfg.accounts.reviewer.email).toBe('v@example.com')
         expect(cfg.accounts.admin.mfaCode).toBe('111111')
@@ -181,6 +183,17 @@ describe('resolveEnv MFA seed vs fixed code', () => {
         expect(cfg.accounts.reviewer.mfaCode).toBe('303030')
     })
 
+    it('hands a fixed code to every sign-in without waiting', async () => {
+        const cfg = resolveEnv('production', {
+            ...PROD_BASE,
+            ADMIN_MFA_CODE_PRODUCTION: '101010',
+            RESEARCHER_MFA_CODE_PRODUCTION: '202020',
+            REVIEWER_MFA_CODE_PRODUCTION: '303030',
+        })
+        expect(await cfg.accounts.reviewer.nextMfaCode()).toBe('303030')
+        expect(await cfg.accounts.reviewer.nextMfaCode()).toBe('303030')
+    })
+
     it('recomputes the code on each read (getter, not a snapshot)', () => {
         // Sanity: the seed produces different codes in different windows, so a live
         // getter (vs. a value captured once at resolve time) is what keeps a
@@ -213,6 +226,7 @@ describe('demo environment', () => {
             email: 'a@demo.example.com',
             password: 'pw-a-demo',
             mfaCode: '444444',
+            nextMfaCode: expect.any(Function),
         })
         expect(cfg.accounts.reviewer.email).toBe('v@demo.example.com')
     })
@@ -248,6 +262,7 @@ describe('resolvePrEnv', () => {
             email: 'a@example.com',
             password: 'pw-a',
             mfaCode: '111111',
+            nextMfaCode: expect.any(Function),
         })
     })
 
