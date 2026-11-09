@@ -56,9 +56,12 @@ export const STUDY_STATUSES = [
 ] as const
 export type StudyStatus = (typeof STUDY_STATUSES)[number]
 
+// CODE-REJECTED is refused by deployments older than management-app #1279 (QA from Nov 5
+// 2026); the endpoint answers 400 there, which errorFor() surfaces.
 export const JOB_STATUSES = [
     'CODE-APPROVED',
     'CODE-CHANGES-REQUESTED',
+    'CODE-REJECTED',
     'CODE-SCANNED',
     'CODE-SUBMITTED',
     'FILES-APPROVED',
