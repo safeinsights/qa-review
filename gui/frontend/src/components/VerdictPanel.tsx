@@ -7,7 +7,8 @@ import { useAsyncAction } from '../lib/useAsyncAction'
 // Both buttons tell Claude (in the PTY) to capture a screenshot of the relevant
 // screen(s), post its findings as a Jira comment + attach the screenshot, and
 // transition the ticket. They differ in the transition:
-//   Validated → comment + screenshot, transition to "Final Review - EM & PM"
+//   Validated → comment + screenshot, transition to "Ready for Production", un-assign
+//               (a card waiting on a PM/EM decision stays in QA Review instead)
 //   Rejected  → comment + screenshot, un-assign, transition to "Development"
 // Claude runs in default-ish mode, so each Jira write still prompts live in the
 // terminal (the human confirms there).
@@ -33,7 +34,9 @@ export function VerdictPanel({ card }: { card: string }) {
     const post = (verdict: 'validated' | 'rejected') => async () => {
         const transition =
             verdict === 'validated'
-                ? 'transition it to "Final Review - EM & PM"'
+                ? 'transition it to "Ready for Production" and un-assign it, unless a result ' +
+                  'carries a PM/EM decision: then leave it in QA Review and tag the decider, ' +
+                  'as the qa-validate skill describes'
                 : 'un-assign the assignee (set assignee to null) and transition it to "Development"'
         await sendToPty(
             `Mark ${card} ${verdict.toUpperCase()}: capture a screenshot of the relevant ` +
@@ -85,7 +88,7 @@ export function VerdictPanel({ card }: { card: string }) {
                         size="xs"
                         color="teal"
                     >
-                        Validated → Final Review
+                        Validated → Ready for Production
                     </Button>
                     <Button
                         onClick={reject}
