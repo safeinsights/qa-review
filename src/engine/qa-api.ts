@@ -56,9 +56,12 @@ export const STUDY_STATUSES = [
 ] as const
 export type StudyStatus = (typeof STUDY_STATUSES)[number]
 
+// Must match JOB_STATUSES in management-app src/lib/job-status-rules.ts. Deployments older
+// than management-app #1279 refuse CODE-REJECTED with a 400, which errorFor() surfaces.
 export const JOB_STATUSES = [
     'CODE-APPROVED',
     'CODE-CHANGES-REQUESTED',
+    'CODE-REJECTED',
     'CODE-SCANNED',
     'CODE-SUBMITTED',
     'FILES-APPROVED',
@@ -69,6 +72,7 @@ export const JOB_STATUSES = [
     'JOB-PROVISIONING',
     'JOB-READY',
     'JOB-RUNNING',
+    'RESULTS-VIEWED',
     'RUN-COMPLETE',
 ] as const
 export type JobStatus = (typeof JOB_STATUSES)[number]
