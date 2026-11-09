@@ -3,15 +3,9 @@ import { useEffect, useState } from 'react'
 import { onVerdictPosted, sendToPty } from '../lib/ipc'
 import { useAsyncAction } from '../lib/useAsyncAction'
 
-// After Claude has validated the ticket in the browser, the human sets the verdict.
-// Both buttons tell Claude (in the PTY) to capture a screenshot of the relevant
-// screen(s), post its findings as a Jira comment + attach the screenshot, and
-// transition the ticket. They differ in the transition:
-//   Validated → comment + screenshot, transition to "Ready for Production", un-assign
-//               (a card waiting on a PM/EM decision stays in QA Review instead)
-//   Rejected  → comment + screenshot, un-assign, transition to "Development"
-// Claude runs in default-ish mode, so each Jira write still prompts live in the
-// terminal (the human confirms there).
+// The status move is left to the qa-validate skill's "Transition the ticket" table,
+// because it depends on the target env and on open decisions, which this panel
+// does not know. Each Jira write still prompts in the terminal.
 export function VerdictPanel({ card }: { card: string }) {
     const [opened, setOpened] = useState(false)
     const [status, setStatus] = useState('')
@@ -32,18 +26,13 @@ export function VerdictPanel({ card }: { card: string }) {
     }, [card])
 
     const post = (verdict: 'validated' | 'rejected') => async () => {
-        const transition =
-            verdict === 'validated'
-                ? 'transition it to "Ready for Production" and un-assign it, unless a result ' +
-                  'carries a PM/EM decision: then leave it in QA Review and tag the decider, ' +
-                  'as the qa-validate skill describes'
-                : 'un-assign the assignee (set assignee to null) and transition it to "Development"'
         await sendToPty(
             `Mark ${card} ${verdict.toUpperCase()}: capture a screenshot of the relevant ` +
                 `screen(s) with the chrome-devtools MCP, add a Jira comment summarizing what ` +
                 `you tested and the ${verdict.toUpperCase()} verdict with reasoning, attach the ` +
                 `screenshot via jira_update_issue, then resolve the transition by name ` +
-                `(jira_get_transitions) and ${transition}. Confirm the comment with me before ` +
+                `(jira_get_transitions), then move and assign the card as the "Transition the ` +
+                `ticket" table in the qa-validate skill says for this target. Confirm the comment with me before ` +
                 `posting. After it's posted, run \`qar verdict-posted --issue ${card} ` +
                 `--result ${verdict}\`.`
         )
@@ -88,7 +77,7 @@ export function VerdictPanel({ card }: { card: string }) {
                         size="xs"
                         color="teal"
                     >
-                        Validated → Ready for Production
+                        Validated
                     </Button>
                     <Button
                         onClick={reject}
@@ -98,7 +87,7 @@ export function VerdictPanel({ card }: { card: string }) {
                         color="red"
                         variant="light"
                     >
-                        Rejected → Development
+                        Rejected
                     </Button>
                 </Group>
                 {status ? (
