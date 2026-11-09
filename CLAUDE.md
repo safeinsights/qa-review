@@ -85,6 +85,8 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   (data/secrets/org state), not suite selection.
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
+- `bin/qar.ts` — CLI entry point. Each subcommand is in `src/cli/commands/`, and
+  `qar --help` lists them.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
   See "Posting Jira comments with inline screenshots" in `src/engine/CLAUDE.md` for why this exists
   instead of the `jira-atlassian` MCP's `jira_add_comment`.

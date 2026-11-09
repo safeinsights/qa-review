@@ -18,9 +18,9 @@ and renders streamed `StepEvent`s + the result bundle.
 
 ## Run it
 - **Dev:** `wails dev` (serves on `:34115` too — drive in Chrome for headless
-  debugging; see the repo `CLAUDE.md` "Running the GUI app in a browser").
+  debugging; see `gui/CLAUDE.md` "Running the GUI app in a browser").
 - **Production `.dmg`:** `make dmg` from the repo root (signed + notarized) or
-  `make dmg-unsigned` for a local smoke test. See `CLAUDE.md` "Packaging a
+  `make dmg-unsigned` for a local smoke test. See `gui/CLAUDE.md` "Packaging a
   standalone Mac app".
 
 In a packaged app the engine is bundled (`<Resources>/engine/qar.bundle.mjs` run by

@@ -4,7 +4,8 @@
 
 ## Debugging "the run hangs on one step" (`QAR_STEP_TIMEOUT_MS`)
 
-The opposite symptom to the one above, and it used to be worse: a step that could
+The opposite symptom to "the run does nothing" (in the root `CLAUDE.md`), and it
+used to be worse: a step that could
 never succeed **hung the run forever** rather than failing. No failure row, no
 screenshot, `run-state.json` frozen with that step still `running` and
 `"running": true`, and — the part that costs the most time — the browser never
