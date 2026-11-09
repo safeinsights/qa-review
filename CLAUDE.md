@@ -65,7 +65,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
 
 - `src/engine/` — the run engine. `runEngine()` is the entry; `env.ts` resolves
   envs; `suite-registry.ts` lists/loads suites. Every `ctx.step()` runs under a
-  deadline — see "Debugging the run hangs on one step" below.
+  deadline — see "Debugging the run hangs on one step" in `src/engine/CLAUDE.md`.
 - `src/suites/` — the actual suites (`signin`, `create-study`, plus discovered ones).
   A `Suite` is a plain object with an ordered **`steps: Step[]`** array (each
   `{ name, run(ctx) }`), so step names are statically enumerable — the GUI shows a
@@ -85,11 +85,10 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   (data/secrets/org state), not suite selection.
 - `src/engine/settings.ts` — the layered settings loader (replaces `.env`). See
   "Settings / configuration" below.
-- `bin/qar.ts` — CLI: `run | login | cleanup | codegen | list | migrate |
-  request-access | rekey | set-secret | get-secret | sync | session | jira-comment |
-  jira-delete-comment | jira-delete-attachment`.
+- `bin/qar.ts` — CLI entry point. Each subcommand is in `src/cli/commands/`, and
+  `qar --help` lists them.
 - `src/engine/jira.ts` — Jira Cloud REST client used to post validation findings.
-  See "Posting Jira comments with inline screenshots" below for why this exists
+  See "Posting Jira comments with inline screenshots" in `src/engine/CLAUDE.md` for why this exists
   instead of the `jira-atlassian` MCP's `jira_add_comment`.
 - `gui/` — Wails app. `gui/app.go` `RunEngine()` spawns the bundled engine
   (`<Resources>/runtime/node <Resources>/engine/qar.bundle.mjs run ...`, or
@@ -107,7 +106,7 @@ from tinycld: 4-space, single quotes, no semicolons, 100-col). Don't hand-format
   and substitutes `{{placeholder}}` vars. Each file's trailing newline is trimmed —
   the prompt is submitted as ONE PTY message and a stray newline would send it early.
   `validation.md` is used when the Jira card is known; `validation-by-pr.md` when
-  only a PR is (see "Validating by PR number" below).
+  only a PR is (see "Validating by PR number" in `gui/CLAUDE.md`).
 - `src/engine/paths.ts` — single source of truth for where the repo lives:
   `repoDir()` reads `QAR_REPO_DIR` (set by the packaged app to the user-writable
   clone) and falls back to this checkout for `pnpm qar`. `configDir`/`resultsRoot`/
@@ -258,34 +257,6 @@ Go encrypts (`gui/settings.go`, `filippo.io/age`); the engine decrypts
 
 - **Migration**: `pnpm qar migrate` reads a legacy `.env` into
   `settings.local.json` (plaintext) so existing setups keep working.
-
-## Running the GUI app in a browser (for debugging / driving headlessly)
-
-The GUI is a native Wails desktop app, but `wails dev` also serves it over HTTP
-so you can drive it in Chrome via the chrome-devtools MCP tools.
-
-1. **Start it (sandbox MUST be disabled)** — `wails dev` runs `go mod tidy`,
-   which writes to `~/Library/Caches/go-build`. Under the sandbox that fails with
-   `operation not permitted`. Launch with the sandbox off, in the background:
-   ```
-   cd gui && nohup wails dev > "$TMPDIR/wails-dev.log" 2>&1 &
-   ```
-2. **Wait for ready** — poll `$TMPDIR/wails-dev.log` for `Using DevServer URL:
-   http://localhost:34115`. The Vite frontend is on `:1420`; the
-   browser-accessible app (Vite proxy + Go bridge) is on **`:34115`**. Verify:
-   `lsof -nP -iTCP:34115 -sTCP:LISTEN` and `curl -s -o /dev/null -w '%{http_code}' http://localhost:34115/`.
-3. **Drive it** — `mcp__chrome-devtools__new_page` → `http://localhost:34115/`,
-   then `take_snapshot` / `take_screenshot` / `click`.
-   - Mantine `<Select>` options render in a portal and often DON'T get a11y uids
-     in the snapshot. To pick an option reliably, use `evaluate_script`:
-     ```js
-     () => { const el = [...document.querySelectorAll('[role="option"]')]
-       .find(o => o.textContent.trim() === 'create-study'); el && el.click(); }
-     ```
-   - Selecting a suite auto-pins ROLE to the suite's declared role (label becomes
-     "ROLE (FROM SUITE)") and locks it.
-   - The harmless `runtime:ready -> Unknown message from front end` lines in the
-     log are expected when running in Chrome (not the native webview); ignore them.
 
 ## The diagnostic log (first stop for any silent failure)
 
@@ -444,33 +415,6 @@ Two things to know about such a run:
 
 With both handled the suite is green, so a failure there is a real one.
 
-## PATH order decides which `node` npx runs
-
-`guiPathDirs` is a **priority ranking**, not a set — its order picks which of
-several installed toolchains wins. `withGuiPath()` builds the final PATH through
-`prependPathDirs()`, which places those dirs at the front **in one pass**.
-Prepending them one at a time (the old code) REVERSES them: each prepend pushes
-the previous one back, so `/opt/homebrew/bin` — declared first — ended up last
-among them. A Finder-launched app inherits neither Homebrew nor `/usr/local/bin`,
-so both got prepended and `/usr/local/bin` won.
-
-That is issue #36: a user with Node 26 in Homebrew and Node **21.1.0** in
-`/usr/local/bin` got the 21.1.0. `chrome-devtools-mcp` declares
-`engines: ^20.19.0 || ^22.12.0 || >=23`, and 21.x is in the gap — it uses
-`import.meta.dirname` (Node 21.2.0+), which is `undefined` there, so the server
-throws ``The "path" argument must be of type string`` at import. The message
-names neither node nor a version, so every session silently came up with no
-browser tools. Reproduced directly: the same server binary crashes on 21.1.0 and
-exits 0 on 25.2.0.
-
-Two guards now exist, and both should stay:
-- `nodeVersionProblem()` mirrors that engines range. **The Setup Doctor fails the
-  Node row** on an unsupported version — it previously reported a green
-  `✓ Node.js v21.1.0` because it only checked that `node` *ran*. An unparseable
-  version is deliberately NOT flagged (a doctor that cries wolf is worse).
-- `probeMcpServers()` logs the node version it resolved and flags an unsupported
-  one, so the diagnostic log names the cause instead of showing a bare crash.
-
 ## Debugging "the run does nothing / no steps appear"
 
 The GUI shows "No steps yet — press Run" and "No live session" even after Run,
@@ -495,344 +439,6 @@ where each lives). Settings-specific failure modes:
   Run `pnpm qar request-access --name "..."` (or the GUI's Request access button),
   or supply the value via env / `settings.local.json`. (This skip-when-keyless
   behavior is what lets CI run without a key.)
-
-## Debugging "the run hangs on one step" (`QAR_STEP_TIMEOUT_MS`)
-
-The opposite symptom to the one above, and it used to be worse: a step that could
-never succeed **hung the run forever** rather than failing. No failure row, no
-screenshot, `run-state.json` frozen with that step still `running` and
-`"running": true`, and — the part that costs the most time — the browser never
-held open for a retry, because nothing ever threw. One run sat like that for 8
-minutes against an env whose build simply did not have the page the step
-navigated to (staging was on a tag predating the feature; the same suite was
-green on qa).
-
-The cause is Playwright's LIBRARY mode. Per-action defaults bound each click and
-assertion, but a bare `expect(...).toPass()` resolves its timeout to
-`options.timeout ?? expectConfig().toPass?.timeout ?? 0` — and with no test
-runner there is no config to read, so it polls with NO deadline. Note that
-`expect.configure({ timeout })` does NOT fix this: that sets `info.timeout`,
-which `toPass` never consults.
-
-So `src/engine/run.ts` gives every **`ctx.step()`** a wall-clock deadline
-(`withStepDeadline`, default 5 min via `resolveStepTimeoutMs`). Three details are
-deliberate:
-
-- It wraps the action INSIDE `ctx.step()`, not `step.run(ctx)`. `ctx.step`'s own
-  catch is what records the `failed` row with screenshot/url/console and feeds the
-  retryable hold, so a timeout fails through the ordinary path. Wrapping the outer
-  call would leave the row stuck at `running` — the very bug being fixed.
-- The abandoned body gets a `.catch()`. Playwright has no cancellation, so it
-  keeps polling until teardown and would otherwise land as an **unhandled
-  rejection** after the step was already recorded failed.
-- Because that body is not cancelled, it keeps driving the SAME `page` the retry
-  re-runs against, so a zombie attempt's clicks could land underneath the live one.
-  **`ctx.page` is guarded, so suites do not have to think about this.** It is a
-  Proxy bound to the generation the body read it at; once the deadline fires, every
-  action through it — and through any locator or frame reached from it — throws
-  `StepAbandonedError` rather than touching the browser. A plain body written with
-  no awareness of any of this is already safe, which is the point: a rule that says
-  "remember to check a flag" is one the next helper forgets.
-
-  `ctx.signal.aborted` is still there for a body that would rather leave a long
-  loop quietly than by throwing.
-
-  The engine's own bookkeeping — screenshot, `currentUrl`, console drain — reads the
-  RAW page rather than `ctx.page`, so a timed-out step still records the
-  diagnostics that make it debuggable.
-
-The message contains the word `timeout`, so `categorize()` files it as
-`environment`, matching how a plain Playwright timeout already reads.
-
-**This bounds `ctx.step()` bodies and nothing else.** `openBrowser` and
-`deps.login` run OUTSIDE the step loop and remain unbounded, so a Clerk sign-in
-that hangs still reproduces the original symptom — no failure row, no screenshot,
-the run frozen. Those paths need their own deadline; this section does not cover
-them.
-
-**`QAR_STEP_TIMEOUT_MS`** overrides the 5-minute default; `0` disables the
-deadline (an escape hatch for hand-debugging a parked step). A non-numeric or
-negative value falls back to the default rather than silently disabling the
-guard — a typo must not reinstate the hang. It is read from the merged settings
-like any other var, so `config/settings.local.json` works as well as the env.
-
-Suites must still not set inline Playwright timeouts (see "Code rules"): this is
-the global backstop, not permission to sprinkle `{ timeout: … }` around. There is
-exactly ONE sanctioned exception, and it is a shared helper rather than a suite:
-`clickUntil` (`src/engine/flows/interactions.ts`) bounds its own `toPass` at
-`CLICK_UNTIL_READY_TIMEOUT_MS`. A `toPass` is the one construct the deadline
-above cannot express better — it polls forever in library mode, so the choice
-there is not between a shorter wait and a longer one but between a number and an
-infinite one, and failing in 60s with a message naming the CONTROL beats failing
-in 5 minutes with one naming the step.
-
-`clickUntil(control, target)` is also the answer to a failure this app produces
-often enough that three flows had each grown their own copy: a control is
-**server-rendered, so it is clickable BEFORE React wires its onClick**. The click
-takes focus, nothing opens, and the caller then burns its whole action timeout on
-a dialog that was never going to appear. (A click landing pre-hydration can also
-navigate outside the router's knowledge and be undone.) So it re-clicks until the
-target is visible AND enabled — enabled because Mantine renders a control
-disabled while its data loads, and a visible-but-disabled control just moves the
-failure one line down. It skips the click once the target is attached, or once the
-control has detached, so a control that navigates away is not re-clicked into a
-timeout. `inviteUser` (signup), `beginProposal` (study) and `toast-messages`'
-modal/popover opens all call it; a new pre-hydration click belongs here too, not
-in a fourth copy.
-
-## Packaging a standalone Mac app (`.dmg` for staff)
-
-The desktop app ships as a self-contained, Developer-ID-notarized `.app`/`.dmg` so
-staff can download and run it with **no Node/pnpm/checkout**. How it works:
-
-- **The engine is bundled.** `esbuild.config.mjs` bundles `bin/qar.ts` →
-  `gui/build/engine/qar.bundle.mjs`. The `.app` ships a pinned `node` +
-  `qar.bundle.mjs` + a self-contained Playwright + **tsx** `node_modules` in
-  `Contents/Resources/`. `gui/app.go` `RunEngine()`/`engineCmd()` runs
-  `<Resources>/runtime/node --import tsx <Resources>/engine/qar.bundle.mjs ...`;
-  under `wails dev` (no Resources) it falls back to `pnpm qar` (which is `tsx bin/qar.ts`).
-- **The app clones the repo on first launch.** `SetupGate` (React) prompts for a
-  location and shells `gh repo clone <qaReviewSlug>` (set in `gui/paths.go`) into a
-  user-writable dir, persisted in `~/Library/Application Support/qa-runner/repo-location.txt`.
-  Suites + `config/` live in that clone. `repoDir()` is the single source of truth,
-  shared by Go and the engine via the **`QAR_REPO_DIR`** env var.
-- **Suites are `.ts` and load directly.** The bundle runs under `--import tsx`, so
-  the registry imports `<repo>/src/suites/*.ts` straight from the clone — no compile
-  step, no `suites-compiled/` dir. This is why suites must use RELATIVE imports (the
-  `@/` alias isn't resolved at suite-load time). Editing a suite and re-running picks
-  up the change immediately (the retry path cache-busts the `.ts` import), so there
-  is no stale-artifact class of bug.
-- **Required tools** (Chrome, git, gh, claude) are used from the user's machine.
-  `Preflight()` checks them and shows a blocking banner if any are missing. Playwright
-  launches the user's Chrome via `channel:'chrome'` (no bundled Chromium).
-
-Build it:
-
-- `make engine` — just bundle the engine (`node esbuild.config.mjs`).
-- `make dmg-unsigned` — full pipeline minus signing (`SIGN=0`); good for a local smoke
-  test of the bundled `.app`.
-- `make dmg` — signed + notarized `.dmg`. Fill in `DEVELOPER_ID` + `NOTARY_PROFILE`
-  and `qaReviewSlug` first (see `scripts/build-app.sh` + `gui/paths.go`).
-
-**`qar` shim / skill invocation:** in the packaged app there is no `pnpm qar` (the
-engine ships as a bundle), and `pnpm qar` alone wouldn't work in the Claude PTY
-there. So the committed **`bin/qar`** shim (on PATH) dispatches to the bundled engine
-or `pnpm qar` (dev). `qarBinValue()` (`gui/paths.go`) is the single source of the
-engine location, exported as **two** vars — `QAR_NODE` and `QAR_BUNDLE` (packaged
-only); `withGuiPath()` (`gui/app.go`) exports them AND prepends `<repoDir()>/bin` to
-PATH, so a bare `qar <args>` works in the Claude sessions (authoring/validation/
-companion) in both dev and the packaged app. The skills therefore invoke bare **`qar
-<args>`** — not `pnpm qar`, and not the raw vars. The `Bash(qar:*)` allowlist entry
-(`gui/app.go`) matches this shim.
-
-They are two vars rather than one `"<node> --import tsx <bundle>"` command string
-**because the installed app path contains a space** (`/Applications/SI QA
-Runner.app/…`). A packed string leaves the shim no good option: unquoted it
-word-splits at the space (`/Applications/SI: No such file or directory`, exit 127 on
-every `qar` call in the packaged app); quoted it becomes one nonexistent command
-name. Split into one path per var, each expansion is a single word and quotes
-correctly. Don't recombine them.
-
-**`QAR_REPO_DIR` set without `QAR_NODE`/`QAR_BUNDLE` is ambiguous, and the shim
-resolves it by looking for `bin/qar.ts` in that dir.** The combination has two
-causes with opposite fixes: (a) a DEV CHECKOUT pinning the repo explicitly — both
-`wails dev` (where `resourcesDir()` is `""` by design) and `scripts/approve-access.sh`,
-which sets `QAR_REPO_DIR="$REPO"` to target a clone; and (b) a PACKAGED app whose
-`Resources/engine/qar.bundle.mjs` wasn't found. `pnpm qar` is right for (a) and
-cannot work for (b) — there `node_modules` is a symlink into the `.app`, so pnpm
-dead-ends on a node-version or pinned-pnpm error that names nothing real.
-`bin/qar.ts` is the engine SOURCE: present in every checkout, never shipped in the
-`.app` (`Resources/engine/` holds only the bundle + `node_modules`), so its presence
-separates the two. The shim exits 127 with the real cause only for (b).
-Treating the var alone as "packaged" broke `approve-access.sh` in an ordinary dev
-checkout (`tests/cli/qar-shim.test.ts` pins this).
-`withGuiPath()` correspondingly STRIPS inherited
-`QAR_NODE`/`QAR_BUNDLE` (it already stripped `PATH`/`QAR_REPO_DIR`): `QAR_REPO_DIR` is
-appended unconditionally while the pair is packaged-only, so without stripping, the
-two halves of the shim's contract can disagree.
-
-## Validating by PR number (Jira card inference)
-
-The Validation screen takes a Jira card **and/or** a PR — either alone is enough
-(`StartValidationSession` rejects neither-given). There is no role picker: the
-qa-validate skill infers the role from the ticket.
-
-Both inputs accept a **pasted URL** (`gui/frontend/src/components/validationInputs.ts`:
-`parseJiraCard` / `parsePrNumber`). Parsing is behavior, not cosmetics — the PR
-value flows into the `--pr` engine flag, the preview base URL, and `gh pr view`,
-so a URL must be reduced to a bare number. `parsePrNumber` prefers the `/pull/<n>`
-segment over a first-number match, since a trailing `#diff-r1234567` fragment or a
-`?w=1` query also contains digits. These live in a plain `.ts` module (not
-`ValidationTab.tsx`) so the engine's tsconfig — which sets no `--jsx` — can
-typecheck `tests/gui/validationInputs.test.ts`.
-
-Given only a PR, `inferJiraCard()` (`gui/app.go`) runs `gh pr view <n> --repo
-safeinsights/management-app --json title,headRefName,body` and scans **title →
-branch → description**, in that order (a description is scanned last because it
-often quotes OTHER tickets — "related to OTTER-99"). The resolved key is returned
-to the UI in `ValidationStart{token, jiraCard}` because the GUI needs it: the
-Verdict button is disabled without a card, and the `verdict-posted` event is
-matched by issue key.
-
-The matcher is anchored to a **known board list** (`jiraBoards` — OTTER, SHRIMP,
-plus the recurring SHRMP typo), the approach `versionista`'s `changelog.go` uses.
-This is not incidental: management-app history is full of ticket-shaped noise
-(`fixes-2026`, `node-7`, `haiku-4`, `pages-6`), and a generic `\w+-\d+` pattern
-turns each into a bogus card that sends the validator chasing a ticket that
-doesn't exist. Matching real boards also makes it safe to be case-insensitive and
-to accept a space separator, so PR #907's `Otter 590` resolves to `OTTER-590`.
-**Adding a new Jira board means adding it to `jiraBoards`.**
-
-Inference is best-effort: offline, `gh`-unauthenticated, or genuinely no key (PR
-#839 has none) yields `""`, and the session still starts using
-`prompts/validation-by-pr.md`, which asks Claude to identify the ticket from the
-PR itself.
-
-### The PR caveat and the `pr-review` skill
-
-`prompts/pr-env-caveat.md` (appended whenever a PR is given) closes a validation by
-telling Claude to run `/pr-review <n> --repo <slug>`. The **repo must be explicit**:
-the session's cwd is the qa-review checkout, so a bare `gh pr view 839` resolves
-against qa-review (PRs in the low tens) instead of the repo under test. The caveat
-interpolates `{{pr}}`/`{{repo}}` from `composeValidationPrompt`, with `{{repo}}`
-sourced from the same `managementAppSlug` constant the card inference uses.
-
-`.claude/skills/pr-review/SKILL.md` posts a **PENDING** review (no `event` field) —
-private to the PR author until a human clicks Submit — so the caveat authorizes
-posting without asking, but requires surfacing the returned `html_url`. A draft
-nobody can find is a draft that never happened. Neither the caveat nor the skill may
-APPROVE or REQUEST CHANGES. The skill also inherits `qa-validate`'s PTY rules
-(one command per Bash call, no `cd`, `.tmp/` for scratch) because it runs in that
-same allowlisted session — a pipe or redirect turns an allowlisted `gh …` into a
-non-matching compound and prompts the user mid-review.
-
-## Lighthouse audits (the `lighthouse` suite)
-
-Records a Lighthouse score per key page plus an overall average, so performance and
-accessibility regressions surface as a trend rather than by accident.
-
-**Chrome does NOT expose Lighthouse over CDP.** The Lighthouse panel in DevTools is
-DevTools' own bundled copy of the Lighthouse JS — there is no `Lighthouse.*` CDP
-domain, and Playwright has no Lighthouse API. So a real audit needs the **npm
-`lighthouse` package**. What Playwright provides is the BROWSER: `launchChromeWithCdp`
-already starts Chrome with `--remote-debugging-port`, and lighthouse attaches to that
-port by number — so the audit runs against the same **already-authenticated** session
-the steps drive, not a fresh profile. (`disableStorageReset: true` keeps it that way;
-a reset would bounce the audit to the sign-in page.)
-
-Three constraints follow, each of which will break the packaged app if forgotten:
-
-- **`lighthouse` is `external` in `esbuild.config.mjs`.** It does computed `require()`
-  of its audits/gatherers and reads report templates + locale JSON relative to
-  `import.meta.url`. esbuild cannot resolve any of that statically, so an inlined copy
-  builds fine and then throws at audit time. It ships as a real tree in
-  `Resources/engine/node_modules`, staged by `scripts/build-app.sh` exactly like
-  Playwright.
-- **Lighthouse 13 declares `engines.node >= 22.19`**, so `NODE_VERSION` in
-  `scripts/build-app.sh` is a hard floor, not a preference. A dev checkout runs on the
-  system node and stays green while the `.app` dies at `import('lighthouse')`, so this
-  only shows up in a packaged smoke test.
-- The suite needs a **CDP port**, which `--headed` does not provide (`run-headed.ts`
-  launches without one). `requireCdpPort` fails naming `--screencast`; the GUI always
-  passes it.
-- **`qar sync` does NOT install dependencies** — it is a `git pull` and nothing else,
-  and that is correct: in the packaged app `node_modules` is a symlink INTO the signed
-  `.app`, so an install there would write into the bundle. This suite is the first one
-  to need a dependency the app does not already ship, so it is also the first that a
-  sync alone cannot make runnable. A synced clone can therefore hold the suite while
-  the `.app` running it predates `lighthouse`; the fix is a new build, NOT an install.
-  A dev checkout just needs `pnpm install`. `loadLighthouse()` turns Node's
-  `Cannot find package 'lighthouse'` into a message naming both cases — the package
-  name alone would repeat the stale-clone class of failure that named neither the app
-  nor the staleness. **A future suite that adds a dependency inherits all of this.**
-
-**Report-only by design.** A step fails only when the audit itself fails — never
-because a score is low. Two back-to-back runs against the same QA build scored
-performance 91 then 90, so a threshold would produce exactly the flaky red the
-"E2E flakiness: ZERO tolerance" rule forbids. The signal is the trend, not one number.
-A `null` category is a failure rather than a 0: scoring it 0 would read as "the app is
-terrible" instead of "the audit broke".
-
-Where the numbers go:
-
-- `ctx.recordMetrics({...})` attaches numbers to the enclosing `ctx.step()`'s event
-  (`StepEvent.metrics`), which the GUI renders as a chip beside the step's duration.
-  It is an open `Record<string, number>`, so the recorder stays ignorant of what any
-  one suite measures. Metrics are cleared per step, and kept on a FAILED step — three
-  of four categories is more debuggable than none.
-- Each run writes `<bundle>/lighthouse/<route-slug>.report.{html,json}` plus a
-  `summary.json`. The HTML is the full DevTools-style report; open it directly.
-- `summary.json` deliberately does NOT repeat the env or a timestamp — both are
-  already in the bundle directory name (`<stamp>_<suite>_<env>`), the one place they
-  cannot drift out of sync. `ListLighthouseRuns` (`gui/lighthouse.go`) parses them
-  from there, which is why `envFromBundleName` splits from the END (a suite name may
-  itself contain underscores).
-- The GUI's **Performance tab** plots the history. It is the only thing in the app
-  that enumerates past bundles; bundles without a `summary.json` are skipped, since
-  most runs are not Lighthouse runs. The y-axis is pinned to 0-100 rather than fitted
-  to the data — a fitted axis turns a two-point wobble into a visual cliff.
-
-Adding a route means adding it to `ROUTES` in `src/suites/lighthouse.ts` and updating
-the pinned names in `tests/suites/step-names.test.ts`.
-
-## Posting Jira comments with inline screenshots
-
-A QA validation is worth much more with the evidence embedded in the comment. The
-`jira-atlassian` MCP's `jira_add_comment` **cannot do this** — it only ever emits
-text. Every image syntax you might try is stored verbatim and renders as literal
-text (`![](f.png)`, `!f.png|thumbnail!`, and a markdown link to the attachment URL
-were all confirmed to fail; the wiki form additionally comes back escaped as
-`\![](f.png)`). This is upstream bug
-[sooperset/mcp-atlassian#608](https://github.com/sooperset/mcp-atlassian/issues/608),
-still open.
-
-The reason: Jira Cloud renders **ADF**, and an embedded image is only expressible
-as an ADF `media` node. That node is keyed by a **Media Services file UUID**, which
-is NOT the numeric attachment id from the upload response. It's exposed only
-indirectly — request `/rest/api/3/attachment/content/{id}` **without following the
-redirect**, and the `Location` header is `.../file/{uuid}/binary`.
-
-`src/engine/jira.ts` does exactly that: upload → resolve UUID from the redirect →
-POST an ADF doc interleaving `paragraph` and `mediaSingle` nodes. So:
-
-- `qar jira-comment --issue <KEY> --body-file <path.md> [--images a.png,b.png]`
-  posts ONE comment with the images embedded. Images append after the body by
-  default; put a `{{image:N}}` placeholder (1-based) in the body to position one
-  inline instead. Prints `{"id","url"}`.
-- Every comment ends with `Posted by qa-review <version>`, linked to the GitHub
-  release or commit (`src/engine/version.ts`, `git describe --tags --always --dirty`
-  on `repoDir()`), so a reader knows which build of the validator wrote it. In the
-  packaged app that is the CLONE's commit: the engine itself runs from the bundle
-  in `Resources/engine`, and only suites, skills and config come from the clone.
-  The clone can be ahead of the bundle, so the footer names the skill text that
-  drove the session, not necessarily the engine code that posted.
-- `qar jira-delete-comment --issue <KEY> --ids <id1,id2>` removes comments (the MCP
-  has no delete tool, so this is the only way to clean up a bad post). 404 = already
-  gone = success.
-- `qar jira-delete-attachment --issue <KEY> --ids <id1,id2>` removes attachments.
-  **Deleting a comment does NOT delete the files it uploaded**, so a repost leaves the
-  first post's screenshots and `--attach` files behind as duplicates on the card (ids
-  from `qar jira-attachments`). Jira's delete endpoint takes the attachment id alone —
-  no issue in the path — so a mistyped id would delete a file on some other card. The
-  command therefore checks each id against `--issue`'s attachment list first and
-  leaves any id not on it untouched, reporting it as `deleted: false`.
-
-Body text **is** markdown — `buildCommentAdf()` converts each text segment with
-`markdownToAdf()` (the `marklassian` package) and splices the resulting block nodes
-into the doc, so headings, bold/italic, inline code, lists, and links all render.
-(This replaced an earlier literal-text path; write markdown, not plain prose.)
-
-Auth comes from the same var names the MCP server uses: `JIRA_URL` (defaults to
-`https://openstax.atlassian.net`), `JIRA_USERNAME`, `JIRA_API_TOKEN`. These are read
-from the merged settings via `jiraConfig(vars)`, so the GUI's saved "Jira email"
-is picked up from `settings.local.json` and does NOT need to be exported — inline
-`JIRA_USERNAME=you@rice.edu qar jira-comment …` is only a fallback when it isn't
-saved there. Note the Jira account email is not necessarily your git email.
-
-Deliberately NOT implemented: an "upload any absolute path" helper. That's the
-arbitrary-file-read/exfiltration hole the upstream maintainer blocked in
-[PR #1402](https://github.com/sooperset/mcp-atlassian/pull/1402); uploads here go
-through the issue attachment endpoint only.
 
 ## Figma annotations are Plugin-API-only (and the validator may only READ)
 
@@ -893,6 +499,14 @@ Reports are written in the conversational voice. `qar jira-comment` keeps a sing
 hard line break (`hardBreaks()`), since a report is line-oriented and markdown's
 soft wrap had folded "Decisions needed" into one paragraph.
 
+## Guidance kept in nested CLAUDE.md files
+
+These load only when working under that directory:
+
+- `gui/CLAUDE.md` — driving the GUI in a browser (`wails dev`), PATH order and node versions, packaging the `.dmg` and the `bin/qar` shim, validating by PR number and the `pr-review` caveat.
+- `src/engine/CLAUDE.md` — the per-step deadline (`QAR_STEP_TIMEOUT_MS`, `clickUntil`) and posting Jira comments with inline screenshots.
+- `src/suites/CLAUDE.md` — the `lighthouse` suite.
+
 ## Useful commands
 
 - `pnpm test` (vitest), `pnpm typecheck`
@@ -900,7 +514,7 @@ soft wrap had folded "Decisions needed" into one paragraph.
 - `pnpm qar list` — list suites and their roles
 - `pnpm qar run --suite create-study --role researcher --env qa`
 - `pnpm qar run --suite lighthouse --role admin --env qa` — Lighthouse audit sweep
-  (see "Lighthouse audits" above); scores land in the GUI's Performance tab
+  (see `src/suites/CLAUDE.md`); scores land in the GUI's Performance tab
 - `pnpm qar run --suite <s> --pr <n>` — run against PR preview `prN.qa.safeinsights.org`
 - `pnpm qar migrate` — one-time: import a legacy `.env` into `config/settings.local.json`
 - `pnpm qar request-access [--name "..."]` — generate your identity + open a keyring PR
@@ -917,7 +531,7 @@ soft wrap had folded "Decisions needed" into one paragraph.
   keyring, rekey to the survivors, and open a revocation PR
 - `pnpm qar sync` — fast-forward pull (suites + keyring + secrets)
 - `pnpm qar jira-comment --issue OTTER-640 --body-file notes.md --images a.png,b.png`
-  — post a Jira comment with the screenshots embedded inline (see above)
+  — post a Jira comment with the screenshots embedded inline (see `src/engine/CLAUDE.md`)
 - `pnpm qar jira-delete-comment --issue OTTER-640 --ids 45521,45522`
 - `pnpm qar jira-delete-attachment --issue OTTER-640 --ids 29216,29217` — remove a
   deleted comment's leftover uploads
@@ -933,5 +547,5 @@ soft wrap had folded "Decisions needed" into one paragraph.
   timing for the report summary
 - `pnpm qar jira-comment … --attach .tmp/OTTER-617-inventory.html` — attach non-image
   files and link them from the comment
-- `make dmg` — build the signed/notarized standalone Mac app (see Packaging above)
+- `make dmg` — build the signed/notarized standalone Mac app (see "Packaging" in `gui/CLAUDE.md`)
 - `cd gui && go test ./...` — Go GUI tests (encryption, settings routing, interop)
