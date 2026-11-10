@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { loginAs, signedInMarker } from '../auth'
+import { alreadySignedInNotice, loginAs, signedInMarker } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -86,8 +86,8 @@ export async function inviteUser(
 // Complete the full new-user signup from the emailed invitation URL and return the
 // new user's SafeInsights DB id plus the TOTP secret its MFA was enrolled with.
 // Handles: invitation landing -> create account form -> mandatory authenticator-app
-// MFA (TOTP) -> recovery codes -> security key -> dashboard. The new user must be
-// UNAUTHENTICATED, so clear any existing session.
+// MFA (TOTP) -> recovery codes -> sign in again -> security key -> dashboard. The new
+// user must be UNAUTHENTICATED, so clear any existing session.
 // `baseURL` is the APP origin, threaded in the way every other flow helper takes it
 // rather than read back off `page.url()`. The invitation URL is scraped from an
 // email, so the origin the browser happens to be sitting on is not guaranteed to be
@@ -119,6 +119,7 @@ export async function completeSignup(
 
     // 2. Signup form (email is pre-filled + disabled)
     await page.getByLabel('First name').waitFor({ state: 'visible' })
+    const email = await page.getByLabel('Email').inputValue()
     await checkpoint('signup form, empty', { as: 'invitee' })
     await page.getByLabel('First name').fill('Qar')
     await page.getByLabel('Last name').fill('Tester')
@@ -171,6 +172,7 @@ export async function completeSignup(
             .click()
             .catch(() => {})
     }
+    await signInAgainIfSignedOut(page, email, mfaSecret)
 
     // 6. Security-key screen: a one-time private key that must be stored, or the
     //    account can never decrypt an output.
@@ -363,7 +365,7 @@ export async function enterTotp(page: Page): Promise<string> {
         // after first paint. Compute as late as possible.
         const secret = await readTotpSecret(page)
         lastSecret = secret
-        const code = totp(secret)
+        const code = await freshTotp(secret)
         const count = await inputs.count()
         if (count >= 6) {
             for (let i = 0; i < 6; i++) await inputs.nth(i).fill(code[i])
@@ -431,6 +433,19 @@ async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
         }
     }
     throw new Error(`authenticator MFA: step-up code rejected after 3 attempts (secret=${secret})`)
+}
+
+// Leaving the recovery codes signs out a session that has not verified its new factor, so
+// sign back in with a code. A session that verified it in a step-up stays signed in.
+async function signInAgainIfSignedOut(page: Page, email: string, mfaSecret: string): Promise<void> {
+    const signInAgainNotice = page.getByText('MFA is set up', { exact: true })
+    const signedIn = signedInMarker(page).or(page.getByRole('button', { name: /copy key/i }))
+    await signInAgainNotice.or(signedIn).first().waitFor({ state: 'visible' })
+    if (!(await signInAgainNotice.isVisible())) return
+
+    await checkpoint('sign in again after MFA setup', { as: 'invitee' })
+    await signInWithTotp(page, email, mfaSecret)
+    await signedIn.or(alreadySignedInNotice(page)).first().waitFor({ state: 'visible' })
 }
 
 // Mirrors management-app's fillPinInput: the test-id group when it is present, the

@@ -274,7 +274,7 @@ export async function loginAs(
     return await getClerkToken(page)
 }
 
-function alreadySignedInNotice(page: Page) {
+export function alreadySignedInNotice(page: Page) {
     return page.getByText(/already signed in/i).first()
 }
 
