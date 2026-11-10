@@ -357,15 +357,16 @@ async function getClerkToken(page: Page): Promise<string> {
     return ''
 }
 
-async function fillPin(page: Page, code: string): Promise<void> {
-    // Mirror management-app's fillPinInput: prefer the test-id group, fall back to
-    // the role=group placeholder inputs.
-    let inputs = page.getByTestId('sms-pin-input').locator('input')
+// Mirrors management-app's fillPinInput: the test-id group when it is present, the
+// role=group boxes otherwise (the account screens render the same 6-box Mantine
+// PinInput without the test id).
+export async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
+    let inputs = page.getByTestId(testId).locator('input')
     if ((await inputs.count()) === 0) {
-        inputs = page.locator('[role="group"]').locator('input[placeholder="0"]')
+        inputs = page.locator('[role="group"] input[placeholder="0"]')
     }
-    const digits = code.split('')
-    for (let i = 0; i < digits.length; i++) {
-        await inputs.nth(i).fill(digits[i])
+    if ((await inputs.count()) === 0) {
+        inputs = page.locator('[role="group"] input:not([type="hidden"])')
     }
+    for (let i = 0; i < code.length; i++) await inputs.nth(i).fill(code[i])
 }

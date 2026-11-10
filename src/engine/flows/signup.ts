@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { alreadySignedInNotice, loginAs, signedInMarker } from '../auth'
+import { alreadySignedInNotice, fillPin, loginAs, signedInMarker } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -446,20 +446,6 @@ async function signInAgainIfSignedOut(page: Page, email: string, mfaSecret: stri
     await checkpoint('sign in again after MFA setup', { as: 'invitee' })
     await signInWithTotp(page, email, mfaSecret)
     await signedIn.or(alreadySignedInNotice(page)).first().waitFor({ state: 'visible' })
-}
-
-// Mirrors management-app's fillPinInput: the test-id group when it is present, the
-// role=group boxes otherwise (the account screens render the same 6-box Mantine
-// PinInput without the test id).
-export async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
-    let inputs = page.getByTestId(testId).locator('input')
-    if ((await inputs.count()) === 0) {
-        inputs = page.locator('[role="group"] input[placeholder="0"]')
-    }
-    if ((await inputs.count()) === 0) {
-        inputs = page.locator('[role="group"] input:not([type="hidden"])')
-    }
-    for (let i = 0; i < code.length; i++) await inputs.nth(i).fill(code[i])
 }
 
 // Sign in from the sign-in form as an account completeSignup created. loginAs only covers

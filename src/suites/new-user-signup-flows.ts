@@ -1,10 +1,10 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { fillPin } from '../engine/auth'
 import { checkpoint } from '../engine/flows/accessibility'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil, openAccountMenu } from '../engine/flows/interactions'
 import {
     completeSignup,
-    fillPin,
     INVITE_EMAIL_TIMEOUT_MS,
     inviteUser,
     isInviteEmail,
@@ -633,7 +633,7 @@ export const newUserSignupFlowsSuite: Suite = {
                     })
                     // The linked address signs in to the SAME account: same authenticator,
                     // same lab, no enrolment.
-                    await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
+                    await checkpoint('sign in, second address', { as: 'invitee' })
                     await signInWithTotp(
                         page,
                         mergeInbox(ctx).address,
