@@ -4,11 +4,12 @@ import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil, openAccountMenu } from '../engine/flows/interactions'
 import {
     completeSignup,
+    fillPin,
     INVITE_EMAIL_TIMEOUT_MS,
     inviteUser,
     isInviteEmail,
     ORG_FOR_ROLE,
-    SIGNUP_PASSWORD,
+    signInWithTotp,
 } from '../engine/flows/signup'
 import type { Inbox, Message } from '../engine/mailtm'
 import {
@@ -18,7 +19,6 @@ import {
     listMessageIds,
     waitForMessage,
 } from '../engine/mailtm'
-import { freshTotp } from '../engine/totp'
 import type { RunContext, Suite } from './types'
 
 // Covers the three shapes an invitation landing page takes, and what a SECOND
@@ -102,41 +102,6 @@ async function nextInviteUrl(inbox: Inbox, consumed: string[]): Promise<string> 
     const url = extractSignupUrl(message)
     consumed.push(url)
     return url
-}
-
-// Mirrors management-app's fillPinInput: the test-id group when it is present, the
-// role=group boxes otherwise (the account screens render the same 6-box Mantine
-// PinInput without the test id).
-async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
-    let inputs = page.getByTestId(testId).locator('input')
-    if ((await inputs.count()) === 0) {
-        inputs = page.locator('[role="group"] input[placeholder="0"]')
-    }
-    if ((await inputs.count()) === 0) {
-        inputs = page.locator('[role="group"] input:not([type="hidden"])')
-    }
-    for (let i = 0; i < code.length; i++) await inputs.nth(i).fill(code[i])
-}
-
-// Sign in as an account this suite created. ctx.loginAs only covers the shared role
-// accounts, and their second factor comes from settings; this one's TOTP secret was
-// minted during signup and lives in ctx.state.
-async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
-    await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
-    await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(SIGNUP_PASSWORD)
-    await page.getByRole('button', { name: 'Login' }).click()
-    const authenticator = page
-        .getByRole('button', { name: /authenticator app verification/i })
-        .or(page.getByRole('link', { name: /authenticator app verification/i }))
-    // Wait on the code BOXES, not the "Verify code" button: that button is disabled
-    // until all six digits are in, and clickUntil requires its target to be enabled —
-    // so it would re-click the picker until the budget ran out on a control that was
-    // never going to enable itself before we typed.
-    await clickUntil(authenticator, page.locator('[role="group"] input').first())
-    await checkpoint('sign in, authenticator code entry', { as: 'invitee' })
-    await fillPin(page, await freshTotp(mfaSecret))
-    await page.getByRole('button', { name: /verify code/i }).click()
 }
 
 // Read the "You generated a security key on <date>." notice. /user-key renders the
@@ -540,6 +505,7 @@ export const newUserSignupFlowsSuite: Suite = {
                             existing
                         )
                         await clickUntil(existing, page.getByLabel('Password'))
+                        await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
                         await signInWithTotp(
                             page,
                             primaryInbox(ctx).address,
@@ -667,6 +633,7 @@ export const newUserSignupFlowsSuite: Suite = {
                     })
                     // The linked address signs in to the SAME account: same authenticator,
                     // same lab, no enrolment.
+                    await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
                     await signInWithTotp(
                         page,
                         mergeInbox(ctx).address,

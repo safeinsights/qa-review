@@ -3,7 +3,7 @@ import { loginAs, signedInMarker } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
-import { totp } from '../totp'
+import { freshTotp, totp } from '../totp'
 import type { EnvConfig } from '../types'
 import { checkpoint } from './accessibility'
 import { checkUntilEnabled, clickUntil } from './interactions'
@@ -431,4 +431,38 @@ async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
         }
     }
     throw new Error(`authenticator MFA: step-up code rejected after 3 attempts (secret=${secret})`)
+}
+
+// Mirrors management-app's fillPinInput: the test-id group when it is present, the
+// role=group boxes otherwise (the account screens render the same 6-box Mantine
+// PinInput without the test id).
+export async function fillPin(page: Page, code: string, testId = 'sms-pin-input'): Promise<void> {
+    let inputs = page.getByTestId(testId).locator('input')
+    if ((await inputs.count()) === 0) {
+        inputs = page.locator('[role="group"] input[placeholder="0"]')
+    }
+    if ((await inputs.count()) === 0) {
+        inputs = page.locator('[role="group"] input:not([type="hidden"])')
+    }
+    for (let i = 0; i < code.length; i++) await inputs.nth(i).fill(code[i])
+}
+
+// Sign in from the sign-in form as an account completeSignup created. loginAs only covers
+// the shared role accounts, whose second factor comes from settings; this one's TOTP
+// secret was minted during signup.
+export async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
+    await page.getByLabel('Email').fill(email)
+    await page.getByLabel('Password').fill(SIGNUP_PASSWORD)
+    await page.getByRole('button', { name: 'Login' }).click()
+    const authenticator = page
+        .getByRole('button', { name: /authenticator app verification/i })
+        .or(page.getByRole('link', { name: /authenticator app verification/i }))
+    // Wait on the code BOXES, not the "Verify code" button: that button is disabled
+    // until all six digits are in, and clickUntil requires its target to be enabled —
+    // so it would re-click the picker until the budget ran out on a control that was
+    // never going to enable itself before we typed.
+    await clickUntil(authenticator, page.locator('[role="group"] input').first())
+    await checkpoint('sign in, authenticator code entry', { as: 'invitee' })
+    await fillPin(page, await freshTotp(mfaSecret))
+    await page.getByRole('button', { name: /verify code/i }).click()
 }
