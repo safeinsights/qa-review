@@ -442,7 +442,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    <!-- q = results carrying "decision". When q = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
 
    ### Decisions needed
-   <!-- Omit the section AND --mention when no result carries "decision". Every decision is listed here in full, in order; never collapse any of them into an {expand} block. -->
+   <!-- Omit the section AND --mention when no result carries "decision". Every decision is listed here in full, in order; never collapse or shorten any of them. -->
    Reply on this card with the item number and your answer.
 
    **1. <The question, as a full sentence the decider can answer with yes or no.>** The card says <what the card requires>. The Figma note on <frame> says <what Figma requires>. The app <what it does now>, as <the card / Figma> says. I recommend <answer>: <one reason>.
@@ -461,10 +461,9 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    ### Not tested
    **<title> — NOT TESTED (confirmed by <user>).** <reason>.
 
-   {expand:Passed (<a>)}
+   ### Passed (<a>)
    **<card section>**
    - <title>: <evidence>
-   {expand}
 
    **Setup:** <state built: studies created, decisions submitted — and that they were deleted.>
    <!-- qar jira-comment adds the "Attachments:" line and "Posted by qa-review <version>" itself; do not write them. -->
@@ -478,7 +477,7 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      a blank line separates decisions. Never join items into one paragraph.
    - **"Decisions needed" is the most important section of the report.**
      The decider reads it cold, with two minutes. Every decision appears there in
-     full and in order; none is collapsed, cut, or moved to an expand block.
+     full and in order; none is collapsed, cut, or moved to another section.
    - **A decision is a short paragraph of full sentences.** It carries every
      fact the PM needs to answer, and nothing else: the question, what the card
      asks for, what Figma asks for, what the app does now, and your
@@ -508,8 +507,11 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    - Any FAIL makes the heading REJECTED — unless the user chose follow-up cards,
      in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
    - Each Figma-sourced line names page, frame and category with a node link.
-   - Never put `{{image:N}}` inside the `{expand:…}…{expand}` block — images are split out before expand blocks are parsed and the block would break. Screenshots belong with FAIL lines; PASS rows carry text evidence only.
-   - Omit a section (and the expand block) when it has nothing in it.
+   - "Passed" is a plain `### Passed (<a>)` heading, not a `{expand:…}` block: the
+     jira-comment markdown gate rejects any line with braces, so an expand block
+     fails the post. PASS rows carry text evidence only; screenshots belong with
+     FAIL lines.
+   - Omit a section when it has nothing in it.
    - When no result carries `decision`, line 5 reads "No decisions needed", the
      `{{mention}}` token is removed, and `--mention` is not passed — even if
      "Unclear requirements" is long.
