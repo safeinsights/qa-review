@@ -3,7 +3,7 @@ import { alreadySignedInNotice, fillPin, loginAs, signedInMarker } from '../auth
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
-import { freshTotp, totp } from '../totp'
+import { freshTotp } from '../totp'
 import type { EnvConfig } from '../types'
 import { checkpoint } from './accessibility'
 import { checkUntilEnabled, clickUntil } from './interactions'
@@ -345,7 +345,7 @@ export async function readTotpSecret(page: Page): Promise<string> {
 }
 
 // Fill the 6-box PinInput with a freshly-computed TOTP code and submit. If the
-// verify fails, wait for a fresh 30s window and retry with a newly-computed code.
+// verify fails, retry with a code from the next 30s window (freshTotp waits for it).
 // Throws if every attempt is rejected so the failure is loud, not a silent hang.
 // Returns the secret that actually verified — the page can regenerate it between
 // attempts, so only the accepted one can derive codes for a later sign-in.
@@ -362,7 +362,7 @@ export async function enterTotp(page: Page): Promise<string> {
     let lastSecret = ''
     for (let attempt = 0; attempt < 5; attempt++) {
         // Re-read the secret each attempt: the page can re-render/regenerate it
-        // after first paint. Compute as late as possible.
+        // after first paint.
         const secret = await readTotpSecret(page)
         lastSecret = secret
         const code = await freshTotp(secret)
@@ -390,30 +390,18 @@ export async function enterTotp(page: Page): Promise<string> {
                 .then(() => true),
         ]).catch(() => false)
         if (moved) return secret
-
-        // Rejected (or still on the pin step). Wait for the NEXT time window so we
-        // never resubmit the same code, then clear the boxes and retry.
-        await waitForNextTotpWindow()
     }
     throw new Error(
         `authenticator MFA: code rejected after multiple attempts (secret=${lastSecret})`
     )
 }
 
-const TOTP_PERIOD_MS = 30_000
-
-// Clerk refuses a TOTP code it has already accepted, so a second code computed in the
-// same 30s window as the first comes back "Incorrect code".
-async function waitForNextTotpWindow(): Promise<void> {
-    const msIntoWindow = Date.now() % TOTP_PERIOD_MS
-    await new Promise(resolve => setTimeout(resolve, TOTP_PERIOD_MS - msIntoWindow + 500))
-}
-
 // Right after enrollment, the recovery-codes fetch is refused until the user
 // re-verifies, so Clerk opens a "Verification required" modal over the setup page.
-// The enrollment code cannot be reused there (see waitForNextTotpWindow). Clerk
-// submits the field itself on the sixth digit, so the attempt_second_factor response
-// is the verdict — clicking Continue as well would submit the same code twice.
+// The enrollment code cannot be reused there, and neither can this one at a sign-in
+// again, if one follows, so both go through freshTotp. Clerk submits the field itself
+// on the sixth digit, so the attempt_second_factor response is the verdict — clicking
+// Continue as well would submit the same code twice.
 async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
     const dialog = page.getByRole('dialog').filter({ hasText: /verification required/i })
     const shown = await dialog
@@ -424,9 +412,11 @@ async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
 
     const codeField = dialog.getByRole('textbox', { name: /enter verification code/i })
     for (let attempt = 0; attempt < 3; attempt++) {
-        await waitForNextTotpWindow()
+        // Take the code before listening for the verdict: freshTotp can wait up to a
+        // whole window, which would use up the response wait's timeout.
+        const code = await freshTotp(secret)
         const verdict = page.waitForResponse(r => r.url().includes('/verify/attempt_second_factor'))
-        await codeField.fill(totp(secret))
+        await codeField.fill(code)
         if ((await verdict).ok()) {
             await expect(dialog).toBeHidden()
             return
