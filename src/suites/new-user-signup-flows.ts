@@ -504,7 +504,7 @@ export const newUserSignupFlowsSuite: Suite = {
                             page.getByRole('button', { name: /sign out to continue/i }),
                             existing
                         )
-                        await clickUntil(existing, page.getByLabel('Password'))
+                        await clickUntil(existing, page.getByLabel('Password', { exact: true }))
                         await checkpoint('sign in, reached from an invitation', { as: 'invitee' })
                         await signInWithTotp(
                             page,
@@ -606,7 +606,7 @@ export const newUserSignupFlowsSuite: Suite = {
                         ctx.state.mergeInviteUrl as string,
                     ]) {
                         await page.goto(url, { waitUntil: 'domcontentloaded' })
-                        await page.getByLabel('Password').waitFor(VISIBLE)
+                        await page.getByLabel('Password', { exact: true }).waitFor(VISIBLE)
                         await expect(page.getByText(/invited to join/i)).toHaveCount(0)
                         await expect(
                             page.getByRole('link', { name: /login with existing account/i })

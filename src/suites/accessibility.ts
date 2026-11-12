@@ -137,7 +137,7 @@ const UNKNOWN_EMAIL = 'qar-accessibility-nobody@example.com'
 
 async function showInvalidCredentials(page: Page): Promise<void> {
     await page.getByLabel('Email').fill(UNKNOWN_EMAIL)
-    await page.getByLabel('Password').fill('not-the-password-1')
+    await page.getByLabel('Password', { exact: true }).fill('not-the-password-1')
     await page.getByRole('button', { name: 'Login' }).click()
     await page.getByText(/Invalid login credentials/i).waitFor({ state: 'visible' })
 }
@@ -153,7 +153,7 @@ const secondFactorScreens: Step = {
             const { page } = ctx
             await openSettled(ctx, '/account/signin', p => p.getByLabel('Email'))
             await page.getByLabel('Email').fill(ctx.account.email)
-            await page.getByLabel('Password').fill(ctx.account.password)
+            await page.getByLabel('Password', { exact: true }).fill(ctx.account.password)
             await page.getByRole('button', { name: 'Login' }).click()
             const sms = page.getByRole('button', { name: 'SMS Verification' })
             const app = page.getByRole('button', { name: /authenticator|authentication app/i })

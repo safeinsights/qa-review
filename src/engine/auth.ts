@@ -102,7 +102,7 @@ async function submitCredentialsToPin(
     password: string
 ): Promise<CredentialsOutcome> {
     await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(password)
+    await page.getByLabel('Password', { exact: true }).fill(password)
     await page.getByRole('button', { name: 'Login' }).click()
 
     // After Login there is a spinner before the next screen. The account

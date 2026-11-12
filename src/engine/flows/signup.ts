@@ -443,7 +443,7 @@ async function signInAgainIfSignedOut(page: Page, email: string, mfaSecret: stri
 // secret was minted during signup.
 export async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
     await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(SIGNUP_PASSWORD)
+    await page.getByLabel('Password', { exact: true }).fill(SIGNUP_PASSWORD)
     await page.getByRole('button', { name: 'Login' }).click()
     const authenticator = page
         .getByRole('button', { name: /authenticator app verification/i })

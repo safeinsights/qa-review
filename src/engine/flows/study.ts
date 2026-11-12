@@ -220,7 +220,7 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
     await fillLexical(page, 'Research question(s)', content.researchQuestion)
     await fillLexical(page, 'Project summary', content.summary)
     await fillLexical(page, 'Impact', content.impact)
-    const pi = page.getByRole('textbox', { name: 'Principal Investigator' })
+    const pi = page.getByRole('combobox', { name: 'Principal Investigator' })
     await pi.click()
     await page.getByRole('option').first().click()
 }
