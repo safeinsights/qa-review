@@ -6,6 +6,7 @@ import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
     attachmentsLine,
     buildCommentAdf,
+    createFields,
     createIssue,
     downloadAttachment,
     extractMediaId,
@@ -469,6 +470,28 @@ describe('issue creation endpoints', () => {
         expect(fetchMock.mock.calls[0][0]).toBe(
             'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes'
         )
+    })
+
+    it('createFields reads every page of the create screen', async () => {
+        const page = (fields: string[], total: number) =>
+            new Response(
+                JSON.stringify({
+                    fields: fields.map(name => ({ fieldId: name, name, required: false })),
+                    total,
+                }),
+                { status: 200 }
+            )
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(page(['Summary', 'Team'], 3))
+            .mockResolvedValueOnce(page(['Labels'], 3))
+        vi.stubGlobal('fetch', fetchMock)
+        const fields = await createFields(cfg, 'OTTER', '10209')
+        expect(fields.map(f => f.name)).toEqual(['Summary', 'Team', 'Labels'])
+        expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes/10209?startAt=0&maxResults=100',
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes/10209?startAt=2&maxResults=100',
+        ])
     })
 
     it('issueTypeNames surfaces a 403 instead of guessing', async () => {

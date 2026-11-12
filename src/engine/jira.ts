@@ -468,14 +468,53 @@ export async function downloadAttachment(
 
 // Issue-type and link-type NAMES are per-site configuration. A wrong name is a
 // Jira 400 naming nothing useful, so both are checked before a card is created.
-export async function issueTypeNames(config: JiraConfig, projectKey: string): Promise<string[]> {
+export interface IssueType {
+    id: string
+    name: string
+}
+
+export async function issueTypes(config: JiraConfig, projectKey: string): Promise<IssueType[]> {
     const response = await jiraFetch(
         `${config.baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes`,
         { method: 'GET', headers: { Authorization: authHeader(config) } }
     )
     await assertOk(response, `Reading issue types for ${projectKey}`)
-    const body = (await response.json()) as { issueTypes?: Array<{ name: string }> }
-    return (body.issueTypes ?? []).map(t => t.name)
+    const body = (await response.json()) as { issueTypes?: IssueType[] }
+    return body.issueTypes ?? []
+}
+
+export async function issueTypeNames(config: JiraConfig, projectKey: string): Promise<string[]> {
+    return (await issueTypes(config, projectKey)).map(t => t.name)
+}
+
+export interface CreateField {
+    fieldId: string
+    name: string
+    required: boolean
+}
+
+// The fields on a project's create screen for one issue type. OTTER made Team required on
+// Nov 4 2026, which turned every follow-up into a bare `400 Team is required` AFTER the
+// checks above had passed; reading the screen lets that be caught before anything exists.
+// Paged: OTTER's screen is longer than the default page.
+export async function createFields(
+    config: JiraConfig,
+    projectKey: string,
+    issueTypeId: string
+): Promise<CreateField[]> {
+    const fields: CreateField[] = []
+    for (let startAt = 0; ; ) {
+        const response = await jiraFetch(
+            `${config.baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes/${issueTypeId}?startAt=${startAt}&maxResults=100`,
+            { method: 'GET', headers: { Authorization: authHeader(config) } }
+        )
+        await assertOk(response, `Reading create fields for ${projectKey}`)
+        const body = (await response.json()) as { fields?: CreateField[]; total?: number }
+        const page = body.fields ?? []
+        fields.push(...page)
+        startAt += page.length
+        if (page.length === 0 || startAt >= (body.total ?? startAt)) return fields
+    }
 }
 
 export async function linkTypeNames(config: JiraConfig): Promise<string[]> {
@@ -490,20 +529,29 @@ export async function linkTypeNames(config: JiraConfig): Promise<string[]> {
 
 // Checked before a card is created: a typo'd --link target would otherwise fail AFTER
 // the card exists, and re-running the command to "fix" it files a duplicate.
-export async function assertIssueExists(config: JiraConfig, key: string): Promise<void> {
+// Also returns the requested fields, so the caller can copy one (Team) from the parent.
+export async function assertIssueExists(
+    config: JiraConfig,
+    key: string,
+    extraFields: string[] = []
+): Promise<Record<string, unknown>> {
+    const wanted = ['summary', ...extraFields].join(',')
     const response = await jiraFetch(
-        `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`,
+        `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=${wanted}`,
         { method: 'GET', headers: { Authorization: authHeader(config) } }
     )
     if (response.status === 404) throw new Error(`Issue ${key} does not exist`)
     await assertOk(response, `Reading ${key}`)
+    const body = (await response.json().catch(() => ({}))) as { fields?: Record<string, unknown> }
+    return body.fields ?? {}
 }
 
 // Created with summary only: the description needs media ids, and media can only
 // be uploaded to an issue that already exists, so the description is PUT afterwards.
+// `extra` carries screen-required fields such as Team, keyed by field id.
 export async function createIssue(
     config: JiraConfig,
-    fields: { project: string; type: string; summary: string }
+    fields: { project: string; type: string; summary: string; extra?: Record<string, unknown> }
 ): Promise<{ key: string; id: string }> {
     const response = await jiraFetch(`${config.baseUrl}/rest/api/3/issue`, {
         method: 'POST',
@@ -513,6 +561,7 @@ export async function createIssue(
                 project: { key: fields.project },
                 issuetype: { name: fields.type },
                 summary: fields.summary,
+                ...fields.extra,
             },
         }),
     })
