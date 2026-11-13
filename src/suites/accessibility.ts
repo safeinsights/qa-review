@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { fillSignInForm } from '../engine/auth'
 import {
     conformanceStep,
     openSettled,
@@ -136,9 +137,7 @@ const signOutViaAlreadySignedIn: Step = {
 const UNKNOWN_EMAIL = 'qar-accessibility-nobody@example.com'
 
 async function showInvalidCredentials(page: Page): Promise<void> {
-    await page.getByLabel('Email').fill(UNKNOWN_EMAIL)
-    await page.getByLabel('Password').fill('not-the-password-1')
-    await page.getByRole('button', { name: 'Login' }).click()
+    await fillSignInForm(page, UNKNOWN_EMAIL, 'not-the-password-1')
     await page.getByText(/Invalid login credentials/i).waitFor({ state: 'visible' })
 }
 
@@ -152,9 +151,7 @@ const secondFactorScreens: Step = {
         ctx.step(async () => {
             const { page } = ctx
             await openSettled(ctx, '/account/signin', p => p.getByLabel('Email'))
-            await page.getByLabel('Email').fill(ctx.account.email)
-            await page.getByLabel('Password').fill(ctx.account.password)
-            await page.getByRole('button', { name: 'Login' }).click()
+            await fillSignInForm(page, ctx.account.email, ctx.account.password)
             const sms = page.getByRole('button', { name: 'SMS Verification' })
             const app = page.getByRole('button', { name: /authenticator|authentication app/i })
             const choice = sms.or(app).first()

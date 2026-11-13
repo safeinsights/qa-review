@@ -313,13 +313,13 @@ export function proposalSubmissionSteps(
                     await fillProposal(ctx.page, content(ctx))
                     if (principalInvestigator) {
                         await ctx.page
-                            .getByRole('textbox', { name: 'Principal Investigator' })
+                            .getByRole('combobox', { name: 'Principal Investigator' })
                             .click()
                         await ctx.page
                             .getByRole('option', { name: principalInvestigator, exact: true })
                             .click()
                         await expect(
-                            ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
+                            ctx.page.getByRole('combobox', { name: 'Principal Investigator' })
                         ).toHaveValue(principalInvestigator)
                     }
                 }),
@@ -945,7 +945,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await keyForm.waitFor({ state: 'visible' })
                     await expect(ctx.page.getByText(/Decrypt to view your outputs/i)).toBeVisible()
                     await fillResultsKey(ctx)
-                    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+                    await ctx.page.getByRole('button', { name: /^view( files)?$/i }).click()
                     // Unlocked phase. The outputs table is the proof the key actually worked —
                     // the banner alone would flip on any state change.
                     await ctx.page
@@ -1150,10 +1150,10 @@ async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
     ])
     if (await outputsReady.isVisible().catch(() => false)) return
     await fillResultsKey(ctx)
-    // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
+    // The submit control is "View files" for the reviewer and "View" for the researcher (was "Decrypt Files"). Anchored, so it
     // can't drift onto the per-file buttons in the outputs table below, which don't
     // exist until this click succeeds.
-    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+    await ctx.page.getByRole('button', { name: /^view( files)?$/i }).click()
     await outputsReady.waitFor({ state: 'visible', timeout: 20_000 })
 }
 
