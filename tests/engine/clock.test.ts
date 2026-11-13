@@ -6,7 +6,7 @@ const min = (n: number) => n * 60_000
 
 describe('formatDuration', () => {
     it('rounds to minutes, with hours when needed', () => {
-        expect(formatDuration(min(0.4))).toBe('< 1 min')
+        expect(formatDuration(min(0.4))).toBe('under 1 min')
         expect(formatDuration(min(14))).toBe('14 min')
         expect(formatDuration(min(72))).toBe('1 h 12 min')
         expect(formatDuration(min(120))).toBe('2 h 0 min')
