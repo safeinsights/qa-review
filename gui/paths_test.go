@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,9 @@ func TestWithGuiPathExportsBinDirAndOmitsQarBinInDev(t *testing.T) {
 	t.Setenv("QAR_REPO_DIR", dir)
 
 	env := withGuiPath()
+	if !slices.Contains(env, "QAR_APP_SESSION=1") {
+		t.Fatal("withGuiPath() must export QAR_APP_SESSION=1 so create-release refuses to run")
+	}
 	var pathVal string
 	for _, e := range env {
 		if strings.HasPrefix(e, "PATH=") {

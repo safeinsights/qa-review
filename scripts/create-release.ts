@@ -19,7 +19,7 @@ import type { GhRunner } from '@/cli/commands/open-access-pr'
 import { listReleaseRows } from '@/engine/github-release'
 import { managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
-import { createRelease, nextPatch } from '@/engine/release-create'
+import { createRelease, nextPatch, refuseInAppSession } from '@/engine/release-create'
 import { loadSettings } from '@/engine/settings'
 
 const execFileAsync = promisify(execFile)
@@ -39,6 +39,7 @@ function parseArgs(argv: string[]): { tag: string; dryRun: boolean } {
 }
 
 async function main() {
+    refuseInAppSession(process.env)
     const { tag, dryRun } = parseArgs(process.argv.slice(2))
     const vars = await loadSettings()
     const repo = managementAppRepo(vars)

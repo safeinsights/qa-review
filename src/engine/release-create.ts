@@ -41,6 +41,18 @@ function isNewer(a: number[], b: number[]): boolean {
     return false
 }
 
+// The GUI exports this to every child it starts. A deny rule only matches one spelling
+// of the command, so the script itself refuses to publish from an app session.
+const APP_SESSION_ENV = 'QAR_APP_SESSION'
+
+export function refuseInAppSession(env: NodeJS.ProcessEnv): void {
+    if (env[APP_SESSION_ENV]) {
+        throw new Error(
+            'publishing a release is a maintainer step; run it in your own terminal, not an app session'
+        )
+    }
+}
+
 // The next patch version after a release tag, for the script's usage hint.
 export function nextPatch(tag: string): string {
     const v = core(tag, ANY_TAG)

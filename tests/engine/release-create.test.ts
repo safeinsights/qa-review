@@ -208,6 +208,14 @@ describe('createRelease', () => {
     })
 })
 
+describe('refuseInAppSession', () => {
+    it('refuses under the marker the GUI exports, and allows a plain terminal', async () => {
+        const { refuseInAppSession } = await import('@/engine/release-create')
+        expect(() => refuseInAppSession({ QAR_APP_SESSION: '1' })).toThrow(/maintainer step/)
+        expect(() => refuseInAppSession({})).not.toThrow()
+    })
+})
+
 describe('nextPatch', () => {
     it('drops hotfix metadata and bumps the patch', async () => {
         const { nextPatch } = await import('@/engine/release-create')
