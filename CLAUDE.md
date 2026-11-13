@@ -491,7 +491,12 @@ force a re-check.
 
 Follow-up cards go through `qar jira-create-issue` (ADF description, inline
 screenshots, a Relates link to the parent) — the MCP's `jira_create_issue` can do
-none of those three. `qar followup-advice` is the routing rule (blocker → send
+none of those three. It also sets **Team**, which OTTER's create screen has required
+since Nov 4 2026: `--team <id>`, else the `--link` parent's Team, read off the create
+screen by field NAME so no custom-field id is hardcoded. With neither, a project that
+requires Team is refused before the card exists; before this, that was a bare `400 Team
+is required` and follow-ups had to be filed by a hand-written REST script.
+`qar followup-advice` is the routing rule (blocker → send
 back; few/same-area → one card; else several), kept in code so it is testable.
 
 **The report is gated by code, not by prose.** Two runs filed real bugs under
