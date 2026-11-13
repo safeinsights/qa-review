@@ -15,6 +15,20 @@ export function signedInMarker(page: Page) {
     return page.getByRole('link', { name: /^My studies( Updated)?$/ }).first()
 }
 
+// Exact, because the sign-in and sign-up forms carry a "Toggle password visibility"
+// button whose label also contains "Password": a loose match resolves to both and
+// fails every login on a strict-mode violation. One locator, so the next Clerk change
+// is one edit instead of six.
+export function passwordField(page: Page) {
+    return page.getByLabel('Password', { exact: true })
+}
+
+export async function fillSignInForm(page: Page, email: string, password: string): Promise<void> {
+    await page.getByLabel('Email').fill(email)
+    await passwordField(page).fill(password)
+    await page.getByRole('button', { name: 'Login' }).click()
+}
+
 // Where submitCredentialsToPin landed: at the 6-digit code entry, or signed
 // straight in with no second factor. The failure paths (credentials rejected,
 // picker clicked but the code entry never appearing) throw instead of returning,
@@ -101,9 +115,7 @@ async function submitCredentialsToPin(
     email: string,
     password: string
 ): Promise<CredentialsOutcome> {
-    await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password', { exact: true }).fill(password)
-    await page.getByRole('button', { name: 'Login' }).click()
+    await fillSignInForm(page, email, password)
 
     // After Login there is a spinner before the next screen. The account
     // either lands straight on the dashboard, or hits the MFA picker. The

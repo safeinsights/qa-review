@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { alreadySignedInNotice, fillPin, loginAs, signedInMarker } from '../auth'
+import { alreadySignedInNotice, fillPin, fillSignInForm, loginAs, signedInMarker } from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -442,9 +442,7 @@ async function signInAgainIfSignedOut(page: Page, email: string, mfaSecret: stri
 // the shared role accounts, whose second factor comes from settings; this one's TOTP
 // secret was minted during signup.
 export async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
-    await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password', { exact: true }).fill(SIGNUP_PASSWORD)
-    await page.getByRole('button', { name: 'Login' }).click()
+    await fillSignInForm(page, email, SIGNUP_PASSWORD)
     const authenticator = page
         .getByRole('button', { name: /authenticator app verification/i })
         .or(page.getByRole('link', { name: /authenticator app verification/i }))
