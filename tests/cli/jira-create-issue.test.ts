@@ -356,6 +356,11 @@ describe('jira-create-issue', () => {
                         status: 201,
                     })
                 }
+                if (url.includes('/issue/OTTER-617?')) {
+                    return new Response(JSON.stringify({ fields: { summary: 'parent' } }), {
+                        status: 200,
+                    })
+                }
                 if (url.endsWith('/issueLink')) return new Response('boom', { status: 500 })
                 return new Response(null, { status: 204 })
             })

@@ -483,10 +483,6 @@ export async function issueTypes(config: JiraConfig, projectKey: string): Promis
     return body.issueTypes ?? []
 }
 
-export async function issueTypeNames(config: JiraConfig, projectKey: string): Promise<string[]> {
-    return (await issueTypes(config, projectKey)).map(t => t.name)
-}
-
 export interface CreateField {
     fieldId: string
     name: string
@@ -542,7 +538,7 @@ export async function assertIssueExists(
     )
     if (response.status === 404) throw new Error(`Issue ${key} does not exist`)
     await assertOk(response, `Reading ${key}`)
-    const body = (await response.json().catch(() => ({}))) as { fields?: Record<string, unknown> }
+    const body = (await response.json()) as { fields?: Record<string, unknown> }
     return body.fields ?? {}
 }
 

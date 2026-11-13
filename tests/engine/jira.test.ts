@@ -10,7 +10,7 @@ import {
     createIssue,
     downloadAttachment,
     extractMediaId,
-    issueTypeNames,
+    issueTypes,
     isTextAttachment,
     jiraConfig,
     jiraConfigFromEnv,
@@ -459,14 +459,15 @@ describe('issue creation endpoints', () => {
         vi.restoreAllMocks()
     })
 
-    it('issueTypeNames reads createmeta for the project', async () => {
+    it('issueTypes reads createmeta for the project', async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify({ issueTypes: [{ name: 'Task' }, { name: 'Bug' }] }), {
                 status: 200,
             })
         )
         vi.stubGlobal('fetch', fetchMock)
-        expect(await issueTypeNames(cfg, 'OTTER')).toEqual(['Task', 'Bug'])
+        const types = await issueTypes(cfg, 'OTTER')
+        expect(types.map(t => t.name)).toEqual(['Task', 'Bug'])
         expect(fetchMock.mock.calls[0][0]).toBe(
             'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes'
         )
@@ -494,12 +495,12 @@ describe('issue creation endpoints', () => {
         ])
     })
 
-    it('issueTypeNames surfaces a 403 instead of guessing', async () => {
+    it('issueTypes surfaces a 403 instead of guessing', async () => {
         vi.stubGlobal(
             'fetch',
             vi.fn().mockResolvedValue(new Response('forbidden', { status: 403 }))
         )
-        await expect(issueTypeNames(cfg, 'OTTER')).rejects.toThrow('403')
+        await expect(issueTypes(cfg, 'OTTER')).rejects.toThrow('403')
     })
 
     it('linkTypeNames reads the global link types', async () => {
