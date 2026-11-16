@@ -6,10 +6,11 @@ import { splitBodyIntoSegments } from '@/cli/commands/jira'
 import {
     attachmentsLine,
     buildCommentAdf,
+    createFields,
     createIssue,
     downloadAttachment,
     extractMediaId,
-    issueTypeNames,
+    issueTypes,
     isTextAttachment,
     jiraConfig,
     jiraConfigFromEnv,
@@ -458,25 +459,48 @@ describe('issue creation endpoints', () => {
         vi.restoreAllMocks()
     })
 
-    it('issueTypeNames reads createmeta for the project', async () => {
+    it('issueTypes reads createmeta for the project', async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify({ issueTypes: [{ name: 'Task' }, { name: 'Bug' }] }), {
                 status: 200,
             })
         )
         vi.stubGlobal('fetch', fetchMock)
-        expect(await issueTypeNames(cfg, 'OTTER')).toEqual(['Task', 'Bug'])
+        const types = await issueTypes(cfg, 'OTTER')
+        expect(types.map(t => t.name)).toEqual(['Task', 'Bug'])
         expect(fetchMock.mock.calls[0][0]).toBe(
             'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes'
         )
     })
 
-    it('issueTypeNames surfaces a 403 instead of guessing', async () => {
+    it('createFields reads every page of the create screen', async () => {
+        const page = (fields: string[], total: number) =>
+            new Response(
+                JSON.stringify({
+                    fields: fields.map(name => ({ fieldId: name, name, required: false })),
+                    total,
+                }),
+                { status: 200 }
+            )
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(page(['Summary', 'Team'], 3))
+            .mockResolvedValueOnce(page(['Labels'], 3))
+        vi.stubGlobal('fetch', fetchMock)
+        const fields = await createFields(cfg, 'OTTER', '10209')
+        expect(fields.map(f => f.name)).toEqual(['Summary', 'Team', 'Labels'])
+        expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes/10209?startAt=0&maxResults=100',
+            'https://x.atlassian.net/rest/api/3/issue/createmeta/OTTER/issuetypes/10209?startAt=2&maxResults=100',
+        ])
+    })
+
+    it('issueTypes surfaces a 403 instead of guessing', async () => {
         vi.stubGlobal(
             'fetch',
             vi.fn().mockResolvedValue(new Response('forbidden', { status: 403 }))
         )
-        await expect(issueTypeNames(cfg, 'OTTER')).rejects.toThrow('403')
+        await expect(issueTypes(cfg, 'OTTER')).rejects.toThrow('403')
     })
 
     it('linkTypeNames reads the global link types', async () => {

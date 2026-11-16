@@ -239,12 +239,14 @@ export const COMMANDS = [
     },
     {
         name: 'jira-create-issue',
-        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates]',
+        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates] [--team <ID>]',
         summary:
             'Create a follow-up card with an ADF description, inline screenshots, and a link to its parent.',
         details:
-            'Checks the issue type and link type exist before creating anything. Body is ' +
-            'Markdown with {{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
+            'Checks the issue type and link type exist before creating anything. The Team ' +
+            "is --team, else the --link parent's; a project whose create screen requires " +
+            'Team is refused up front when neither gives one. Body is Markdown with ' +
+            '{{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
     },
     {
         name: 'verdict-posted',
