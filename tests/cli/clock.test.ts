@@ -36,7 +36,7 @@ describe('clock', () => {
         const clock = file()
         await clockCommand({ file: clock, mark: 'start' })
         await clockCommand({ file: clock, report: 'true' })
-        expect(out[1]).toMatch(/^Total < 1 min/)
+        expect(out[1]).toMatch(/^Total under 1 min/)
     })
 
     it('requires --mark or --report, and --file', async () => {
