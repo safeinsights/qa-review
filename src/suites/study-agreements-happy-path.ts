@@ -186,7 +186,7 @@ async function publishStudyAgreement(ctx: RunContext): Promise<void> {
 // the textbox, but the options live outside it, so they are matched page-wide.
 async function pickOption(ctx: RunContext, label: string, option: string): Promise<void> {
     const upload = ctx.page.getByRole('dialog', { name: 'Upload a signed study agreement' })
-    const select = upload.getByRole('textbox', { name: label, exact: true })
+    const select = upload.getByRole('combobox', { name: label, exact: true })
     await select.click()
     await ctx.page.getByRole('option', { name: option, exact: true }).click()
     await expect(select).toHaveValue(option)
