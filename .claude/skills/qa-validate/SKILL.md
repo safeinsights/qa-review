@@ -187,6 +187,31 @@ Mark `tested` on the clock. Each line gets exactly one result:
   external system (real email, a third party); needs time to pass; the code is
   not on the target. "Too much effort" is not a reason. The posted line reads
   `— NOT TESTED (confirmed by <user>)`. While any line is unresolved, no verdict.
+- **Search for cards that already cover each FAIL, CONFLICT and UNCLEAR line,
+  before you report anything.** Do this once `results-check` prints ok and
+  before Phase 4, the verdict summary to the user, or `followup-advice`. The user
+  asks "is this covered by another card?" before every routing choice, so the
+  answer has to arrive with the findings and not after them. Skip this step only
+  when every line is PASS or NOT TESTED.
+  - **Where to look:** first the card's own issue links, parent epic and any
+    "Related" section. Then `jira_search` in the card's project (if the MCP is
+    down, the REST `/rest/api/3/search/jql` endpoint) over the last ~120 days,
+    open and recently closed. Search on the area, the page and component names,
+    the quoted copy, and the field or column name. Use several narrow queries,
+    not one broad one.
+  - **Confirm by the description, not the summary.** Read every plausible
+    candidate. A card covers a line only if it describes the same behaviour on
+    the same screen. Same page with a different symptom is "related", not
+    "covered".
+  - **Record it in the results file:** `"coveredBy": "<KEY>"` on a line an
+    existing card covers, `"relatedTo": ["<KEY>", …]` on one that only touches
+    it. In the report, name the key on that line (for a FAIL: "already tracked
+    in <KEY>"). A covered FAIL is never filed again. Leave it out of the new
+    cards you offer in Phase 5, and say so when you present
+    `followup-advice`, which still counts it.
+  - **Tell the user what you found** together with the results: each
+    FAIL/CONFLICT/UNCLEAR line, plus "covered by <KEY> (<status>)",
+    "related: <KEY>" or "no existing card", and the searches you ran.
 
 ### Phase 4: Report
 Post with `qar jira-comment` using the template under "Posting findings". Write
