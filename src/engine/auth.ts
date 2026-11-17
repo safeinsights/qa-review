@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 import type { EnvConfig, Role } from '@/engine/types'
-import { clickUntil } from './flows/interactions'
+import { checkUntilEnabled, clickUntil } from './flows/interactions'
 
 export class AuthError extends Error {}
 
@@ -21,6 +21,27 @@ export function signedInMarker(page: Page) {
 // is one edit instead of six.
 export function passwordField(page: Page) {
     return page.getByLabel('Password', { exact: true })
+}
+
+// The checkbox on the full-page ToS/PN step (/account/agreements, management-app #1331).
+// An account that owes a newly published Terms of Service or Privacy Notice is sent there
+// after MFA, before any page with the side nav renders, so signedInMarker never appears
+// and every sign-in timed out the first time anyone published a version on QA. The label
+// is the one element all three variants (ToS, PN, both) share.
+export function owedAgreementsCheckbox(page: Page) {
+    return page.getByRole('checkbox', { name: /^I have read and agree to the updated /i })
+}
+
+// Accept the owed ToS/PN so the sign-in can carry on to the app. Shared accounts have to
+// re-accept after every publish anyway, and a run cannot do anything until they have.
+// Continue stays disabled until the box is ticked, and the box can render before React
+// wires it, hence the sweep-until-enabled.
+export async function acceptOwedAgreements(page: Page): Promise<void> {
+    const continueButton = page
+        .getByRole('main')
+        .getByRole('button', { name: 'Continue', exact: true })
+    await checkUntilEnabled(owedAgreementsCheckbox(page), continueButton)
+    await clickUntil(continueButton, signedInMarker(page))
 }
 
 export async function fillSignInForm(page: Page, email: string, password: string): Promise<void> {
@@ -127,7 +148,9 @@ async function submitCredentialsToPin(
     const authenticatorButton = page.getByRole('button', {
         name: /authenticator|authentication app|totp/i,
     })
-    const dashboard = signedInMarker(page)
+    // An account with no second factor that owes the ToS/PN lands on the agreements
+    // step instead of the dashboard; that is signed in too.
+    const dashboard = signedInMarker(page).or(owedAgreementsCheckbox(page)).first()
     await Promise.race([
         smsButton.waitFor({ state: 'visible', timeout: 30_000 }),
         authenticatorButton.waitFor({ state: 'visible', timeout: 30_000 }),
@@ -221,19 +244,25 @@ export async function loginAs(
             await page.getByRole('button', { name: /verify code/i }).click()
         }
         const signedIn = signedInMarker(page)
+        const owesAgreements = owedAgreementsCheckbox(page)
 
         // After Verify code there is a redirect chain (+ a re-hydration spinner), and it
         // can end back on /account/signin, which then renders the "already signed in"
         // interstitial for the account that just signed in. Nothing navigates on from
         // there, so this used to wait for the URL to leave /signin and time out on a
-        // sign-in that had WORKED, reported as an auth failure. Race the two instead.
+        // sign-in that had WORKED, reported as an auth failure. Race the outcomes instead;
+        // the agreements step can follow either the redirect or the interstitial.
         await signedIn
             .or(alreadySignedInNotice(page))
+            .or(owesAgreements)
             .first()
             .waitFor({ state: 'visible', timeout: 30_000 })
             .catch(() => {})
         if (await alreadySignedInNotice(page).isVisible()) {
             await continuePastAlreadySignedIn(page, account.email)
+        }
+        if (await owesAgreements.isVisible()) {
+            await acceptOwedAgreements(page)
         }
         await signedIn.waitFor({ state: 'visible', timeout: 30_000 })
 
@@ -307,8 +336,14 @@ export async function continuePastAlreadySignedIn(page: Page, email: string): Pr
     }
     await clickUntil(
         page.getByRole('button', { name: 'Continue', exact: true }),
-        signedInMarker(page)
+        signedInMarker(page).or(owedAgreementsCheckbox(page)).first()
     )
+    // The agreements step renders a beat after a transient, empty app page, so settle on
+    // whichever arrives before the caller checks for it.
+    await signedInMarker(page)
+        .or(owedAgreementsCheckbox(page))
+        .first()
+        .waitFor({ state: 'visible', timeout: 30_000 })
 }
 
 // The identity of the ACTIVE Clerk session on the page: the email its user carries,
