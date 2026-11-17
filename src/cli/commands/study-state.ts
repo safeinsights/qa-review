@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { chromium } from '@playwright/test'
 import { loginAs } from '@/engine/auth'
-import { chromeLaunchOptions } from '@/engine/chrome-launch'
+import { chromeContext, chromeLaunchOptions } from '@/engine/chrome-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import {
     JOB_STATUSES,
@@ -61,7 +61,7 @@ export async function studyStateCommand(opts: Record<string, string>, vars: Vars
 
     // The endpoint authorizes with an SI-admin Clerk session JWT, which loginAs returns.
     const browser = await chromium.launch(chromeLaunchOptions())
-    const context = await browser.newContext({ baseURL: env.baseURL })
+    const context = await chromeContext(browser, { baseURL: env.baseURL })
     const page = await context.newPage()
     let token: string
     try {

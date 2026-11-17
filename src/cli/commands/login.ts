@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test'
 import { loginAs } from '@/engine/auth'
-import { chromeLaunchOptions } from '@/engine/chrome-launch'
+import { chromeContext, chromeLaunchOptions } from '@/engine/chrome-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import type { Vars } from '@/engine/settings'
 import type { Role } from '@/engine/types'
@@ -13,7 +13,7 @@ export async function loginCommand(opts: Record<string, string>, vars: Vars): Pr
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
 
     const browser = await chromium.launch(chromeLaunchOptions())
-    const context = await browser.newContext({ baseURL: env.baseURL })
+    const context = await chromeContext(browser, { baseURL: env.baseURL })
     const page = await context.newPage()
     try {
         const cookie = await loginAs(page, env, role)

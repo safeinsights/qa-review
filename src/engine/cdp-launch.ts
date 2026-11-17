@@ -1,6 +1,6 @@
 import net from 'node:net'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
-import { chromeLaunchOptions } from '@/engine/chrome-launch'
+import { chromeContext, chromeLaunchOptions } from '@/engine/chrome-launch'
 
 // Pick a currently-free TCP port by binding to 0 and reading the assignment.
 // There's a small TOCTOU window before chromium grabs it; callers retry once.
@@ -40,7 +40,7 @@ export async function launchChromeWithCdp(
             browser = await chromium.launch(
                 chromeLaunchOptions({ args: [`--remote-debugging-port=${cdpPort}`] })
             )
-            const context = await browser.newContext(contextOptions)
+            const context = await chromeContext(browser, contextOptions)
             const page = await context.newPage()
             return { browser, context, page, cdpPort }
         } catch (e) {
