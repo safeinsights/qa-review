@@ -11,6 +11,37 @@ import { clickUntil } from './interactions'
 
 export const DEFAULT_RESEARCHER_ORG = 'openstax-lab'
 
+// Data Partner org slug -> the name the Set up page's org picker shows for it. The slug
+// builds the reviewer's /<org>/study/... URLs; the name picks the option.
+export const DATA_ORGS = {
+    openstax: 'OpenStax',
+    'mars-u': 'Mars University',
+} as const
+
+export type DataOrg = keyof typeof DATA_ORGS
+
+export const DEFAULT_DATA_ORG: DataOrg = 'openstax'
+
+// The settings var a suite reads its Data Partner from; `qar run --data-org` sets it.
+export const DATA_ORG_SETTING = 'QAR_DATA_ORG'
+
+// A setting or CLI value -> a known Data Partner. Unset picks the default; an unknown
+// slug throws, because a guess would propose the study to the wrong partner.
+export function resolveDataOrg(raw: string | undefined): DataOrg {
+    const slug = raw?.trim().toLowerCase()
+    if (!slug) return DEFAULT_DATA_ORG
+    if (Object.hasOwn(DATA_ORGS, slug)) return slug as DataOrg
+    throw new Error(
+        `Unknown data org "${raw}". Known data orgs: ${Object.keys(DATA_ORGS).join(', ')}`
+    )
+}
+
+// Unanchored and case-insensitive, so OpenStax matches the same options the picker's
+// earlier /openstax/i did.
+export function dataOrgOptionName(dataOrg: DataOrg): RegExp {
+    return new RegExp(DATA_ORGS[dataOrg].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+}
+
 export interface StudyContent {
     title: string
     researchQuestion: string
@@ -173,7 +204,11 @@ export async function startProposal(page: Page, baseURL: string): Promise<void> 
 // The title is set HERE, not on Step 2, which is why this takes it as a parameter.
 // OTTER-690 moved the field to Step 1 so that every saved draft has a title from the
 // start, and Step 2 no longer renders a title field at all.
-export async function completeSetupAndCaptureId(page: Page, title: string): Promise<string> {
+export async function completeSetupAndCaptureId(
+    page: Page,
+    title: string,
+    dataOrg: DataOrg = DEFAULT_DATA_ORG
+): Promise<string> {
     // An over-long title leaves the form invalid, so "Save & continue" never opens the
     // modal and clickUntil burns its full budget on a timeout that names the DIALOG.
     // Fail here instead, naming the real cause.
@@ -185,7 +220,7 @@ export async function completeSetupAndCaptureId(page: Page, title: string): Prom
     await page.getByLabel('Study title').fill(title)
     await page.getByTestId('org-select').click()
     await page
-        .getByRole('option', { name: /openstax/i })
+        .getByRole('option', { name: dataOrgOptionName(dataOrg) })
         .first()
         .click()
     const rRadio = page.getByRole('radio', { name: 'R', exact: true })
@@ -220,9 +255,14 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
     await fillLexical(page, 'Research question(s)', content.researchQuestion)
     await fillLexical(page, 'Project summary', content.summary)
     await fillLexical(page, 'Impact', content.impact)
-    const pi = page.getByRole('combobox', { name: 'Principal Investigator' })
-    await pi.click()
+    await piSelect(page).click()
     await page.getByRole('option').first().click()
+}
+
+// By label, not by combobox role: the Mantine Select input on staging carries only
+// aria-haspopup="listbox", no role, so a role locator never matches there.
+export function piSelect(page: Page) {
+    return page.getByLabel('Principal Investigator', { exact: true })
 }
 
 // Submit the proposal and confirm the success banner.

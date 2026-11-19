@@ -609,6 +609,7 @@ export async function runEngine(
             // Per-run scratch bag threaded between steps (replaces the shared
             // locals a single run() body used to close over).
             state: {},
+            setting: name => deps.vars[name],
         }
 
         // Number of executed step positions so far (a step body may call ctx.step
