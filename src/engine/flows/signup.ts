@@ -1,5 +1,12 @@
 import { expect, type Page } from '@playwright/test'
-import { alreadySignedInNotice, fillPin, fillSignInForm, loginAs, signedInMarker } from '../auth'
+import {
+    alreadySignedInNotice,
+    fillPin,
+    fillSignInForm,
+    loginAs,
+    signedInMarker,
+    signOutOfClerk,
+} from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -101,7 +108,11 @@ export async function completeSignup(
     const password = SIGNUP_PASSWORD
     const origin = new URL(baseURL).origin
 
-    // Fresh, unauthenticated slate (the admin session must not carry over).
+    // Fresh, unauthenticated slate (the admin session must not carry over). Sign out
+    // through Clerk first: clearing cookies alone left the admin signed in on the QA
+    // Runner's CDP-attached browser, and the invitation then refused with "You must be
+    // signed out to accept invitations".
+    await signOutOfClerk(page)
     await page.context().clearCookies()
     await page
         .evaluate(() => {
@@ -110,9 +121,16 @@ export async function completeSignup(
         })
         .catch(() => {})
 
-    // 1. Invitation landing -> Create New Account
+    // 1. Invitation landing -> Create New Account. If a session still survived, the
+    //    landing offers "Sign out to continue" instead; that button renders before it is
+    //    wired, so click it until the signed-out options appear.
     await page.goto(invitationUrl, { waitUntil: 'domcontentloaded' })
     const createNew = page.getByRole('link', { name: /create new account/i })
+    const signOutToContinue = page.getByRole('button', { name: /sign out to continue/i })
+    await createNew.or(signOutToContinue).first().waitFor({ state: 'visible' })
+    if (await signOutToContinue.isVisible()) {
+        await clickUntil(signOutToContinue, createNew)
+    }
     await createNew.waitFor({ state: 'visible' })
     await checkpoint('invitation landing (signed out)', { as: 'invitee' })
     await createNew.click()

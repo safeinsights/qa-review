@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
-import { fillPin, passwordField } from '../engine/auth'
+import { fillPin, passwordField, signOutOfClerk } from '../engine/auth'
 import { checkpoint } from '../engine/flows/accessibility'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil, openAccountMenu } from '../engine/flows/interactions'
@@ -585,12 +585,7 @@ export const newUserSignupFlowsSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const page = ctx.page
-                    await page.evaluate(async () => {
-                        const clerk = (
-                            window as unknown as { Clerk?: { signOut?: () => Promise<void> } }
-                        ).Clerk
-                        if (clerk?.signOut) await clerk.signOut()
-                    })
+                    await signOutOfClerk(page)
                     // Both acceptance paths are checked, because they consume an invitation
                     // by different routes: the Research Lab link by creating an account, the
                     // second by signing in to an existing one. A link that still worked after
@@ -622,12 +617,7 @@ export const newUserSignupFlowsSuite: Suite = {
             run: ctx =>
                 ctx.step(async () => {
                     const page = ctx.page
-                    await page.evaluate(async () => {
-                        const clerk = (
-                            window as unknown as { Clerk?: { signOut?: () => Promise<void> } }
-                        ).Clerk
-                        if (clerk?.signOut) await clerk.signOut()
-                    })
+                    await signOutOfClerk(page)
                     await page.goto(`${originOf(ctx.baseURL)}/account/signin`, {
                         waitUntil: 'domcontentloaded',
                     })
