@@ -277,6 +277,46 @@ describe('runEngine', () => {
             expect(result.cleanup.ok).toBe(true)
         })
 
+        it('clears the signed-in session before the admin sign-in, as loginAs does', async () => {
+            // Signing in on a page still signed in as the last role trips the app's
+            // auto-signout race; losing it would fall back to the researcher token.
+            const log: string[] = []
+            const d = deps({
+                openBrowser: vi.fn(async () => ({
+                    page: {
+                        context: () => ({
+                            clearCookies: vi.fn(async () => {
+                                log.push('clearCookies')
+                            }),
+                        }),
+                        evaluate: vi.fn(async () => {
+                            log.push('clearStorage')
+                        }),
+                        url: () => 'https://app.qa.safeinsights.org/',
+                        on: vi.fn(),
+                        off: vi.fn(),
+                    } as never,
+                    cookieHeader: 'sid=abc',
+                    close: vi.fn(async () => {}),
+                })),
+                login: vi.fn(async (_h, _e, role) => {
+                    log.push(`login:${role}`)
+                    return `jwt-${role}`
+                }),
+            })
+            await runEngine(
+                { suite: 'demo', env: 'qa', role: 'researcher' },
+                d,
+                tracksThenFailsAsResearcher
+            )
+            const admin = log.indexOf('login:admin')
+            expect(log.slice(admin - 2, admin + 1)).toEqual([
+                'clearCookies',
+                'clearStorage',
+                'login:admin',
+            ])
+        })
+
         it('does not sign in again when the run created nothing', async () => {
             const d = deps({ login: vi.fn(async (_h, _e, role) => `jwt-${role}`) })
             await runEngine({ suite: 'demo', env: 'qa', role: 'researcher' }, d, passingSuite)

@@ -306,8 +306,35 @@ async function resolveStepFailure(
     return target ?? 'hold'
 }
 
-// The QA delete endpoints accept only an SI admin, and a Clerk session JWT lives about
-// a minute. The token the run holds is whichever role signed in LAST, taken when it
+// Re-authenticate from a guaranteed clean slate. Visiting /account/signin while still
+// signed in trips the app's auto-signout (the sign-in form renders null while it clears
+// the session), which races the form hydration. Clearing cookies + web storage first lands
+// the sign-in on a hydrated, logged-out form. ctx.loginAs and the teardown's admin sign-in
+// both come through here, so the two cannot drift apart.
+async function signInFresh(
+    deps: RunDeps,
+    handle: BrowserHandle,
+    env: ReturnType<typeof resolveEnv>,
+    role: RunRequest['role'],
+    bundleDir: string
+): Promise<string> {
+    await handle.page.context().clearCookies()
+    await handle.page
+        .evaluate(() => {
+            try {
+                localStorage.clear()
+                sessionStorage.clear()
+            } catch {
+                // storage may be inaccessible on some pages; best-effort.
+            }
+        })
+        .catch(() => {})
+    return deps.login(handle, env, role, bundleDir)
+}
+
+// The QA delete endpoints accept an SI admin or an admin of every org a study touches,
+// so only our admin account passes for every id. A Clerk session JWT lives about a
+// minute. The token the run holds is whichever role signed in LAST, taken when it
 // signed in, so a run that failed as the researcher or reviewer, or ran long after its
 // last sign-in, was refused with a 403 and left its studies behind. Sign in as admin
 // for a fresh token first; if that fails, still try with what we have and say why.
@@ -321,7 +348,7 @@ async function cleanUpAsAdmin(
     let adminSignInError: string | undefined
     if (handle && cleanup.hasTracked) {
         try {
-            cleanup.setToken(await deps.login(handle, env, 'admin', bundleDir))
+            cleanup.setToken(await signInFresh(deps, handle, env, 'admin', bundleDir))
         } catch (e) {
             adminSignInError = (e as Error).message
         }
@@ -613,25 +640,9 @@ export async function runEngine(
                 return currentRole
             },
             async loginAs(role) {
-                // Guaranteed clean slate before re-authenticating. Visiting
-                // /account/signin while still signed in trips the app's
-                // auto-signout (the sign-in form renders null while it clears the
-                // session), which races the form hydration. Clearing cookies +
-                // web storage first lands loginAs() on a hydrated, logged-out form.
-                await handle?.page.context().clearCookies()
-                await handle?.page
-                    .evaluate(() => {
-                        try {
-                            localStorage.clear()
-                            sessionStorage.clear()
-                        } catch {
-                            // storage may be inaccessible on some pages; best-effort.
-                        }
-                    })
-                    .catch(() => {})
                 if (!handle) throw new Error('loginAs called before the browser was opened')
                 // Re-drive Clerk as the new role (auth.ts navigates to /signin itself).
-                const newToken = await deps.login(handle, env, role, recorder.bundleDir)
+                const newToken = await signInFresh(deps, handle, env, role, recorder.bundleDir)
                 // Track the switch so ctx.account now returns the new role's creds.
                 currentRole = role
                 cleanup.setToken(newToken)
