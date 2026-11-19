@@ -1,5 +1,6 @@
-import { type Browser, chromium, type Page } from '@playwright/test'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { chromium } from '@playwright/test'
+import { describe, expect, it } from 'vitest'
+import { chromeLaunchOptions } from '@/engine/chrome-launch'
 import { piSelect } from '@/engine/flows/study'
 
 // The Principal Investigator field comes in three shapes, and on QA its open option list
@@ -17,22 +18,19 @@ const SHAPES = {
 }
 
 describe('piSelect', () => {
-    let browser: Browser
-    let page: Page
-
-    beforeAll(async () => {
-        browser = await chromium.launch({ channel: 'chrome', headless: true })
-        page = await browser.newPage()
+    // The browser is launched inside the test, not in a beforeAll: a cold Chrome start on a
+    // CI runner outlasts vitest's hook timeout, while tests get the global testTimeout.
+    it('matches exactly the input on every shape of the field', async () => {
+        const browser = await chromium.launch(chromeLaunchOptions())
+        try {
+            const page = await browser.newPage()
+            for (const [shape, html] of Object.entries(SHAPES)) {
+                await page.setContent(html)
+                const matched = await piSelect(page).evaluateAll(els => els.map(el => el.tagName))
+                expect(matched, shape).toEqual(['INPUT'])
+            }
+        } finally {
+            await browser.close()
+        }
     })
-    afterAll(async () => {
-        await browser?.close()
-    })
-
-    for (const [shape, html] of Object.entries(SHAPES)) {
-        it(`matches exactly the input on the ${shape} shape`, async () => {
-            await page.setContent(html)
-            await expect(piSelect(page).count()).resolves.toBe(1)
-            await expect(piSelect(page).evaluate(el => el.tagName)).resolves.toBe('INPUT')
-        })
-    }
 })
