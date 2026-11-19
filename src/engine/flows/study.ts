@@ -259,8 +259,9 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
     await page.getByRole('option').first().click()
 }
 
-// By label, not by combobox role: the Mantine Select input on staging carries only
-// aria-haspopup="listbox", no role, so a role locator never matches there.
+// By label, not by role: a combobox since the Nov 12 2026 QA release, a textbox on
+// releases before it (production v1.7.1), and on staging the Mantine Select input carries
+// only aria-haspopup="listbox" with no role at all. The label matches all three.
 export function piSelect(page: Page) {
     return page.getByLabel('Principal Investigator', { exact: true })
 }

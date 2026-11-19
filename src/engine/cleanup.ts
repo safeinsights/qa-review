@@ -36,6 +36,14 @@ export class CleanupClient {
         this.users.push(id)
     }
 
+    get hasTracked(): boolean {
+        return this.studies.length > 0 || this.users.length > 0
+    }
+
+    setToken(token: string) {
+        this.authToken = token
+    }
+
     // Returns the HTTP status of the DELETE, or 0 if the request itself threw
     // (DNS/connection error) — never throws, so run() always completes.
     private async del(path: string): Promise<number> {
