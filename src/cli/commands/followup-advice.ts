@@ -14,8 +14,11 @@ export async function followupAdviceCommand(opts: Record<string, string>): Promi
     }
     // The results file (`qar results-check`) is the normal input; its FAIL entries
     // carry the same severity/area fields. A bare {fails:[…]} is still accepted.
+    // A FAIL another card already tracks (`coveredBy`) needs no routing.
     const fails = Array.isArray(parsed.results)
-        ? (parsed.results as (Fail & { result?: string })[]).filter(r => r.result === 'FAIL')
+        ? (parsed.results as (Fail & { result?: string; coveredBy?: string })[]).filter(
+              r => r.result === 'FAIL' && !r.coveredBy
+          )
         : parsed.fails
     if (!Array.isArray(fails)) {
         throw new Error('followup-advice: --input JSON must have a "results" or "fails" array')
