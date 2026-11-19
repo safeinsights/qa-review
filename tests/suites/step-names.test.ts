@@ -3,6 +3,7 @@ import { lighthouseSuite } from '@/suites/lighthouse'
 import { releaseHappyPathSuite } from '@/suites/release-happy-path'
 import { signinSuite } from '@/suites/signin'
 import { studyHappyPathSuite } from '@/suites/study-happy-path'
+import { studyReadyToRunSuite } from '@/suites/study-ready-to-run'
 import type { Suite } from '@/suites/types'
 
 // The step names shown in the GUI before a run come straight from suite.steps —
@@ -40,6 +41,28 @@ describe('built-in suite step names', () => {
         expect(n.filter(x => x === 'Switch back to the researcher account')).toHaveLength(3)
     })
 
+    it('study-ready-to-run stops at code approval and deletes nothing', () => {
+        expect(names(studyReadyToRunSuite)).toEqual([
+            'Choose the data partner',
+            'Open the researcher org dashboard',
+            'Start a new study proposal',
+            'Step 1: name the study, choose org and language, then capture the study id',
+            'Step 2: fill the proposal',
+            'Submit the initial request',
+            'Switch to the reviewer account',
+            'Reviewer approves the proposal',
+            'Switch back to the researcher account',
+            'Route to the code upload page',
+            'Researcher is not held at the agreement gate',
+            'Upload main.r',
+            'Submit the study code',
+            'Switch to the reviewer account',
+            'Reviewer approves the code',
+            'Report the ready-to-run study',
+        ])
+        expect(studyReadyToRunSuite.roles).toEqual(['researcher'])
+    })
+
     it('lighthouse', () => {
         expect(names(lighthouseSuite)).toEqual([
             'Audit my dashboard',
@@ -54,6 +77,7 @@ describe('built-in suite step names', () => {
         for (const s of [
             signinSuite,
             studyHappyPathSuite,
+            studyReadyToRunSuite,
             lighthouseSuite,
             releaseHappyPathSuite,
         ]) {

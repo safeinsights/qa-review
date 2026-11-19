@@ -18,8 +18,10 @@ export type CommandName = (typeof COMMANDS)[number]['name']
 export const COMMANDS = [
     {
         name: 'run',
-        usage: 'qar run --suite <name> (--env <env> | --pr <n>) [--role <role>] [--headed] [--json]',
+        usage: 'qar run --suite <name> (--env <env> | --pr <n>) [--role <role>] [--data-org <slug>] [--headed] [--json]',
         summary: 'Run a suite against an environment or a PR preview.',
+        details:
+            '--data-org picks the Data Partner a study suite proposes to (openstax, the default, or mars-u). Same as the QAR_DATA_ORG setting.',
     },
     {
         name: 'login',

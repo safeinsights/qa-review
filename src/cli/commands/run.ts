@@ -12,6 +12,7 @@ import {
     stepLine,
 } from '@/cli/step-stream'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
+import { DATA_ORG_SETTING, resolveDataOrg } from '@/engine/flows/study'
 import { runStatePath, suitesSrcDir } from '@/engine/paths'
 import { defaultDeps, runEngine } from '@/engine/run'
 import { headedDeps } from '@/engine/run-headed'
@@ -21,7 +22,16 @@ import type { Role, RunState, StepEvent } from '@/engine/types'
 import { discoverSuites } from '@/suites/discover'
 import type { Suite } from '@/suites/types'
 
-export async function runCommand(opts: Record<string, string>, vars: Vars): Promise<void> {
+// `--data-org` is validated here so a typo fails before a browser opens, and then
+// travels as the setting suites already read, so a settings file or env var works too.
+export function withRunOverrides(opts: Record<string, string>, vars: Vars): Vars {
+    const dataOrg = opts['data-org']
+    if (dataOrg === undefined) return vars
+    return { ...vars, [DATA_ORG_SETTING]: resolveDataOrg(dataOrg) }
+}
+
+export async function runCommand(opts: Record<string, string>, baseVars: Vars): Promise<void> {
+    const vars = withRunOverrides(opts, baseVars)
     const role = (opts.role ?? 'admin') as Role
     // `--suite-file <path>` runs a Suite from an arbitrary .ts file (an ad-hoc
     // validation suite) via suiteOverride, so it's NEVER registered / listed. Its

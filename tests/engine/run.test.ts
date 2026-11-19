@@ -98,6 +98,28 @@ describe('runEngine', () => {
         expect(step?.name).toBe('terse step')
     })
 
+    it('ctx.setting reads the merged settings the run was given', async () => {
+        const d = deps({ vars: { ...ENV_VARS, QAR_DATA_ORG: 'mars-u' } })
+        const seen: (string | undefined)[] = []
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'read settings',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            seen.push(ctx.setting('QAR_DATA_ORG'), ctx.setting('QAR_UNSET'))
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        expect(seen).toEqual(['mars-u', undefined])
+    })
+
     it('records a throwing name-less ctx.step as a failure under the step name', async () => {
         const d = deps()
         const suite: Suite = {

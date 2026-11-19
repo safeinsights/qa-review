@@ -69,6 +69,10 @@ export interface RunContext {
     // value one step captures (e.g. a created study's id) is stashed here for a
     // later step to read: `ctx.state.studyId = id` … `ctx.state.studyId as string`.
     state: Record<string, unknown>
+    // One value from the merged settings (settings files, then process.env, then a
+    // run's CLI overrides such as `--data-org`). For a run-time choice a suite cannot
+    // bake into its static steps, e.g. which Data Partner a study goes to.
+    setting(name: string): string | undefined
     // False while this attempt is the live one; true once its step deadline fired and
     // the engine moved on. Checking this is OPTIONAL — `page` above already refuses to
     // act for an abandoned attempt. Use it when a long loop should exit quietly rather
