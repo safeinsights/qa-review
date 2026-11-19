@@ -61,11 +61,16 @@ describe('the full-page ToS/PN step at sign-in', () => {
         await page.close()
     })
 
-    it('recognises all three variants of the step', async () => {
+    it('recognises all six variants of the step', async () => {
+        // "updated " appears only when the account acknowledged an earlier version of
+        // every owed document; a first publish or a never-acknowledged one drops it.
         for (const label of [
             'I have read and agree to the updated Terms of Service.',
             'I have read and agree to the updated Privacy Notice.',
             'I have read and agree to the updated Terms of Service and Privacy Notice.',
+            'I have read and agree to the Terms of Service.',
+            'I have read and agree to the Privacy Notice.',
+            'I have read and agree to the Terms of Service and Privacy Notice.',
         ]) {
             await open(agreementsPage(label))
             await expect(owedAgreementsCheckbox(page).count()).resolves.toBe(1)

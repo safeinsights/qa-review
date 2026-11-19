@@ -1,5 +1,12 @@
 import { expect, type Page } from '@playwright/test'
-import { alreadySignedInNotice, fillPin, fillSignInForm, loginAs, signedInMarker } from '../auth'
+import {
+    alreadySignedInNotice,
+    fillPin,
+    fillSignInForm,
+    loginAs,
+    signedInMarker,
+    signOutOfClerk,
+} from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
@@ -105,12 +112,7 @@ export async function completeSignup(
     // through Clerk first: clearing cookies alone left the admin signed in on the QA
     // Runner's CDP-attached browser, and the invitation then refused with "You must be
     // signed out to accept invitations".
-    await page
-        .evaluate(async () => {
-            const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } }).Clerk
-            await clerk?.signOut?.()
-        })
-        .catch(() => {})
+    await signOutOfClerk(page)
     await page.context().clearCookies()
     await page
         .evaluate(() => {

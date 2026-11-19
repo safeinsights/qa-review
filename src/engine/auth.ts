@@ -27,9 +27,27 @@ export function passwordField(page: Page) {
 // An account that owes a newly published Terms of Service or Privacy Notice is sent there
 // after MFA, before any page with the side nav renders, so signedInMarker never appears
 // and every sign-in timed out the first time anyone published a version on QA. The label
-// is the one element all three variants (ToS, PN, both) share.
+// is the one element every variant shares: ToS, PN or both, each with "updated " only when
+// the account acknowledged an earlier version of every owed document. A first publish, or
+// an account that never agreed to one of them, gets the label without it.
 export function owedAgreementsCheckbox(page: Page) {
-    return page.getByRole('checkbox', { name: /^I have read and agree to the updated /i })
+    return page.getByRole('checkbox', {
+        name: /^I have read and agree to the (updated )?(Terms of Service|Privacy Notice)/i,
+    })
+}
+
+// Drop every Clerk session on the page. The one copy of this call, because each sign-in
+// path needs the same clean slate and the copies used to drift apart. Returns false when
+// Clerk has not loaded, so there was no session to clear.
+export async function signOutOfClerk(page: Page): Promise<boolean> {
+    return page
+        .evaluate(async () => {
+            const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } }).Clerk
+            if (!clerk?.signOut) return false
+            await clerk.signOut()
+            return true
+        })
+        .catch(() => false)
 }
 
 // Accept the owed ToS/PN so the sign-in can carry on to the app. Shared accounts have to
@@ -73,14 +91,7 @@ async function reachSignInForm(page: Page, env: EnvConfig): Promise<void> {
     // may not be loaded yet on the very first visit, in which case there is no
     // session to clear anyway. After signing out, reload so the form re-renders
     // without the interstitial.
-    const signedOut = await page
-        .evaluate(async () => {
-            const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<void> } }).Clerk
-            if (!clerk?.signOut) return false
-            await clerk.signOut()
-            return true
-        })
-        .catch(() => false)
+    const signedOut = await signOutOfClerk(page)
     if (signedOut) {
         await page
             .goto(`${env.baseURL}/account/signin`, { waitUntil: 'domcontentloaded' })
@@ -338,12 +349,6 @@ export async function continuePastAlreadySignedIn(page: Page, email: string): Pr
         page.getByRole('button', { name: 'Continue', exact: true }),
         signedInMarker(page).or(owedAgreementsCheckbox(page)).first()
     )
-    // The agreements step renders a beat after a transient, empty app page, so settle on
-    // whichever arrives before the caller checks for it.
-    await signedInMarker(page)
-        .or(owedAgreementsCheckbox(page))
-        .first()
-        .waitFor({ state: 'visible', timeout: 30_000 })
 }
 
 // The identity of the ACTIVE Clerk session on the page: the email its user carries,
