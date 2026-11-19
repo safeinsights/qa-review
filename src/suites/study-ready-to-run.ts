@@ -36,8 +36,9 @@ const MAIN_FILE = 'main.r'
 // Openstax Lab is a Test Lab under Openstax, so its studies to Openstax skip the
 // Study Agreement gate. Whether that holds for another partner is not known, and a
 // gated study cannot submit code, so the suite names the gate instead of timing out
-// on a Submit dialog that never opens.
-const AGREEMENT_GATE_COPY = /Study agreements are being prepared/i
+// on a Submit dialog that never opens. Singular since management-app 1e6718e (Nov 13
+// 2026); the plural is kept for releases before it.
+const AGREEMENT_GATE_COPY = /Study Agreements? (is|are) being prepared/i
 
 function studyId(ctx: RunContext): string {
     return ctx.state.studyId as string
@@ -47,10 +48,17 @@ function reviewUrl(ctx: RunContext): string {
     return `${ctx.baseURL}/${dataOrg(ctx)}/study/${studyId(ctx)}/review`
 }
 
+// The notice renders only once the agreement status query resolves, so a one-shot
+// isVisible() could pass a gated study. "Submit code for review" is disabled while that
+// status is in flight and while it blocks, and by nothing else, so wait until either it
+// is enabled or the notice shows: then the page has settled one way or the other.
 async function failIfAgreementGate(ctx: RunContext): Promise<void> {
-    if (await ctx.page.getByText(AGREEMENT_GATE_COPY).first().isVisible()) {
+    const submit = ctx.page.getByRole('button', { name: /^Submit code for review$/i })
+    const gate = ctx.page.getByText(AGREEMENT_GATE_COPY).first()
+    await expect(submit.and(ctx.page.locator(':enabled')).or(gate)).toBeVisible()
+    if (await gate.isVisible()) {
         throw new Error(
-            `Study ${studyId(ctx)} is held at the Study Agreement gate ("Study agreements are being prepared"): ` +
+            `Study ${studyId(ctx)} is held at the Study Agreement gate ("Study Agreement is being prepared"): ` +
                 `${RESEARCHER_ORG} is not a test lab for ${DATA_ORGS[dataOrg(ctx)]}. ` +
                 'An SI admin must publish a signed study agreement (see study-agreements-happy-path) before code can be submitted.'
         )
