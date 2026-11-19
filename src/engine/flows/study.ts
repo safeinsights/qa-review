@@ -220,7 +220,12 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
     await fillLexical(page, 'Research question(s)', content.researchQuestion)
     await fillLexical(page, 'Project summary', content.summary)
     await fillLexical(page, 'Impact', content.impact)
-    const pi = page.getByRole('combobox', { name: 'Principal Investigator' })
+    // A combobox since the Nov 12 2026 QA release; a textbox on releases before it
+    // (production v1.7.1), and a run against either must still fill it.
+    const pi = page
+        .getByRole('combobox', { name: 'Principal Investigator' })
+        .or(page.getByRole('textbox', { name: 'Principal Investigator' }))
+        .first()
     await pi.click()
     await page.getByRole('option').first().click()
 }

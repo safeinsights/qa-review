@@ -312,15 +312,15 @@ export function proposalSubmissionSteps(
                 ctx.step(async () => {
                     await fillProposal(ctx.page, content(ctx))
                     if (principalInvestigator) {
-                        await ctx.page
+                        const piField = ctx.page
                             .getByRole('combobox', { name: 'Principal Investigator' })
-                            .click()
+                            .or(ctx.page.getByRole('textbox', { name: 'Principal Investigator' }))
+                            .first()
+                        await piField.click()
                         await ctx.page
                             .getByRole('option', { name: principalInvestigator, exact: true })
                             .click()
-                        await expect(
-                            ctx.page.getByRole('combobox', { name: 'Principal Investigator' })
-                        ).toHaveValue(principalInvestigator)
+                        await expect(piField).toHaveValue(principalInvestigator)
                     }
                 }),
         },
