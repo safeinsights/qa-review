@@ -262,8 +262,12 @@ export async function fillProposal(page: Page, content: StudyContent): Promise<v
 // By label, not by role: a combobox since the Nov 12 2026 QA release, a textbox on
 // releases before it (production v1.7.1), and on staging the Mantine Select input carries
 // only aria-haspopup="listbox" with no role at all. The label matches all three.
+//
+// Only the input, though: on QA, Mantine also labels the open option list "Principal
+// Investigator" (aria-label on the listbox), so the bare label matched two elements and
+// every proposal fill failed strict mode.
 export function piSelect(page: Page) {
-    return page.getByLabel('Principal Investigator', { exact: true })
+    return page.getByLabel('Principal Investigator', { exact: true }).and(page.locator('input'))
 }
 
 // Submit the proposal and confirm the success banner.
