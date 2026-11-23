@@ -6,6 +6,7 @@ import {
     attachmentUrl,
     buildCommentAdf,
     type CommentSegment,
+    deleteAttachment,
     deleteComment,
     downloadAttachment,
     isTextAttachment,
@@ -132,6 +133,35 @@ export async function jiraDeleteCommentCommand(
     for (const id of ids) {
         await deleteComment(config, issue, id)
         process.stdout.write(`${JSON.stringify({ id, deleted: true })}\n`)
+    }
+}
+
+// `qar jira-delete-attachment --issue <KEY> --ids <id1,id2>` — remove attachments,
+// typically the uploads a deleted comment left behind (deleting a comment does not
+// delete its files). Jira's endpoint takes the id alone, so a mistyped id would delete
+// a file on some OTHER card; every id is therefore checked against this card's list
+// first, and one that is not on it is reported and left alone. Re-running is harmless:
+// an id already deleted is simply no longer on the card.
+export async function jiraDeleteAttachmentCommand(
+    opts: Record<string, string>,
+    vars: Vars
+): Promise<void> {
+    const issue = opts.issue ?? ''
+    if (!issue) throw new Error('jira-delete-attachment requires --issue <KEY>')
+    const ids = splitList(opts.ids)
+    if (!ids.length) throw new Error('jira-delete-attachment requires --ids <id1,id2>')
+
+    const config = jiraConfig(vars)
+    const onCard = new Map((await listAttachments(config, issue)).map(a => [a.id, a.filename]))
+    for (const id of ids) {
+        const filename = onCard.get(id)
+        if (filename === undefined) {
+            const note = `not attached to ${issue} (already deleted, or on another card)`
+            process.stdout.write(`${JSON.stringify({ id, deleted: false, note })}\n`)
+            continue
+        }
+        await deleteAttachment(config, id)
+        process.stdout.write(`${JSON.stringify({ id, filename, deleted: true })}\n`)
     }
 }
 

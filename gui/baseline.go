@@ -52,17 +52,11 @@ type baselineTracker struct {
 	lastStray  string
 }
 
-// Control replies for the engine's holds. Nobody is at the Testing tab's Retry
-// button during a baseline, so a held browser would wait forever: give up on a
-// failed step, and release an error hold, so the run finishes and reports.
-const (
-	replyGiveUp = `{"type":"give-up"}`
-	replyResume = `{"type":"resume"}`
-)
-
-// feed reads one output line. It returns the step progress to emit (nil when the
-// line is not a step) and the control line to write back to the engine ("" for none).
-func (t *baselineTracker) feed(line string) (*baselineStep, string) {
+// feed reads one output line and returns the step progress to emit (nil when the
+// line is not a step). It only observes: the baseline runs inside the session
+// (runSuiteOnPage), which installs no holds, so there is nothing to answer.
+// step-failed and error-hold are still read for the error they carry.
+func (t *baselineTracker) feed(line string) *baselineStep {
 	trimmed := strings.TrimSpace(line)
 	var env struct {
 		Type      string `json:"type"`
@@ -77,7 +71,7 @@ func (t *baselineTracker) feed(line string) (*baselineStep, string) {
 		if trimmed != "" {
 			t.lastStray = trimmed
 		}
-		return nil, ""
+		return nil
 	}
 	switch env.Type {
 	case "step":
@@ -88,24 +82,22 @@ func (t *baselineTracker) feed(line string) (*baselineStep, string) {
 			t.failedStep = env.Name
 			t.err = env.Error
 		}
-		return &baselineStep{Index: t.index, Name: env.Name, Status: env.Status}, ""
+		return &baselineStep{Index: t.index, Name: env.Name, Status: env.Status}
 	case "step-failed":
 		if t.failedStep == "" {
 			t.failedStep = env.StepName
 			t.err = env.Error
 		}
-		return nil, replyGiveUp
 	case "error-hold":
 		if t.err == "" {
 			t.err = env.Error
 		}
-		return nil, replyResume
 	case "result":
 		t.resultSeen = true
 		t.resultOK = env.OK
 		t.bundleDir = env.BundleDir
 	}
-	return nil, ""
+	return nil
 }
 
 // summary is the file's content once the engine has exited. Passing needs both a
@@ -201,7 +193,7 @@ func (a *App) startSessionBaseline(tag, env, dir string) error {
 	t := &baselineTracker{}
 	hook := func(line string) {
 		mu.Lock()
-		step, _ := t.feed(line)
+		step := t.feed(line)
 		mu.Unlock()
 		if step != nil {
 			runtime.EventsEmit(a.ctx, "baseline-step", map[string]any{

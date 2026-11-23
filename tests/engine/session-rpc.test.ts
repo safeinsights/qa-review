@@ -104,6 +104,66 @@ describe('session RPC round-trip', () => {
         ).rejects.toThrow(/is a `qar session` running\?/)
     })
 
+    it('dispatchSessionActionUntilDone waits past any clock while the session lives', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        const { acquireSessionLock } = await import('@/engine/session-lock')
+        // This process owns the lock, so the real liveness check sees a live session.
+        const release = acquireSessionLock()
+        try {
+            const pending = rpc.dispatchSessionActionUntilDone(
+                { action: 'run-suite', suite: 'release-happy-path', role: 'researcher' },
+                'run release-happy-path'
+            )
+            const request = rpc.readSessionRequest()
+            await new Promise(r => setTimeout(r, 700))
+            rpc.writeSessionResult({ id: request!.id, ok: true, runOk: false, bundleDir: '/b' })
+            expect(await pending).toEqual({
+                id: request!.id,
+                ok: true,
+                runOk: false,
+                bundleDir: '/b',
+            })
+        } finally {
+            release()
+        }
+    })
+
+    it('dispatchSessionActionUntilDone refuses at once when no session is running', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        await expect(
+            rpc.dispatchSessionActionUntilDone({ action: 'create-study' }, 'create the study')
+        ).rejects.toThrow(/no `qar session` is running/)
+        expect(rpc.readSessionRequest()).toBeNull()
+    })
+
+    it('dispatchSessionActionUntilDone fails once the session stops without answering', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        let alive = true
+        const pending = rpc.dispatchSessionActionUntilDone(
+            { action: 'create-study' },
+            'create the study',
+            () => alive,
+            20
+        )
+        alive = false
+        await expect(pending).rejects.toThrow(/stopped before it could create the study/)
+    })
+
+    it('dispatchSessionActionUntilDone keeps a result written just before the session exits', async () => {
+        const rpc = await import('@/engine/session-rpc')
+        let alive = true
+        const pending = rpc.dispatchSessionActionUntilDone(
+            { action: 'create-study' },
+            'create the study',
+            () => alive,
+            20
+        )
+        const request = rpc.readSessionRequest()
+        rpc.writeSessionResult({ id: request!.id, ok: true, studyId: 's1' })
+        alive = false
+        expect(await pending).toEqual({ id: request!.id, ok: true, studyId: 's1' })
+    })
+
     it('treats a malformed request file as no request', async () => {
         const rpc = await import('@/engine/session-rpc')
         const { sessionRequestPath } = await import('@/engine/paths')

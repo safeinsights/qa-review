@@ -1,10 +1,18 @@
 import { expect, type Page } from '@playwright/test'
-import { loginAs, signedInMarker } from '../auth'
+import {
+    alreadySignedInNotice,
+    fillPin,
+    fillSignInForm,
+    loginAs,
+    signedInMarker,
+    signOutOfClerk,
+} from '../auth'
 import type { Message } from '../mailtm'
 import { randomToken } from '../mailtm'
 import { QaApiClient } from '../qa-api'
-import { totp } from '../totp'
+import { freshTotp } from '../totp'
 import type { EnvConfig } from '../types'
+import { checkpoint } from './accessibility'
 import { checkUntilEnabled, clickUntil } from './interactions'
 
 // Shared signup-flow helpers, extracted from src/suites/signup.ts so BOTH the
@@ -85,8 +93,8 @@ export async function inviteUser(
 // Complete the full new-user signup from the emailed invitation URL and return the
 // new user's SafeInsights DB id plus the TOTP secret its MFA was enrolled with.
 // Handles: invitation landing -> create account form -> mandatory authenticator-app
-// MFA (TOTP) -> recovery codes -> security key -> dashboard. The new user must be
-// UNAUTHENTICATED, so clear any existing session.
+// MFA (TOTP) -> recovery codes -> sign in again -> security key -> dashboard. The new
+// user must be UNAUTHENTICATED, so clear any existing session.
 // `baseURL` is the APP origin, threaded in the way every other flow helper takes it
 // rather than read back off `page.url()`. The invitation URL is scraped from an
 // email, so the origin the browser happens to be sitting on is not guaranteed to be
@@ -100,7 +108,11 @@ export async function completeSignup(
     const password = SIGNUP_PASSWORD
     const origin = new URL(baseURL).origin
 
-    // Fresh, unauthenticated slate (the admin session must not carry over).
+    // Fresh, unauthenticated slate (the admin session must not carry over). Sign out
+    // through Clerk first: clearing cookies alone left the admin signed in on the QA
+    // Runner's CDP-attached browser, and the invitation then refused with "You must be
+    // signed out to accept invitations".
+    await signOutOfClerk(page)
     await page.context().clearCookies()
     await page
         .evaluate(() => {
@@ -109,11 +121,24 @@ export async function completeSignup(
         })
         .catch(() => {})
 
-    // 1. Invitation landing -> Create New Account
+    // 1. Invitation landing -> Create New Account. If a session still survived, the
+    //    landing offers "Sign out to continue" instead; that button renders before it is
+    //    wired, so click it until the signed-out options appear.
     await page.goto(invitationUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('link', { name: /create new account/i }).click()
+    const createNew = page.getByRole('link', { name: /create new account/i })
+    const signOutToContinue = page.getByRole('button', { name: /sign out to continue/i })
+    await createNew.or(signOutToContinue).first().waitFor({ state: 'visible' })
+    if (await signOutToContinue.isVisible()) {
+        await clickUntil(signOutToContinue, createNew)
+    }
+    await createNew.waitFor({ state: 'visible' })
+    await checkpoint('invitation landing (signed out)', { as: 'invitee' })
+    await createNew.click()
 
     // 2. Signup form (email is pre-filled + disabled)
+    await page.getByLabel('First name').waitFor({ state: 'visible' })
+    const email = await page.getByLabel('Email').inputValue()
+    await checkpoint('signup form, empty', { as: 'invitee' })
     await page.getByLabel('First name').fill('Qar')
     await page.getByLabel('Last name').fill('Tester')
     await page.getByLabel('Enter password').fill(password)
@@ -125,14 +150,17 @@ export async function completeSignup(
     // rather than once — see checkUntilEnabled.
     const createAccount = page.getByRole('button', { name: /create account/i })
     await checkUntilEnabled(page.getByRole('checkbox', { name: /i agree/i }), createAccount)
+    await checkpoint('signup form, filled', { as: 'invitee', redactHtml: true })
     await createAccount.click()
 
     // 3. Mandatory MFA setup — choose the authenticator-app path, which shows the
     //    TOTP secret in plaintext so we can derive codes headlessly.
     const authenticatorLink = page.getByRole('link', { name: /authenticator app/i })
     await authenticatorLink.waitFor({ state: 'visible' })
+    await checkpoint('MFA method choice', { as: 'invitee' })
     await authenticatorLink.click()
     await page.getByRole('button', { name: /verify code/i }).waitFor({ state: 'visible' })
+    await checkpoint('MFA authenticator-app enrolment', { as: 'invitee', redactHtml: true })
 
     // Enter the authenticator code. enterTotp re-reads the secret from the page on
     // each attempt — the page can re-render/regenerate the secret after first paint.
@@ -146,15 +174,23 @@ export async function completeSignup(
     //    the same name and the page one sits behind the modal, so target the
     //    dialog's button specifically (not .first(), which grabs the obscured page
     //    button and silently no-ops).
-    await page
-        .getByRole('button', { name: /go to safeinsights/i })
-        .first()
-        .click()
+    const goToApp = page.getByRole('button', { name: /go to safeinsights/i }).first()
+    await goToApp.waitFor({ state: 'visible' })
+    await checkpoint('MFA recovery codes', { as: 'invitee', redactHtml: true })
+    await goToApp.click()
     const recoveryDialog = page.getByRole('dialog').filter({ hasText: /recovery codes/i })
-    await recoveryDialog
-        .getByRole('button', { name: /go to safeinsights/i })
-        .click()
-        .catch(() => {})
+    const shown = await recoveryDialog.waitFor({ state: 'visible' }).then(
+        () => true,
+        () => false
+    )
+    if (shown) {
+        await checkpoint('MFA recovery codes confirm dialog', { as: 'invitee', redactHtml: true })
+        await recoveryDialog
+            .getByRole('button', { name: /go to safeinsights/i })
+            .click()
+            .catch(() => {})
+    }
+    await signInAgainIfSignedOut(page, email, mfaSecret)
 
     // 6. Security-key screen: a one-time private key that must be stored, or the
     //    account can never decrypt an output.
@@ -175,6 +211,7 @@ export async function completeSignup(
     // "Next" is gated behind copying, so copy first.
     const copyKey = page.getByRole('button', { name: /copy key/i })
     await copyKey.waitFor({ state: 'visible' })
+    await checkpoint('security key setup', { as: 'invitee', redactHtml: true })
     await copyKey.click()
     // "Next" is revealed only once the copy attempt settles, and under automation the
     // clipboard write can REJECT — which still reveals it, because the page gates on
@@ -183,11 +220,10 @@ export async function completeSignup(
     // The dialog's confirm is the ONLY caller of setUserPublicKeyAction, so it is not
     // best-effort — it is the step. Scoped to the dialog so a page-level button of the
     // same name can never shadow it, the trap step 5 documents.
-    await page
-        .getByRole('dialog')
-        .filter({ hasText: /stored your security key/i })
-        .getByRole('button', { name: /yes, i have stored my key/i })
-        .click()
+    const storedKey = page.getByRole('dialog').filter({ hasText: /stored your security key/i })
+    await storedKey.waitFor({ state: 'visible' })
+    await checkpoint('security key stored? confirm dialog', { as: 'invitee', redactHtml: true })
+    await storedKey.getByRole('button', { name: /yes, i have stored my key/i }).click()
     // The key screen tears down only once the mutation resolves and the app routes on.
     await expect(copyKey).toBeHidden()
 
@@ -327,7 +363,7 @@ export async function readTotpSecret(page: Page): Promise<string> {
 }
 
 // Fill the 6-box PinInput with a freshly-computed TOTP code and submit. If the
-// verify fails, wait for a fresh 30s window and retry with a newly-computed code.
+// verify fails, retry with a code from the next 30s window (freshTotp waits for it).
 // Throws if every attempt is rejected so the failure is loud, not a silent hang.
 // Returns the secret that actually verified — the page can regenerate it between
 // attempts, so only the accepted one can derive codes for a later sign-in.
@@ -344,10 +380,10 @@ export async function enterTotp(page: Page): Promise<string> {
     let lastSecret = ''
     for (let attempt = 0; attempt < 5; attempt++) {
         // Re-read the secret each attempt: the page can re-render/regenerate it
-        // after first paint. Compute as late as possible.
+        // after first paint.
         const secret = await readTotpSecret(page)
         lastSecret = secret
-        const code = totp(secret)
+        const code = await freshTotp(secret)
         const count = await inputs.count()
         if (count >= 6) {
             for (let i = 0; i < 6; i++) await inputs.nth(i).fill(code[i])
@@ -372,30 +408,18 @@ export async function enterTotp(page: Page): Promise<string> {
                 .then(() => true),
         ]).catch(() => false)
         if (moved) return secret
-
-        // Rejected (or still on the pin step). Wait for the NEXT time window so we
-        // never resubmit the same code, then clear the boxes and retry.
-        await waitForNextTotpWindow()
     }
     throw new Error(
         `authenticator MFA: code rejected after multiple attempts (secret=${lastSecret})`
     )
 }
 
-const TOTP_PERIOD_MS = 30_000
-
-// Clerk refuses a TOTP code it has already accepted, so a second code computed in the
-// same 30s window as the first comes back "Incorrect code".
-async function waitForNextTotpWindow(): Promise<void> {
-    const msIntoWindow = Date.now() % TOTP_PERIOD_MS
-    await new Promise(resolve => setTimeout(resolve, TOTP_PERIOD_MS - msIntoWindow + 500))
-}
-
 // Right after enrollment, the recovery-codes fetch is refused until the user
 // re-verifies, so Clerk opens a "Verification required" modal over the setup page.
-// The enrollment code cannot be reused there (see waitForNextTotpWindow). Clerk
-// submits the field itself on the sixth digit, so the attempt_second_factor response
-// is the verdict — clicking Continue as well would submit the same code twice.
+// The enrollment code cannot be reused there, and neither can this one at a sign-in
+// again, if one follows, so both go through freshTotp. Clerk submits the field itself
+// on the sixth digit, so the attempt_second_factor response is the verdict — clicking
+// Continue as well would submit the same code twice.
 async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
     const dialog = page.getByRole('dialog').filter({ hasText: /verification required/i })
     const shown = await dialog
@@ -406,13 +430,46 @@ async function enterStepUpTotp(page: Page, secret: string): Promise<void> {
 
     const codeField = dialog.getByRole('textbox', { name: /enter verification code/i })
     for (let attempt = 0; attempt < 3; attempt++) {
-        await waitForNextTotpWindow()
+        // Take the code before listening for the verdict: freshTotp can wait up to a
+        // whole window, which would use up the response wait's timeout.
+        const code = await freshTotp(secret)
         const verdict = page.waitForResponse(r => r.url().includes('/verify/attempt_second_factor'))
-        await codeField.fill(totp(secret))
+        await codeField.fill(code)
         if ((await verdict).ok()) {
             await expect(dialog).toBeHidden()
             return
         }
     }
     throw new Error(`authenticator MFA: step-up code rejected after 3 attempts (secret=${secret})`)
+}
+
+// Leaving the recovery codes signs out a session that has not verified its new factor, so
+// sign back in with a code. A session that verified it in a step-up stays signed in.
+async function signInAgainIfSignedOut(page: Page, email: string, mfaSecret: string): Promise<void> {
+    const signInAgainNotice = page.getByText('MFA is set up', { exact: true })
+    const signedIn = signedInMarker(page).or(page.getByRole('button', { name: /copy key/i }))
+    await signInAgainNotice.or(signedIn).first().waitFor({ state: 'visible' })
+    if (!(await signInAgainNotice.isVisible())) return
+
+    await checkpoint('sign in again after MFA setup', { as: 'invitee' })
+    await signInWithTotp(page, email, mfaSecret)
+    await signedIn.or(alreadySignedInNotice(page)).first().waitFor({ state: 'visible' })
+}
+
+// Sign in from the sign-in form as an account completeSignup created. loginAs only covers
+// the shared role accounts, whose second factor comes from settings; this one's TOTP
+// secret was minted during signup.
+export async function signInWithTotp(page: Page, email: string, mfaSecret: string): Promise<void> {
+    await fillSignInForm(page, email, SIGNUP_PASSWORD)
+    const authenticator = page
+        .getByRole('button', { name: /authenticator app verification/i })
+        .or(page.getByRole('link', { name: /authenticator app verification/i }))
+    // Wait on the code BOXES, not the "Verify code" button: that button is disabled
+    // until all six digits are in, and clickUntil requires its target to be enabled —
+    // so it would re-click the picker until the budget ran out on a control that was
+    // never going to enable itself before we typed.
+    await clickUntil(authenticator, page.locator('[role="group"] input').first())
+    await checkpoint('sign in, authenticator code entry', { as: 'invitee' })
+    await fillPin(page, await freshTotp(mfaSecret))
+    await page.getByRole('button', { name: /verify code/i }).click()
 }

@@ -80,6 +80,13 @@ function makeRelease(lockPath: string): () => void {
     }
 }
 
+// Is a `qar session` alive to answer requests? A client that must not give up on a
+// long action while the session is still running it waits on this instead of a clock.
+export function sessionIsRunning(): boolean {
+    const lock = readLock()
+    return lock !== null && isAlive(lock.pid)
+}
+
 // Path helper re-exported for tests that assert on the lock location.
 export { sessionLockPath }
 export const _internals = { isAlive, readLock, lockDir: () => path.dirname(sessionLockPath()) }

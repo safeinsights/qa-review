@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { chromeLaunchOptions } from '@/engine/chrome-launch'
 import { resultsRoot as resultsRootDir } from '@/engine/paths'
 import type { RunDeps } from '@/engine/run'
 import { defaultDeps } from '@/engine/run'
@@ -16,7 +17,7 @@ export function headedDeps(onStep?: (e: StepEvent) => void, vars?: RunDeps['vars
         openBrowser: async env => {
             const { chromium } = await import('@playwright/test')
             // Visible browser, but still the user's installed Chrome (channel:'chrome').
-            const browser = await chromium.launch({ headless: false, channel: 'chrome' })
+            const browser = await chromium.launch(chromeLaunchOptions({ headless: false }))
             const context = await browser.newContext({
                 baseURL: env.baseURL,
                 recordVideo: { dir: resultsRoot },

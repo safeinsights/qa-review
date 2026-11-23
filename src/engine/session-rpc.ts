@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import type { InvitedRole } from '@/engine/flows/signup'
 import { resultsRoot, sessionRequestPath, sessionRequestResultPath } from '@/engine/paths'
+import { sessionIsRunning } from '@/engine/session-lock'
 import type { Role } from '@/engine/types'
 
 // The file-based RPC shared by a long-lived `qar session` (the server, which holds
@@ -162,4 +163,33 @@ export async function dispatchSessionAction(
         )
     }
     return result
+}
+
+// For an action with no sensible deadline (a whole suite, which can sit in an
+// enclave run): wait as long as the session that owns it is alive. The engine has
+// no cancellation, so a client that timed out would leave the session still driving
+// the held page while its caller moved on to the same browser. Here the client
+// stops waiting only when the session, and so the action, is gone.
+export async function dispatchSessionActionUntilDone(
+    action: SessionAction,
+    doing: string,
+    isRunning: () => boolean = sessionIsRunning,
+    pollMs = 300
+): Promise<SessionResult> {
+    if (!isRunning()) {
+        throw new Error(`no \`qar session\` is running to ${doing}`)
+    }
+    const id = newRequestId()
+    writeSessionRequest(id, action)
+    for (;;) {
+        const result = readSessionResult()
+        if (result?.id === id) return result
+        if (!isRunning()) {
+            // The session may have written its result just before exiting.
+            const last = readSessionResult()
+            if (last?.id === id) return last
+            throw new Error(`the \`qar session\` stopped before it could ${doing}`)
+        }
+        await new Promise(r => setTimeout(r, pollMs))
+    }
 }

@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test'
+import { checkpoint } from '../engine/flows/accessibility'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil } from '../engine/flows/interactions'
 import type { StudyContent } from '../engine/flows/study'
@@ -167,11 +168,14 @@ async function publishStudyAgreement(ctx: RunContext): Promise<void> {
         buffer: Buffer.from(minimalPdf(`QA study agreement ${ctx.tag}`)),
     })
     await upload.getByText('study-agreement.pdf').first().waitFor()
+    await checkpoint('upload signed study agreement dialog, filled')
 
     // Publish opens a SECOND dialog stacked in its own portal above the upload modal;
     // its "Yes, publish" is the control that actually commits.
     const confirm = page.getByRole('dialog', { name: 'Publish this file?' })
     await upload.getByRole('button', { name: 'Publish', exact: true }).click()
+    await confirm.waitFor({ state: 'visible' })
+    await checkpoint('publish study agreement confirm dialog')
     await confirm.getByRole('button', { name: 'Yes, publish' }).click()
     await expect(confirm).toBeHidden()
     await expect(upload).toBeHidden()
@@ -182,7 +186,7 @@ async function publishStudyAgreement(ctx: RunContext): Promise<void> {
 // the textbox, but the options live outside it, so they are matched page-wide.
 async function pickOption(ctx: RunContext, label: string, option: string): Promise<void> {
     const upload = ctx.page.getByRole('dialog', { name: 'Upload a signed study agreement' })
-    const select = upload.getByRole('textbox', { name: label, exact: true })
+    const select = upload.getByRole('combobox', { name: label, exact: true })
     await select.click()
     await ctx.page.getByRole('option', { name: option, exact: true }).click()
     await expect(select).toHaveValue(option)

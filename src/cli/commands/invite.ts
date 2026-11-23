@@ -1,5 +1,6 @@
 import { chromium } from '@playwright/test'
 import { loginAs } from '@/engine/auth'
+import { chromeContext, chromeLaunchOptions } from '@/engine/chrome-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { type InvitedRole, ORG_FOR_ROLE, uniqueQaEmail } from '@/engine/flows/signup'
 import { QaApiClient } from '@/engine/qa-api'
@@ -28,8 +29,8 @@ export async function inviteCommand(opts: Record<string, string>, vars: Vars): P
     const env = opts.pr ? resolvePrEnv(Number(opts.pr), vars) : resolveEnv(opts.env ?? 'qa', vars)
 
     // The endpoint authorizes with an SI-admin Clerk session JWT, which loginAs returns.
-    const browser = await chromium.launch({ channel: 'chrome' })
-    const context = await browser.newContext({ baseURL: env.baseURL })
+    const browser = await chromium.launch(chromeLaunchOptions())
+    const context = await chromeContext(browser, { baseURL: env.baseURL })
     const page = await context.newPage()
     let token: string
     try {

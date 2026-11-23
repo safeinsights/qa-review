@@ -3,14 +3,18 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { checkpoint } from '../engine/flows/accessibility'
 import { clickUntil, waitForHydration } from '../engine/flows/interactions'
 import {
     beginProposal,
     completeSetupAndCaptureId,
+    type DataOrg,
+    DEFAULT_DATA_ORG,
     fillProposal,
     fitStudyTitle,
     generateStudyContent,
     openProposalDashboard,
+    piSelect,
     type StudyContent,
     submitProposal,
 } from '../engine/flows/study'
@@ -48,7 +52,6 @@ import type { RunContext, Step, Suite } from './types'
 // env.ts resolves the pair matching the running env (PR previews reuse qa), and
 // ctx.resultsKey hands back whichever belongs to the currently signed-in role.
 
-const REVIEWER_ORG = 'openstax'
 const CODE_CRITERIA_KEYS = ['proposalAlignment', 'agreementCompliance', 'privacyProtection']
 
 // How long to wait for the external enclave runner to produce results before
@@ -234,6 +237,12 @@ function content(ctx: RunContext): StudyContent {
 function id(ctx: RunContext): string {
     return ctx.state.studyId as string
 }
+// The Data Partner the study is proposed to, and so the org whose /study/... pages the
+// reviewer opens. A suite that targets another partner sets ctx.state.dataOrg before
+// the proposal is created.
+export function dataOrg(ctx: RunContext): DataOrg {
+    return (ctx.state.dataOrg as DataOrg | undefined) ?? DEFAULT_DATA_ORG
+}
 
 export interface StudyLifecycleOptions {
     // The research lab the researcher proposes from. Its Test Lab designation decides
@@ -257,13 +266,18 @@ export interface StudyLifecycleOptions {
     // and delete the study. For a variant whose subject is settled before any code
     // exists, so it need not repeat the IDE, the enclave run and the results review.
     endAtCodeStep?: Step[]
+    // Leave the study in place: no teardown cleanup and no final admin delete.
+    keepStudy?: boolean
 }
 
 // Researcher creates and submits a proposal, leaving its id in ctx.state.studyId. Shared
 // by every suite that needs a freshly submitted proposal to review.
+// `keepStudy` leaves the study out of teardown cleanup, for a suite whose product IS
+// the study it leaves behind.
 export function proposalSubmissionSteps(
     researcherOrg: string,
-    principalInvestigator?: string
+    principalInvestigator?: string,
+    opts: { keepStudy?: boolean } = {}
 ): Step[] {
     return [
         // ---- Researcher: create + submit the proposal (mirrors create-study) ----
@@ -299,9 +313,13 @@ export function proposalSubmissionSteps(
                     ctx.state.study = study
                     // Proceeding to Step 2 creates the study record. Capture + track
                     // its id the instant it exists, so no created study is untracked.
-                    const studyId = await completeSetupAndCaptureId(ctx.page, study.title)
+                    const studyId = await completeSetupAndCaptureId(
+                        ctx.page,
+                        study.title,
+                        dataOrg(ctx)
+                    )
                     ctx.state.studyId = studyId
-                    ctx.trackStudy(studyId)
+                    if (!opts.keepStudy) ctx.trackStudy(studyId)
                 })
             },
         },
@@ -311,15 +329,11 @@ export function proposalSubmissionSteps(
                 ctx.step(async () => {
                     await fillProposal(ctx.page, content(ctx))
                     if (principalInvestigator) {
-                        await ctx.page
-                            .getByRole('textbox', { name: 'Principal Investigator' })
-                            .click()
+                        await piSelect(ctx.page).click()
                         await ctx.page
                             .getByRole('option', { name: principalInvestigator, exact: true })
                             .click()
-                        await expect(
-                            ctx.page.getByRole('textbox', { name: 'Principal Investigator' })
-                        ).toHaveValue(principalInvestigator)
+                        await expect(piSelect(ctx.page)).toHaveValue(principalInvestigator)
                     }
                 }),
         },
@@ -347,7 +361,9 @@ export function proposalSubmissionSteps(
 export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
     const RESEARCHER_ORG = opts.researcherOrg
     const throughCodeStep: Step[] = [
-        ...proposalSubmissionSteps(RESEARCHER_ORG, opts.principalInvestigator),
+        ...proposalSubmissionSteps(RESEARCHER_ORG, opts.principalInvestigator, {
+            keepStudy: opts.keepStudy,
+        }),
         // ---- Reviewer: approve the proposal (gates the code-upload surface) ----
         {
             name: 'Switch to the reviewer account',
@@ -426,7 +442,8 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
         },
         ...(opts.onCodeStepReached ?? []),
     ]
-    if (opts.endAtCodeStep) return [...throughCodeStep, ...opts.endAtCodeStep, ...finishingSteps()]
+    const finish = opts.keepStudy ? [] : finishingSteps()
+    if (opts.endAtCodeStep) return [...throughCodeStep, ...opts.endAtCodeStep, ...finish]
     return [
         ...throughCodeStep,
         {
@@ -651,8 +668,10 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                         .click()
                     // Delete is now gated behind a "Delete file" confirm modal; scope to the
                     // dialog because the row's own trash control shares the accessible name.
-                    await ctx.page
-                        .getByRole('dialog', { name: 'Delete file' })
+                    const deleteDialog = ctx.page.getByRole('dialog', { name: 'Delete file' })
+                    await deleteDialog.waitFor({ state: 'visible' })
+                    await checkpoint('delete file confirm dialog')
+                    await deleteDialog
                         .getByRole('button', { name: 'Delete file', exact: true })
                         .click()
                     await expect(strayRow).toHaveCount(0)
@@ -661,8 +680,12 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await ctx.page.getByRole('button', { name: /Submit code/i }).click()
                     // Scoped to the dialog: the page's own "Submit code for review" button
                     // also matches a bare "Submit code" name.
-                    await ctx.page
-                        .getByRole('dialog', { name: 'Submit code for review?' })
+                    const submitDialog = ctx.page.getByRole('dialog', {
+                        name: 'Submit code for review?',
+                    })
+                    await submitDialog.waitFor({ state: 'visible' })
+                    await checkpoint('submit code confirm dialog')
+                    await submitDialog
                         .getByRole('button', { name: 'Submit code', exact: true })
                         .click()
                     // Submission no longer lands on CodePostSubmissionView and its
@@ -938,7 +961,7 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await keyForm.waitFor({ state: 'visible' })
                     await expect(ctx.page.getByText(/Decrypt to view your outputs/i)).toBeVisible()
                     await fillResultsKey(ctx)
-                    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+                    await ctx.page.getByRole('button', { name: /^view( files)?$/i }).click()
                     // Unlocked phase. The outputs table is the proof the key actually worked —
                     // the banner alone would flip on any state change.
                     await ctx.page
@@ -953,12 +976,12 @@ export function studyLifecycleSteps(opts: StudyLifecycleOptions): Step[] {
                     await expect(keyForm).toHaveCount(0)
                 }),
         },
-        ...finishingSteps(),
+        ...finish,
     ]
 }
 
 // End as admin and delete the study, asserting the delete. Every lifecycle variant ends
-// here, however far through the lifecycle it went.
+// here, however far through the lifecycle it went, unless it keeps its study.
 function finishingSteps(): Step[] {
     return [
         {
@@ -1078,7 +1101,7 @@ async function fixtureFiles() {
 // workspace's own `main.R` in it, and getByRole name matching is substring AND
 // case-insensitive by default, so an unqualified name can match two stars and
 // die on strict mode.
-async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
+export async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
     await clickUntil(
         ctx.page.getByRole('radio', { name: `Set ${fileName} as main file`, exact: true }),
         ctx.page.getByRole('radio', {
@@ -1094,7 +1117,7 @@ async function electMainFile(ctx: RunContext, fileName: string): Promise<void> {
 // computed from, so a cell matched `exact` on the bare filename never matches and
 // times out with the file plainly in the table. `exact` for the same reason as
 // electMainFile: the table can hold `main.R` and `main.r` at once.
-function fileRow(ctx: RunContext, fileName: string) {
+export function fileRow(ctx: RunContext, fileName: string) {
     return ctx.page.getByRole('button', { name: `View ${fileName}`, exact: true })
 }
 
@@ -1143,10 +1166,10 @@ async function ensureOutputsDecrypted(ctx: RunContext): Promise<void> {
     ])
     if (await outputsReady.isVisible().catch(() => false)) return
     await fillResultsKey(ctx)
-    // The submit control is a plain "View" (was "Decrypt Files"). Anchored, so it
+    // The submit control is "View files" for the reviewer and "View" for the researcher (was "Decrypt Files"). Anchored, so it
     // can't drift onto the per-file buttons in the outputs table below, which don't
     // exist until this click succeeds.
-    await ctx.page.getByRole('button', { name: /^view$/i }).click()
+    await ctx.page.getByRole('button', { name: /^view( files)?$/i }).click()
     await outputsReady.waitFor({ state: 'visible', timeout: 20_000 })
 }
 
@@ -1209,7 +1232,7 @@ async function downloadOutputFile(ctx: RunContext, fileName: string): Promise<vo
 }
 
 export async function gotoReview(ctx: RunContext, studyId: string): Promise<void> {
-    await ctx.page.goto(`${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`, {
+    await ctx.page.goto(`${ctx.baseURL}/${dataOrg(ctx)}/study/${studyId}/review`, {
         waitUntil: 'domcontentloaded',
     })
 }
@@ -1220,6 +1243,7 @@ export async function gotoReview(ctx: RunContext, studyId: string): Promise<void
 export async function confirmDialog(ctx: RunContext, confirmName: RegExp): Promise<void> {
     const dialog = ctx.page.getByRole('dialog')
     await dialog.waitFor({ state: 'visible' })
+    await checkpoint(`confirm dialog (${confirmName.source})`)
     for (let attempt = 0; attempt < 3; attempt++) {
         await dialog
             .getByRole('button', { name: confirmName })
@@ -1260,7 +1284,7 @@ export async function submitProposalDecision(
 
 // /review renders the code-review editor directly: the reviewer agreements page it once
 // passed through (OTTER-727) is gone.
-async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
+export async function openCodeReview(ctx: RunContext, studyId: string): Promise<void> {
     await gotoReview(ctx, studyId)
     await ctx.page.getByTestId('code-review-section').waitFor({ state: 'visible' })
     // The criteria radios are server-rendered and controlled: one checked before
@@ -1331,7 +1355,7 @@ async function expandScanDetails(ctx: RunContext): Promise<Locator> {
     return ctx.page.getByTestId('scan-details-body')
 }
 
-async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
+export async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<void> {
     for (const key of CODE_CRITERIA_KEYS) {
         await ctx.page.locator(`input[name="criteria-${key}"][value="${value}"]`).check()
     }
@@ -1342,7 +1366,7 @@ async function setCodeCriteria(ctx: RunContext, value: 'yes' | 'no'): Promise<vo
     }
 }
 
-async function typeCodeFeedback(ctx: RunContext, text: string): Promise<void> {
+export async function typeCodeFeedback(ctx: RunContext, text: string): Promise<void> {
     const feedback = ctx.page
         .getByTestId('code-review-section')
         .locator('[contenteditable="true"]')
@@ -1354,7 +1378,7 @@ async function typeCodeFeedback(ctx: RunContext, text: string): Promise<void> {
 // The code decision shares the proposal decision's shape: one submit button, then a
 // confirm modal whose title/button are keyed to the decision. So the confirm label is
 // per-call rather than fixed — it is what separates an approval from a revision request.
-async function submitCodeReview(
+export async function submitCodeReview(
     ctx: RunContext,
     confirmName: RegExp,
     doneRegex: RegExp
@@ -1494,6 +1518,6 @@ async function waitForResults(ctx: RunContext, studyId: string): Promise<void> {
     }
     throw new Error(
         `Timed out after ${RESULTS_TIMEOUT_MS / 60_000}min waiting for run results on study ${studyId}. ` +
-            `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${REVIEWER_ORG}/study/${studyId}/review`
+            `The qa enclave runner may be slow or down — check ${ctx.baseURL}/${dataOrg(ctx)}/study/${studyId}/review`
     )
 }

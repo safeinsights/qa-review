@@ -5,6 +5,7 @@ import {
     exists,
     isNotFound,
     listReleaseRows,
+    newestPublished,
     publicPlan,
     type ReleasePrs,
     uploadAsset,
@@ -95,7 +96,7 @@ async function plannedRelease(gh: GhRunner, repo: string, tag: string) {
     const plan = readFile(planPath, hint)
     // The same gate the plan session's save runs; it throws listing every problem.
     parsePlanLines(plan, tag, { prs: prs.prs.map(p => p.number) })
-    const newest = (await listReleaseRows(gh, repo)).find(r => !r.draft)?.tag_name
+    const newest = newestPublished(await listReleaseRows(gh, repo))?.tag_name
     if (newest !== prs.previousTag) {
         throw new Error(
             `the plan compares against ${prs.previousTag}, but the latest release is now ` +

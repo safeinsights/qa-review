@@ -14,7 +14,8 @@ export function addMark(marks: Mark[], phase: string, now: number = Date.now()):
 
 export function formatDuration(ms: number): string {
     const minutes = Math.round(ms / 60_000)
-    if (minutes < 1) return '< 1 min'
+    // Not "< 1 min": the jira-comment markdown gate rejects any line with "<".
+    if (minutes < 1) return 'under 1 min'
     if (minutes < 60) return `${minutes} min`
     return `${Math.floor(minutes / 60)} h ${minutes % 60} min`
 }

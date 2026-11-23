@@ -496,7 +496,9 @@ func releaseShared() []string {
 	return append(tools,
 		"Bash(gh pr view:*)",
 		"Bash(gh pr diff:*)",
-		"Bash(qar release-*:*)",
+		"Bash(qar release-status:*)",
+		"Bash(qar release-list:*)",
+		"Bash(qar release-download:*)",
 		"Bash(qar plan-lines:*)",
 		"Bash(qar results-*:*)",
 		"Bash(mkdir:*)",
@@ -511,17 +513,34 @@ func releaseShared() []string {
 }
 
 // releasePlanAllowedTools adds the Agent tool (the plan skill reads each PR in its
-// own subagent) and plan-order, which sorts the plan into run order.
-var releasePlanAllowedTools = append(releaseShared(), "Agent", "Bash(qar plan-order:*)")
+// own subagent), plan-order, which sorts the plan into run order, and the plan's
+// release-* commands. Each release session names its own release-* commands rather
+// than sharing a `qar release-*` wildcard: that wildcard pre-approved release-upload
+// and release-summary (writes to the public release) in the run session, whose
+// skill forbade them only in prose.
+var releasePlanAllowedTools = append(releaseShared(),
+	"Agent",
+	"Bash(qar plan-order:*)",
+	"Bash(qar release-prs:*)",
+	"Bash(qar release-saved:*)",
+	"Bash(qar release-summary:*)",
+	"Bash(qar release-upload:*)",
+)
 
 // releaseRunAllowedTools adds the browser, the login helper, the disposable users the
 // skill uses instead of changing a shared account (session-create-user, invite and
 // totp for a hand-driven signup), deployed-release (a resume checks the env still runs
 // the build the earlier results came from), and cleanup of the studies and users the run
-// creates. Its results go out through `qar release-*` (the release asset, and the private
-// Confluence page that links the FAIL cards), which releaseShared already allows.
+// creates, plus the run's own release-* commands: baseline, progress and result
+// bookkeeping, and release-confluence, which publishes the results to the private
+// Confluence page that links the FAIL cards. It cannot upload to the public release.
 var releaseRunAllowedTools = append(releaseShared(),
 	"mcp__chrome-devtools",
+	"Bash(qar release-baseline:*)",
+	"Bash(qar release-progress:*)",
+	"Bash(qar release-result:*)",
+	"Bash(qar release-results:*)",
+	"Bash(qar release-confluence:*)",
 	"Bash(qar session-login:*)",
 	"Bash(qar session-create-user:*)",
 	"Bash(qar invite:*)",
@@ -2257,19 +2276,19 @@ const managementAppSlug = "safeinsights/management-app"
 // bogus card that sends the validator chasing a ticket that doesn't exist.
 // Anchoring on real boards also lets the match be case-insensitive and accept a
 // space separator, so "otter 644" and "OTTER-644" both resolve.
-// SHRMP is a recurring typo for SHRIMP in real commits; it's listed so those PRs
-// still resolve, and normalizeJiraKey maps it back to the real board.
-var jiraBoards = []string{"OTTER", "SHRIMP", "SHRMP", "SIINFOSEC"}
+// SHRMP is the real board key; people often spell it out as SHRIMP in PR text, so
+// that is matched too and normalizeJiraKey maps it back to SHRMP.
+var jiraBoards = []string{"OTTER", "SHRMP", "SHRIMP", "SIINFOSEC"}
 
 var jiraKeyRE = regexp.MustCompile(
 	`(?i)\b(` + strings.Join(jiraBoards, "|") + `)[-\s](\d+)\b`)
 
 // normalizeJiraKey renders a matched key canonically: uppercase board, hyphen
-// separator, and the SHRMP typo corrected to SHRIMP.
+// separator, and the SHRIMP spelling corrected to the real SHRMP board.
 func normalizeJiraKey(board, number string) string {
 	board = strings.ToUpper(board)
-	if board == "SHRMP" {
-		board = "SHRIMP"
+	if board == "SHRIMP" {
+		board = "SHRMP"
 	}
 	return board + "-" + number
 }
@@ -2784,8 +2803,8 @@ const jiraAccessHint = "Ask a Jira admin to grant your account write access to t
 	jiraProbeProject + " project (add comments, create attachments, transition issues)."
 
 // The project the permission probe runs against. Deliberately NOT jiraBoards: that
-// list exists to MATCH ticket keys in PR text and includes SHRMP, a typo alias, plus
-// SHRIMP — both 404 on /mypermissions (verified against live Jira), which would make
+// list exists to MATCH ticket keys in PR text and includes SHRIMP, a misspelling
+// alias, plus SHRMP — both 404 on /mypermissions (verified against live Jira), which would make
 // the doctor report a failure that says nothing about the user's actual access.
 const jiraProbeProject = "OTTER"
 

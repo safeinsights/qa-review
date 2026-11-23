@@ -1,4 +1,5 @@
 import type { Inventory, InventoryLine } from './inventory'
+import { normalizeJiraKey } from './jira-keys'
 import { STOPPED_EVIDENCE } from './release-run-log'
 import { RESULT_VALUES, type ResultEntry, type ResultValue } from './results'
 
@@ -88,7 +89,10 @@ function isSecurity(line: InventoryLine): boolean {
 // the PR's own card. With `boards`, a key on another board is never taken.
 export function prCards(pr: { title: string; jiraKeys?: string[] }, boards?: string[]): string[] {
     const onBoard = (key: string) => !boards || boards.includes(key.split('-')[0])
-    const inTitle = [...pr.title.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g)].map(m => m[1])
+    // Normalized like jiraKeys, so a title's SHRIMP-n and the fallback agree on SHRMP-n.
+    const inTitle = [...pr.title.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g)].map(m =>
+        normalizeJiraKey(m[1])
+    )
     const own = inTitle.filter(onBoard)
     if (own.length) return [...new Set(own)]
     const first = pr.jiraKeys?.find(onBoard)

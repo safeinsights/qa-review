@@ -16,7 +16,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { GhRunner } from '@/cli/commands/open-access-pr'
-import { listReleaseRows } from '@/engine/github-release'
+import { listReleaseRows, newestPublished } from '@/engine/github-release'
 import { managementAppRepo } from '@/engine/jira-keys'
 import { repoDir } from '@/engine/paths'
 import { createRelease, nextPatch, refuseInAppSession } from '@/engine/release-create'
@@ -44,7 +44,7 @@ async function main() {
     const vars = await loadSettings()
     const repo = managementAppRepo(vars)
     if (!tag) {
-        const latest = (await listReleaseRows(gh, repo)).find(r => !r.draft)
+        const latest = newestPublished(await listReleaseRows(gh, repo))
         console.log(`latest release: ${latest?.tag_name ?? 'none'}`)
         if (latest) console.log(`next patch:     ${nextPatch(latest.tag_name)}`)
         console.log('usage: pnpm release:create --tag <vX.Y.Z> [--dry-run]')

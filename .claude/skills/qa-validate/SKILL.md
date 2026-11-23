@@ -146,14 +146,20 @@ Mark `tested` on the clock. Each line gets exactly one result:
 
 - Only the non-card side of a conflict pair is CONFLICT; the card side is judged
   against the app like any other line.
-- **PM decisions.** Mark a result with `"decision": "<the question>"` when QA
-  cannot decide and the answer changes what should be built:
+- **PM and EM decisions.** Mark a result with `"decision": "<the question>"` when QA
+  cannot decide and the answer changes what should be built. Product questions
+  (for the PM):
   - a conflict where the card and Figma require **different user-visible
     behaviour** (what resets, what persists, what an empty state covers, how a
     sort cycles) — whichever one the app follows, the PM must say which is wanted;
   - an UNCLEAR line where the two readings lead to different results;
   - a scope conflict (one source wants a feature the other marks NOT READY / NOT
     OTTER).
+  Engineering questions (for the EM):
+  - technical scope: a fix needs work outside what the card or its PR covers;
+  - which card owns a fix, when a FAIL could belong to this card or another one;
+  - whether a risk is acceptable: a FAIL or gap you would ship only if the EM
+    accepts it.
   Copy, wording, spacing and visual-only differences are NOT decisions; they
   stay under "Unclear requirements". One decision per root cause: when several
   lines conflict for the same reason ("resets at each stage" on Submitted by and
@@ -163,6 +169,33 @@ Mark `tested` on the clock. Each line gets exactly one result:
   a title, and the result FAIL with a severity. There is no "also observed",
   "also noted" or "minor remark" section anywhere in the report; a finding that
   is not a FAIL does not exist. Something that is not wrong is not recorded.
+- **Search for cards that already cover each FAIL, CONFLICT and UNCLEAR line,
+  before you write the results.** The user asks "is this covered by another
+  card?" before every routing choice, so the answer has to arrive with the
+  findings and not after them. Skip this step only when every line is PASS or
+  NOT TESTED.
+  - **Where to look:** first the card's own issue links, parent epic and any
+    "Related" section. Then `jira_search` in the card's project over the last
+    ~120 days, open and recently closed. Search on the area, the page and
+    component names, the quoted copy, and the field or column name. Use several
+    narrow queries, not one broad one. If the Jira MCP is down, stop and tell
+    the user. Do not search by hand.
+  - **Confirm by the description, not the summary.** Read every plausible
+    candidate. A card covers a line only if it describes the same behaviour on
+    the same screen. Same page with a different symptom is "related", not
+    "covered". If you are not sure, make it an EM decision ("which card owns a
+    fix", above) and do not set `coveredBy`.
+  - **Record it in the results file:** `"coveredBy": "<KEY>"` on a line an
+    existing card covers, `"relatedTo": ["<KEY>", …]` on one that only touches
+    it. In the report, name the key on that line (for a FAIL: "already tracked
+    in <KEY>").
+  - **A covered FAIL is a follow-up that already exists.** It is never filed
+    again, and it does not make the card REJECTED. When every FAIL is covered,
+    the heading is VALIDATED WITH FOLLOW-UPS and lists the covering keys.
+    `followup-advice` skips covered FAILs. Skip Phase 5 when it has none left.
+  - **Tell the user what you found** together with the results: each
+    FAIL/CONFLICT/UNCLEAR line, plus "covered by <KEY> (<status>)",
+    "related: <KEY>" or "no existing card", and the searches you ran.
 - **Write the results** to `.tmp/<CARD>-results.json` as
   `{"results":[{"id","result","evidence","severity?","area?","approvedBy?"}]}`:
   one entry per `check`/`absence` line (context lines take none); `evidence` is
@@ -193,7 +226,7 @@ Mark `posted` after the comment is up. Write in the conversational voice (see
 "Voice" under "Posting findings").
 
 ### Phase 5: Route the failures
-Skip when there is no FAIL. Otherwise give each FAIL a severity — **blocker** (a
+Skip when there is no FAIL, or when an existing card covers every FAIL. Otherwise give each FAIL a severity — **blocker** (a
 card-text criterion broken, wrong data, a user cannot finish the flow), **major**
 (a state or behaviour a Figma annotation specifies is missing), **minor** (copy,
 visual, component) — and an **area** (a short label; FAILs that one fix would
@@ -435,11 +468,11 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    → <q> decisions needed from {{mention}} (below). Follow-up cards: <keys or none>.
    <!-- q = results carrying "decision". When q = 0: "→ No decisions needed. Follow-up cards: <keys or none>." and no {{mention}} anywhere -->
 
-   ### Decisions needed from PM
-   <!-- Omit the section AND --mention when no result carries "decision". Every decision is listed here in full, in order; never collapse any of them into an {expand} block. -->
+   ### Decisions needed
+   <!-- Omit the section AND --mention when no result carries "decision". Every decision is listed here in full, in order; never collapse or shorten any of them. -->
    Reply on this card with the item number and your answer.
 
-   **1. <The question, as a full sentence the PM can answer with yes or no.>** The card says <what the card requires>. The Figma note on <frame> says <what Figma requires>. The app <what it does now>, as <the card / Figma> says. I recommend <answer>: <one reason>.
+   **1. <The question, as a full sentence the decider can answer with yes or no.>** The card says <what the card requires>. The Figma note on <frame> says <what Figma requires>. The app <what it does now>, as <the card / Figma> says. I recommend <answer>: <one reason>.
 
    **2. <Question for an UNCLEAR line.>** The card says "<sentence>". This can mean <reading one> or <reading two>. The app does <reading>. I recommend <reading>: <one reason>.
 
@@ -455,10 +488,9 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
    ### Not tested
    **<title> — NOT TESTED (confirmed by <user>).** <reason>.
 
-   {expand:Passed (<a>)}
+   ### Passed (<a>)
    **<card section>**
    - <title>: <evidence>
-   {expand}
 
    **Setup:** <state built: studies created, decisions submitted — and that they were deleted.>
    <!-- qar jira-comment adds the "Attachments:" line and "Posted by qa-review <version>" itself; do not write them. -->
@@ -470,9 +502,9 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      title from the inventory is the name of the line everywhere in the report.
    - **One item per line.** Each decision, FAIL and PASS row starts on its own line;
      a blank line separates decisions. Never join items into one paragraph.
-   - **"Decisions needed from PM" is the most important section of the report.**
-     The PM reads it cold, with two minutes. Every decision appears there in
-     full and in order; none is collapsed, cut, or moved to an expand block.
+   - **"Decisions needed" is the most important section of the report.**
+     The decider reads it cold, with two minutes. Every decision appears there in
+     full and in order; none is collapsed, cut, or moved to another section.
    - **A decision is a short paragraph of full sentences.** It carries every
      fact the PM needs to answer, and nothing else: the question, what the card
      asks for, what Figma asks for, what the app does now, and your
@@ -490,23 +522,33 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
      asked to rule on it.
    - There is no "Also observed" section. See Phase 3: an observation is a FAIL
      line or it is nothing.
-   - Pass `--mention <reporter accountId>` (from `jira_get_issue` → `reporter.account_id`)
-     ONLY when "Decisions needed" is non-empty, so the PM is notified exactly when
-     they have something to answer.
+   - Pass `--mention <accountId>` of the decider (Iris for product questions,
+     Nathan for engineering ones; see "Transition the ticket" below) ONLY when
+     "Decisions needed" is non-empty, so they are notified exactly when they have
+     something to answer. Heading line 5 names them: "→ <q> decisions needed from
+     {{mention}} (below)". Do not default to the card's reporter, who is often a
+     developer. A card with decisions is not moved.
    - **Evidence, not assertion**: quoted strings, measured pixels, state transitions.
    - Every inventory line appears exactly once, under one heading. Never drop one;
      `qar results-check` must have printed `ok` for this exact results file.
    - Any FAIL makes the heading REJECTED — unless the user chose follow-up cards,
-     in which case it is VALIDATED WITH FOLLOW-UPS and the keys are listed.
+     or an existing card covers it (`coveredBy`). Then it is VALIDATED WITH
+     FOLLOW-UPS and the keys are listed.
    - Each Figma-sourced line names page, frame and category with a node link.
-   - Never put `{{image:N}}` inside the `{expand:…}…{expand}` block — images are split out before expand blocks are parsed and the block would break. Screenshots belong with FAIL lines; PASS rows carry text evidence only.
-   - Omit a section (and the expand block) when it has nothing in it.
+   - "Passed" is a plain `### Passed (<a>)` heading, not a `{expand:…}` block: the
+     jira-comment markdown gate rejects any line with braces, so an expand block
+     fails the post. PASS rows carry text evidence only; screenshots belong with
+     FAIL lines.
+   - Omit a section when it has nothing in it.
    - When no result carries `decision`, line 5 reads "No decisions needed", the
      `{{mention}}` token is removed, and `--mention` is not passed — even if
      "Unclear requirements" is long.
 
    If you post something wrong, remove it yourself rather than leaving it for the
-   user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`.
+   user: `qar jira-delete-comment --issue <CARD> --ids <id1,id2>`. That leaves the
+   deleted comment's screenshots and `--attach` files on the card; find their ids
+   with `qar jira-attachments --issue <CARD>` and remove them with
+   `qar jira-delete-attachment --issue <CARD> --ids <id1,id2>`.
 
    **Voice: conversational.** First person, full sentences, says what you tried
    and why it matters, one short paragraph per finding. Example FAIL line:
@@ -527,22 +569,46 @@ When the user presses **Validated** / **Rejected** (or asks you in the session):
 4. **Transition the ticket** — resolve the transition by NAME (ids vary) via
    `jira_get_transitions` then `jira_transition_issue`. **Which move depends on the
    TARGET you validated against**, so establish that first (it's in the prompt as
-   `--env <name>` or `--pr <n>`):
+   `--env <name>` or `--pr <n>`). If any result carries a `decision`, the
+   `decision` row wins over every other row, whatever the verdict.
 
    | Target | Verdict | Move to | Assignee |
    |---|---|---|---|
-   | **QA** | Validated | **"Final Review - EM & PM"** | un-assign |
+   | **QA or Staging** | Any result carries a `decision` | **no transition: stays where it is** | leave as-is; tag the decider (below) |
+   | **QA** | Validated | **"Ready for Production"** | un-assign |
    | **Staging** | Validated | **"Done"** | un-assign |
    | **QA or Staging** | Rejected | **"To Do"** | assign to the last person who worked it (below) |
    | **PR preview / production** | either | **post NOTHING to Jira** | leave as-is |
 
+   - **A passed QA card goes to "Ready for Production", not "Final Review - EM &
+     PM".** The team dropped the Final Review step on Nov 4 2026. A card that
+     reaches QA with no open question is ready to ship once QA passes it.
+   - **A card waiting on a PM or EM decision stays where it is** (QA Review on
+     QA), whether the verdict is Validated or Rejected. Moving it on
+     would ship behaviour nobody has agreed to, and moving it back to To Do would
+     send a developer after a requirement that isn't settled yet. Post the comment
+     with its "Decisions needed" section, tag the person who owns the question, and
+     leave the status and assignee alone. Decide the next move once they answer.
+     Tag the decider with `--mention <accountId>`:
+     - **Iris G.** (PM, `62a8e164bfade2006964f268`) for product questions:
+       user-visible behaviour, card-vs-Figma conflicts, scope against the design.
+     - **Nathan Stitt** (EM, `62bb2f6037780d89a35118dd`) for engineering
+       questions: technical scope, which card owns a fix, whether a risk is
+       acceptable.
+     - `--mention` takes ONE account id. When one comment holds both kinds of
+       question, mention the person who owns most of them, name the other in the
+       text of their decision, and tell the user that the second person was not
+       notified, so they can ping them. In each decision, say whose call it is.
+       A mention to a wrong id notifies nobody, and nothing tells you it failed, so
+       copy the id from this list. Don't retype it.
    - **A PR preview (`--pr <n>`) or production proves nothing about the shared
      envs** — a preview is a throwaway deployment with no seeded data, and
      production isn't where work gets signed off. Post NOTHING to Jira: no
      comment, no cards, no transition, no assignee change. Show the full report (and
      any follow-up drafts) to the user in the session. Tell them that moving the card
      needs a QA or Staging validation.
-   - **VALIDATED WITH FOLLOW-UPS** moves the card as Validated does.
+   - **VALIDATED WITH FOLLOW-UPS** moves the card as Validated does: on QA, to
+     "Ready for Production".
    - **Un-assign** with `jira_update_issue(fields='{"assignee": null}')`.
 
    **Finding who to assign on rejection.** The card is usually already un-assigned

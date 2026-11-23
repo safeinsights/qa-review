@@ -1,11 +1,8 @@
 import { onGuiGone } from '@/engine/gui-parent'
-import { dispatchSessionAction } from '@/engine/session-rpc'
+import { dispatchSessionActionUntilDone } from '@/engine/session-rpc'
 import type { Role } from '@/engine/types'
 
 const ROLES: readonly Role[] = ['admin', 'researcher', 'reviewer']
-
-// A whole suite can take as long as the enclave run inside it.
-const RUN_SUITE_TIMEOUT_MS = 60 * 60_000
 
 // `qar session-run-suite --suite <name> --role <role>` — run a suite on a running
 // `qar session`'s held, streamed browser, so it shows in the GUI's browser pane. The
@@ -17,14 +14,15 @@ export async function sessionRunSuiteCommand(opts: Record<string, string>): Prom
     if (!suite || suite === 'true') throw new Error('session-run-suite requires --suite <name>')
     const role = opts.role as Role
     if (!ROLES.includes(role)) throw new Error(`--role must be one of ${ROLES.join(', ')}`)
-    // The session stops with the app; do not wait out the hour for its answer.
+    // The session stops with the app; do not wait on it once the app is gone.
     const unwatch = onGuiGone(() => {
         process.stderr.write('The QA Runner app is gone; the baseline stops with it.\n')
         process.exit(1)
     })
-    const result = await dispatchSessionAction(
+    // No client deadline. Giving up early would report the baseline finished while the
+    // session still drives the page; the wait ends when the session (or the app) does.
+    const result = await dispatchSessionActionUntilDone(
         { action: 'run-suite', suite, role },
-        RUN_SUITE_TIMEOUT_MS,
         `run ${suite}`
     )
     unwatch()

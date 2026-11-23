@@ -38,6 +38,31 @@ describe('followup-advice', () => {
         expect(JSON.parse(out[0]).option).toBe('send-back')
     })
 
+    it('skips FAILs that an existing card covers', async () => {
+        const input = writeInput(
+            JSON.stringify({
+                results: [
+                    {
+                        id: 'a',
+                        result: 'FAIL',
+                        severity: 'blocker',
+                        area: 'x',
+                        evidence: 'y',
+                        coveredBy: 'OTTER-1',
+                    },
+                    { id: 'b', result: 'FAIL', severity: 'minor', area: 'x', evidence: 'y' },
+                ],
+            })
+        )
+        const out: string[] = []
+        vi.spyOn(process.stdout, 'write').mockImplementation(s => {
+            out.push(String(s))
+            return true
+        })
+        await followupAdviceCommand({ input })
+        expect(JSON.parse(out[0]).option).toBe('one-card')
+    })
+
     it('reads {fails:[…]} from --input and prints the recommendation', async () => {
         const input = writeInput(
             JSON.stringify({ fails: [{ id: 'a', severity: 'blocker', area: 'x' }] })

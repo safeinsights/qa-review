@@ -98,6 +98,28 @@ describe('runEngine', () => {
         expect(step?.name).toBe('terse step')
     })
 
+    it('ctx.setting reads the merged settings the run was given', async () => {
+        const d = deps({ vars: { ...ENV_VARS, QAR_DATA_ORG: 'mars-u' } })
+        const seen: (string | undefined)[] = []
+        const suite: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['admin'],
+            steps: [
+                {
+                    name: 'read settings',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            seen.push(ctx.setting('QAR_DATA_ORG'), ctx.setting('QAR_UNSET'))
+                        }),
+                },
+            ],
+        }
+        const result = await runEngine({ suite: 'demo', env: 'qa', role: 'admin' }, d, suite)
+        expect(result.ok).toBe(true)
+        expect(seen).toEqual(['mars-u', undefined])
+    })
+
     it('records a throwing name-less ctx.step as a failure under the step name', async () => {
         const d = deps()
         const suite: Suite = {
@@ -234,6 +256,118 @@ describe('runEngine', () => {
         expect(result.cleanup.ok).toBe(false)
         expect(result.cleanup.failed).toEqual(['cleanup-call-threw'])
         expect(result.cleanup.error).toBe('boom')
+    })
+
+    // The QA delete endpoints accept only an SI admin, and a Clerk JWT lives about a
+    // minute, so teardown must not reuse the token of whichever role signed in last.
+    describe('teardown signs in as admin before cleaning up', () => {
+        const tracksThenFailsAsResearcher: Suite = {
+            name: 'demo',
+            description: '',
+            roles: ['researcher'],
+            steps: [
+                {
+                    name: 'create then fail',
+                    run: ctx =>
+                        ctx.step(async () => {
+                            ctx.trackStudy('s1')
+                            throw new Error('expected X to be visible')
+                        }),
+                },
+            ],
+        }
+        const tokenOf = (client: unknown) => (client as { authToken: string }).authToken
+
+        it('deletes with a fresh admin token after a run that failed as another role', async () => {
+            let tokenAtCleanup = ''
+            const login = vi.fn(async (_h: unknown, _e: unknown, role: string) => `jwt-${role}`)
+            const d = deps({
+                login,
+                runCleanup: vi.fn(async client => {
+                    tokenAtCleanup = tokenOf(client)
+                    return { ok: true, deleted: ['study:s1'], failed: [] }
+                }),
+            })
+            const result = await runEngine(
+                { suite: 'demo', env: 'qa', role: 'researcher' },
+                d,
+                tracksThenFailsAsResearcher
+            )
+            expect(result.ok).toBe(false)
+            expect(login.mock.calls.map(c => c[2])).toEqual(['researcher', 'admin'])
+            expect(tokenAtCleanup).toBe('jwt-admin')
+            expect(result.cleanup.ok).toBe(true)
+        })
+
+        it('clears the signed-in session before the admin sign-in, as loginAs does', async () => {
+            // Signing in on a page still signed in as the last role trips the app's
+            // auto-signout race; losing it would fall back to the researcher token.
+            const log: string[] = []
+            const d = deps({
+                openBrowser: vi.fn(async () => ({
+                    page: {
+                        context: () => ({
+                            clearCookies: vi.fn(async () => {
+                                log.push('clearCookies')
+                            }),
+                        }),
+                        evaluate: vi.fn(async () => {
+                            log.push('clearStorage')
+                        }),
+                        url: () => 'https://app.qa.safeinsights.org/',
+                        on: vi.fn(),
+                        off: vi.fn(),
+                    } as never,
+                    cookieHeader: 'sid=abc',
+                    close: vi.fn(async () => {}),
+                })),
+                login: vi.fn(async (_h, _e, role) => {
+                    log.push(`login:${role}`)
+                    return `jwt-${role}`
+                }),
+            })
+            await runEngine(
+                { suite: 'demo', env: 'qa', role: 'researcher' },
+                d,
+                tracksThenFailsAsResearcher
+            )
+            const admin = log.indexOf('login:admin')
+            expect(log.slice(admin - 2, admin + 1)).toEqual([
+                'clearCookies',
+                'clearStorage',
+                'login:admin',
+            ])
+        })
+
+        it('does not sign in again when the run created nothing', async () => {
+            const d = deps({ login: vi.fn(async (_h, _e, role) => `jwt-${role}`) })
+            await runEngine({ suite: 'demo', env: 'qa', role: 'researcher' }, d, passingSuite)
+            expect(d.login).toHaveBeenCalledOnce()
+        })
+
+        it('still tries to clean up, and says why, when the admin sign-in fails', async () => {
+            let tokenAtCleanup = ''
+            const d = deps({
+                login: vi.fn(async (_h, _e, role) => {
+                    if (role === 'admin') throw new Error('OTP rejected')
+                    return `jwt-${role}`
+                }),
+                runCleanup: vi.fn(async client => {
+                    tokenAtCleanup = tokenOf(client)
+                    return { ok: false, deleted: [], failed: ['study:s1'] }
+                }),
+            })
+            const result = await runEngine(
+                { suite: 'demo', env: 'qa', role: 'researcher' },
+                d,
+                tracksThenFailsAsResearcher
+            )
+            expect(d.runCleanup).toHaveBeenCalledOnce()
+            expect(tokenAtCleanup).toBe('jwt-researcher')
+            expect(result.cleanup.error).toMatch(
+                /could not sign in as admin to clean up: OTP rejected/
+            )
+        })
     })
 
     it('assigns the cleanup failure category on a passing run whose cleanup failed', async () => {

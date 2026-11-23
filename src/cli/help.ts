@@ -18,8 +18,10 @@ export type CommandName = (typeof COMMANDS)[number]['name']
 export const COMMANDS = [
     {
         name: 'run',
-        usage: 'qar run --suite <name> (--env <env> | --pr <n>) [--role <role>] [--headed] [--json]',
+        usage: 'qar run --suite <name> (--env <env> | --pr <n>) [--role <role>] [--data-org <slug>] [--headed] [--json]',
         summary: 'Run a suite against an environment or a PR preview.',
+        details:
+            '--data-org picks the Data Partner a study suite proposes to (openstax, the default, or mars-u). Same as the QAR_DATA_ORG setting.',
     },
     {
         name: 'login',
@@ -221,6 +223,15 @@ export const COMMANDS = [
         summary: 'Delete Jira comments (404 = already gone = success).',
     },
     {
+        name: 'jira-delete-attachment',
+        usage: 'qar jira-delete-attachment --issue <KEY> --ids <id1,id2>',
+        summary: "Delete attachments from a card, e.g. a deleted comment's leftover uploads.",
+        details:
+            'Deleting a comment does not delete the files it uploaded. Ids come from ' +
+            'qar jira-attachments. An id that is not on --issue is reported and left alone, ' +
+            "since Jira's delete endpoint would otherwise remove it from whatever card holds it.",
+    },
+    {
         name: 'jira-attachments',
         usage: 'qar jira-attachments --issue <KEY> [--download] [--dir <path>]',
         summary: "List a card's attachments; --download saves the text ones under .tmp/.",
@@ -230,12 +241,14 @@ export const COMMANDS = [
     },
     {
         name: 'jira-create-issue',
-        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates]',
+        usage: 'qar jira-create-issue --project <KEY> --summary <text> --body-file <path.md> [--type Bug] [--images a.png,b.png] [--link <PARENT>] [--link-type Relates] [--team <ID>]',
         summary:
             'Create a follow-up card with an ADF description, inline screenshots, and a link to its parent.',
         details:
-            'Checks the issue type and link type exist before creating anything. Body is ' +
-            'Markdown with {{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
+            'Checks the issue type and link type exist before creating anything. The Team ' +
+            "is --team, else the --link parent's; a project whose create screen requires " +
+            'Team is refused up front when neither gives one. Body is Markdown with ' +
+            '{{image:N}} placeholders, like jira-comment. Prints {"key","url"}.',
     },
     {
         name: 'verdict-posted',

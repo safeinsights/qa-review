@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises'
 import { chromium } from '@playwright/test'
 import { loginAs } from '@/engine/auth'
+import { chromeContext, chromeLaunchOptions } from '@/engine/chrome-launch'
 import { resolveEnv, resolvePrEnv } from '@/engine/env'
 import { publicKeyFromPrivatePem } from '@/engine/public-key'
 import { QaApiClient, type QaUserUpdate } from '@/engine/qa-api'
@@ -82,8 +83,8 @@ export async function fixAccountCommand(opts: Record<string, string>, vars: Vars
     }
 
     // The endpoints authorize with an SI-admin Clerk session JWT, which loginAs returns.
-    const browser = await chromium.launch({ channel: 'chrome' })
-    const context = await browser.newContext({ baseURL: env.baseURL })
+    const browser = await chromium.launch(chromeLaunchOptions())
+    const context = await chromeContext(browser, { baseURL: env.baseURL })
     const page = await context.newPage()
     let token: string
     try {

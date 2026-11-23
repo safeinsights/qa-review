@@ -70,7 +70,7 @@ function fakeGh(f: Fake = {}) {
             })
         }
         if (endpoint.startsWith('repos/o/app/releases?')) {
-            return JSON.stringify([{ tag_name: f.newest ?? 'v1.6.9+a', body: '', draft: false }])
+            return JSON.stringify({ tag_name: f.newest ?? 'v1.6.9+a', body: '', draft: false })
         }
         if (endpoint === 'repos/o/app/git/ref/tags/v1.7.0') {
             if (f.tagSha) return 'x'

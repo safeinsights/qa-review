@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
     assertUnderReleaseDir,
     collectReleasePrs,
+    compareBaseTags,
     localPlanDiffers,
     previousTag,
     prNumbersFromBody,
@@ -15,7 +16,7 @@ import {
 } from '@/engine/github-release'
 import { releaseDir } from '@/engine/release-paths'
 
-const BOARDS = ['OTTER', 'SHRIMP', 'SHRMP', 'SIINFOSEC']
+const BOARDS = ['OTTER', 'SHRMP', 'SHRIMP', 'SIINFOSEC']
 
 describe('prNumbersFromSubjects', () => {
     it('reads merge commits and squash commits, once each, in order', () => {
@@ -67,10 +68,12 @@ function fakeGh(calls: string[][]) {
         calls.push(args)
         const joined = args.join(' ')
         if (joined.startsWith('api repos/r/releases?')) {
-            return JSON.stringify([
+            return [
                 { tag_name: 'v2', body: '| PR # |\n|---|\n| #10 |\n| #99 |' },
                 { tag_name: 'v1', body: '' },
-            ])
+            ]
+                .map(r => JSON.stringify(r))
+                .join('\n')
         }
         if (joined.includes('/compare/v1...v2')) {
             return ['Merge pull request #10 from x', 'Otter 802 squash (#11)'].join('\n')
@@ -104,6 +107,19 @@ function fakeGh(calls: string[][]) {
         throw new Error(`unexpected gh ${joined}`)
     }
 }
+
+describe('compareBaseTags', () => {
+    it('skips drafts and prereleases as a base but keeps the tag under test', () => {
+        const rows = [
+            { tag_name: 'v3', body: '', draft: true },
+            { tag_name: 'v2', body: '', prerelease: true },
+            { tag_name: 'v1.9', body: '', draft: true },
+            { tag_name: 'v1', body: '' },
+        ]
+        expect(previousTag(compareBaseTags(rows, 'v3'), 'v3')).toBe('v1')
+        expect(compareBaseTags(rows, 'v2')).toEqual(['v2', 'v1'])
+    })
+})
 
 describe('collectReleasePrs', () => {
     it('derives the set from the compare and reports the body diff', async () => {
@@ -166,10 +182,12 @@ describe('collectReleasePrs', () => {
         const base = fakeGh(calls)
         const gh = async (args: string[]) =>
             args.join(' ').startsWith('api repos/r/releases?')
-                ? JSON.stringify([
+                ? [
                       { tag_name: 'v2', body: '## Related Releases\n\n## What changed\n' },
                       { tag_name: 'v1', body: '' },
-                  ])
+                  ]
+                      .map(r => JSON.stringify(r))
+                      .join('\n')
                 : base(args)
         const result = await collectReleasePrs(gh, 'r', 'v2', BOARDS)
         expect(result.notesMissing).toEqual([])
@@ -219,7 +237,13 @@ describe('releaseStatus', () => {
         fs.mkdirSync(dir, { recursive: true })
         fs.writeFileSync(path.join(dir, 'plan.md'), 'local plan')
         fs.writeFileSync(path.join(dir, 'results-staging.json'), '{}')
+        // The plan a run tested: a status check must leave it for release-confluence.
+        fs.mkdirSync(path.join(dir, 'remote'))
+        fs.writeFileSync(path.join(dir, 'remote', 'testing-plan.md'), 'plan as run')
         const status = await releaseStatus(gh, 'r', 'v2', dir)
+        expect(fs.readFileSync(path.join(dir, 'remote', 'testing-plan.md'), 'utf8')).toBe(
+            'plan as run'
+        )
         expect(status.exists).toBe(true)
         expect(status.canUpload).toBe(true)
         expect(status.assets.map(a => a.name)).toEqual(['testing-plan.md'])

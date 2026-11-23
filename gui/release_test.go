@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -201,6 +202,22 @@ func TestReleaseAllowlistsAreNarrow(t *testing.T) {
 			t.Errorf("%s belongs to the run session only", tool)
 		}
 	}
+	for name, list := range lists {
+		if strings.Contains(","+strings.Join(list, ",")+",", ",Bash(qar release-*:*),") {
+			t.Errorf("%s list pre-approves every qar release-* command", name)
+		}
+	}
+	// The public release is written only from the plan session.
+	for _, tool := range []string{"Bash(qar release-upload:*)", "Bash(qar release-summary:*)", "Bash(qar release-prs:*)"} {
+		if !strings.Contains(plan, ","+tool+",") || strings.Contains(run, ","+tool+",") {
+			t.Errorf("%s belongs to the plan session only", tool)
+		}
+	}
+	for _, tool := range []string{"Bash(qar release-baseline:*)", "Bash(qar release-progress:*)", "Bash(qar release-result:*)", "Bash(qar release-results:*)", "Bash(qar release-confluence:*)"} {
+		if !strings.Contains(run, ","+tool+",") || strings.Contains(plan, ","+tool+",") {
+			t.Errorf("%s belongs to the run session only", tool)
+		}
+	}
 	if !strings.Contains(plan, ",Bash(qar plan-order:*),") || strings.Contains(run, ",Bash(qar plan-order:*),") {
 		t.Error("plan-order belongs to the plan session only: the run tests the asset as uploaded")
 	}
@@ -219,7 +236,17 @@ func TestReleaseSessionsDenyDirectWrites(t *testing.T) {
 	if denied == "" {
 		t.Fatal("release session args lack --disallowedTools")
 	}
-	want := []string{"Bash(gh release:*)", "Bash(gh api:*)", "Bash(gh pr merge:*)", "Bash(gh pr close:*)", "Bash(gh issue:*)"}
+	// Without it, user-level MCP servers load alongside the session's own, with write
+	// tools the deny list does not name.
+	if !slices.Contains(args, "--strict-mcp-config") {
+		t.Error("release session args lack --strict-mcp-config")
+	}
+	want := []string{
+		"Bash(gh release:*)", "Bash(gh api:*)", "Bash(gh auth:*)", "Bash(gh pr merge:*)",
+		"Bash(gh pr close:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)",
+		"Bash(gh pr edit:*)", "Bash(gh pr create:*)", "Bash(gh issue:*)", "Bash(gh gist:*)",
+		"Bash(gh repo:*)", "Bash(curl:*)",
+	}
 	for _, server := range knownJiraServers {
 		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
 			want = append(want, mcpToolName(server, tool))
