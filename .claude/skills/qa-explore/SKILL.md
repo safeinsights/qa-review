@@ -71,8 +71,16 @@ needless permission prompts and noise:
    `qar run --suite <name> --role <role> (--env <name> | --pr <n>)`
    Read failures, fix the selectors/steps in the `.ts`, and re-run until green. Tell
    the user when it passes.
-6. **Clean up** anything you created while exploring:
-   `qar cleanup (--env <name> | --pr <n>) --studies <ids> --users <ids>`
+6. **Clean up** anything you created while exploring. Cleanup needs an **admin**
+   Clerk token, which lasts about a minute: with the browser signed in as admin
+   (`qar session-login --role admin`), save one with chrome-devtools
+   `evaluate_script` and `filePath: ".tmp/admin-token.json"`:
+   ```js
+   async () => (await window.Clerk.session.getToken({ skipCache: true })) ?? ''
+   ```
+   then run
+   `qar cleanup (--env <name> | --pr <n>) --token-file .tmp/admin-token.json --studies <ids> --users <ids>`
+   and delete the token file.
 
 ## Rules
 - Drive the EXISTING browser via chrome-devtools MCP; never open your own.

@@ -215,15 +215,18 @@ For each line, skip `BASELINE` (Phase 2 recorded it):
 Last, the `> Last:` step. Run `qar release-progress --tag <tag> --env <env> --step cleanup --note "Deleting what the run created"`,
 then delete everything in `created-<env>.json`. Sign in as
 admin (`qar session-login --role admin`), read an admin token in the browser
-with `evaluate_script`, and give the tool a `filePath` under
-`.tmp/release/<tag>/` so the token is not printed:
+with `evaluate_script`, and give the tool `filePath:
+".tmp/release/<tag>/admin-token.json"` so the token is not printed:
 ```js
 async () => (await window.Clerk.session.getToken({ skipCache: true })) ?? ''
 ```
-Run `qar cleanup --env <env> --token <jwt> --studies <ids> --users <ids>` with the
-token from that file, then delete the file. The token lasts about a minute, so
-read it just before the cleanup. A 404 means already deleted. Report any id that
-did not delete, by name. Leave data you did not create (for example the
+Run `qar cleanup --env <env> --token-file .tmp/release/<tag>/admin-token.json
+--studies <ids> --users <ids>`, then delete the file. Pass the file, never the
+token itself: `--token <jwt>` puts it in the transcript. The token lasts about a
+minute, so read it just before the cleanup. The route's own 404 means already
+deleted. Report any id that did not delete, by name, with the reason from
+`errors` (401: token expired, read a fresh one; 403 `is not a QA account`: the QA
+routes will never delete it). Leave data you did not create (for example the
 baseline's study) unless the runner tells you to delete it.
 
 ### When the runner stops the run early
