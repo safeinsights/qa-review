@@ -638,18 +638,26 @@ while it's logged in as **admin**:
 1. **Be logged in as admin.** If the session isn't already, run
    `qar session-login --role admin` (studies/users delete fine as admin; the study's
    owner FK means studies are removed before users automatically).
-2. **Read a fresh token** from the authenticated page with the chrome-devtools MCP
-   `evaluate_script` (same call the engine uses, `Clerk.session.getToken`):
+2. **Save a fresh token to a file** with the chrome-devtools MCP `evaluate_script`
+   and `filePath: ".tmp/admin-token.json"`, so the token is never printed (same call
+   the engine uses, `Clerk.session.getToken`):
    ```js
    async () => (await window.Clerk.session.getToken({ skipCache: true })) ?? ''
    ```
-   (Clerk hydrates a beat after login — if it returns empty, wait ~1s and retry.)
-3. **Delete**, passing that token:
-   `qar cleanup --env <env> --token <jwt> --studies <ids> --users <ids>`
-   (`--pr <n>` instead of `--env` for a PR target. Omit whichever of
-   `--studies`/`--users` you don't need.) It reports per-id JSON; a 404 counts as
-   already-gone (success). Only 403/500 mean a real failure — if you get 403, the
-   token wasn't an admin one (re-read it while logged in as admin).
+   (Clerk hydrates a beat after login — if it saves an empty string, wait ~1s and
+   retry.) The token lasts about a minute, so read it just before step 3.
+3. **Delete**, passing that file:
+   `qar cleanup --env <env> --token-file .tmp/admin-token.json --studies <ids> --users <ids>`
+   then delete the token file. (`--pr <n>` instead of `--env` for a PR target. Omit
+   whichever of `--studies`/`--users` you don't need; a user can be named by id or
+   email.) A malformed id is refused before anything is sent. It reports per-id
+   JSON; the route's own 404 counts as already-gone (success). Any other failure
+   carries the server's reason in `errors`:
+   - **401**: the token is missing or expired. Save a fresh one and re-run.
+   - **403 `admin access required`**: the token isn't an admin one. Re-read it
+     while signed in as admin.
+   - **403 `… is not a QA account`**: the study's researcher (or the user) has no
+     `qa-` email, so the QA routes will never delete it. Tell the user.
 
 Never tell the user "cleanup needs a token I don't have" — fetch it as above.
 

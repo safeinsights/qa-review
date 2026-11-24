@@ -30,9 +30,16 @@ export const COMMANDS = [
     },
     {
         name: 'cleanup',
-        usage: 'qar cleanup (--env <env> | --pr <n>) --token <jwt> [--studies <ids>] [--users <ids>]',
+        usage: 'qar cleanup (--env <env> | --pr <n>) (--token <jwt> | --token-file <path>) [--studies <ids>] [--users <ids>]',
         summary: 'Delete test studies/users via the QA endpoints.',
-        details: 'Needs an ADMIN Clerk session JWT; a 404 counts as already-gone.',
+        details: [
+            'Needs an ADMIN Clerk session JWT (~60s life). --token-file keeps it out of the',
+            'transcript; it takes a bare token or the JSON string evaluate_script saves.',
+            'Studies take UUIDs; users UUIDs or emails. A malformed id is refused before',
+            "anything is sent. A 404 counts as already-gone only when it is the route's own",
+            '"not found"; an HTML 404 (route missing) is a failure. Failures carry the',
+            'server\'s reason in "errors" (a 403 is "not admin" OR "not a qa- account").',
+        ].join('\n'),
     },
     {
         name: 'codegen',
