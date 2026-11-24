@@ -42,6 +42,11 @@ tag compare (number, title, author, Jira keys, files, body), and `notesMissing` 
 PRs the release notes omit. The release page is NOT the source: v1.6.9 listed 43
 of 63 PRs. If `notesMissing` is not empty, the Technical appendix must list them.
 
+The tag may have **no GitHub release yet** (the `release-create` skill runs these
+phases before it publishes one). Then `release-prs` compares the latest release
+with the tag (or with main's current commit, recorded as `head` in `prs.json`),
+and `notesMissing` is empty. The plan is written the same way.
+
 ## Phase 2: one subagent per PR
 Dispatch subagents with the Agent tool, **6 at a time**, one per PR. Each one gets
 the PR number, the tag, the repo (the `MANAGEMENT_APP_REPO` value in

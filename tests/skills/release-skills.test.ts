@@ -6,7 +6,7 @@ import { ROLES, STAGES } from '@/engine/plan-order'
 
 // A skill that names a qar command that does not exist sends the session into a
 // retry loop. This pins every `qar <command>` in both release skills to help.ts.
-const SKILLS = ['qa-release-plan', 'qa-release-run']
+const SKILLS = ['qa-release-plan', 'qa-release-run', 'release-create']
 
 describe.each(SKILLS)('%s', skill => {
     const file = path.resolve(__dirname, `../../.claude/skills/${skill}/SKILL.md`)
@@ -108,6 +108,29 @@ describe('qa-release-plan', () => {
     it('sorts with plan-order after writing, after edits, and before saving', () => {
         expect(src.match(/qar plan-order/g)?.length).toBeGreaterThanOrEqual(3)
         expect(src).toMatch(/do not sort by hand/)
+    })
+})
+
+// The only write to the public repo is the script, which gates the plan and strips
+// the Security section; a session-run gh call would do neither.
+describe('release-create', () => {
+    const src = fs.readFileSync(
+        path.resolve(__dirname, '../../.claude/skills/release-create/SKILL.md'),
+        'utf8'
+    )
+
+    it('publishes only through pnpm release:create, after a dry run', () => {
+        expect(src).toContain('pnpm release:create --tag <tag> --dry-run')
+        expect(src.indexOf('--dry-run`')).toBeLessThan(
+            src.lastIndexOf('pnpm release:create --tag <tag>`')
+        )
+        expect(src).not.toMatch(/`gh (release|api)\b[^`]*<tag>/)
+        expect(src).not.toContain('qar release-summary')
+    })
+
+    it('writes the plan with the plan skill, without its save phase', () => {
+        expect(src).toContain('.claude/skills/qa-release-plan/SKILL.md')
+        expect(src).toMatch(/Do not do\s+its Phases 4 and 5/)
     })
 })
 

@@ -12,5 +12,5 @@
         "baseUrl": ".",
         "paths": { "@/*": ["src/*"], "@/gui/*": ["gui/frontend/src/*"] }
     },
-    "include": ["src", "tests", "config", "bin"]
+    "include": ["src", "tests", "config", "bin", "scripts"]
 }

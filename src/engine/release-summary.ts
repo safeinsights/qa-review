@@ -4,6 +4,9 @@ import type { GhRunner } from '@/cli/commands/open-access-pr'
 import { hasSecurityContent } from './public-plan'
 import { releaseDir } from './release-paths'
 
+// GitHub rejects a longer release body with a bare 422 "Validation Failed".
+export const RELEASE_BODY_LIMIT = 125_000
+
 const OPEN = '<!-- regression-summary -->'
 const CLOSE = '<!-- /regression-summary -->'
 // The generated release notes put exactly this line between "Related Releases"
@@ -97,6 +100,12 @@ export async function updateReleaseSummary(
     // and prints the bare word "null" for a release with no description.
     const body = raw.replace(/\n$/, '')
     const { body: next, placement } = spliceWithPlacement(body === 'null' ? '' : body, summary)
+    if (next.length > RELEASE_BODY_LIMIT) {
+        throw new Error(
+            `the release description with the summary is ${next.length} characters; ` +
+                `GitHub allows ${RELEASE_BODY_LIMIT}. Shorten the plan's Summary section.`
+        )
+    }
     const dir = releaseDir(tag)
     fs.mkdirSync(dir, { recursive: true })
     const file = path.join(dir, 'release-notes.md')

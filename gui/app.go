@@ -100,7 +100,9 @@ func withGuiPath() []string {
 	// Tell the bundled engine where the cloned repo (config/, suites, secrets) lives,
 	// and export QAR_NODE/QAR_BUNDLE (packaged only) so the `bin/qar` shim — and thus a
 	// bare `qar` in the Claude PTY — runs the bundled engine where there is no `pnpm`.
-	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir())
+	// QAR_APP_SESSION marks every child as app-launched; scripts/create-release.ts
+	// refuses to publish under it, however the session spells the command.
+	out = append(out, "PATH="+path, "QAR_REPO_DIR="+repoDir(), "QAR_APP_SESSION=1")
 	// Declare the terminal we actually render into. A Finder-launched .app inherits
 	// NO TERM (launchd sets none, only a shell does), so `claude` saw a terminal with
 	// no declared capabilities and emitted plain text — the embedded xterm rendered

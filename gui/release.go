@@ -346,6 +346,11 @@ func releaseDisallowedTools() []string {
 		"Bash(gh project:*)",
 		"Bash(curl:*)",
 		"Bash(wget:*)",
+		// Publishing a release is a maintainer step. These rules are a first fence;
+		// the script itself refuses under QAR_APP_SESSION, however it is launched.
+		"Bash(pnpm release:create:*)",
+		"Bash(pnpm run release:create:*)",
+		"Bash(*create-release*)",
 	}
 	for _, server := range knownJiraServers {
 		for _, tool := range []string{"jira_add_comment", "jira_update_issue", "jira_transition_issue", "jira_create_issue"} {
