@@ -11,6 +11,7 @@ import {
     ORG_FOR_ROLE,
     signInWithTotp,
 } from '../engine/flows/signup'
+import { DATA_ORGS } from '../engine/flows/study'
 import type { Inbox, Message } from '../engine/mailtm'
 import {
     activeDomain,
@@ -50,7 +51,8 @@ import type { RunContext, Suite } from './types'
 // account (OTTER-788): the invitee verifies a code Clerk emails to that address, after
 // which Settings lists both addresses and the second one signs in to the same account.
 
-const DP_ORG = 'Openstax'
+// The reviewer invite goes to openstax (ORG_FOR_ROLE.reviewer), whose display name is "OpenStax".
+const DP_ORG = DATA_ORGS.openstax
 
 // The studies table's empty-state copy, one sentence per audience. Each is unique to its
 // audience, so seeing it also proves which audience the table rendered for.

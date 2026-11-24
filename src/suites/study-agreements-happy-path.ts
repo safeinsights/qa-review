@@ -2,7 +2,7 @@ import { expect } from '@playwright/test'
 import { checkpoint } from '../engine/flows/accessibility'
 import { acknowledgeAgreement } from '../engine/flows/agreements'
 import { clickUntil } from '../engine/flows/interactions'
-import type { StudyContent } from '../engine/flows/study'
+import { DATA_ORGS, type StudyContent } from '../engine/flows/study'
 import { studyLifecycleSteps } from './study-happy-path'
 import type { RunContext, Step, Suite } from './types'
 
@@ -11,7 +11,7 @@ import type { RunContext, Step, Suite } from './types'
 // The swap is the whole point: since Sep 23 2026 Openstax Lab is a TEST LAB under
 // Openstax, so every study it creates is stamped a test study and skips the Study
 // Agreement gate entirely. Agreements Lab is not a Test Lab, so its approved study is
-// held at "Study agreements are being prepared" until an SI admin publishes a signed
+// held at "Study Agreement is being prepared" until an SI admin publishes a signed
 // agreement — which this suite asserts from both sides, then publishes, then has the
 // researcher and the reviewer each acknowledge.
 //
@@ -25,11 +25,15 @@ import type { RunContext, Step, Suite } from './types'
 const RESEARCHER_ORG = 'agreements'
 const RESEARCHER_ORG_NAME = 'Agreements Lab'
 const REVIEWER_ORG = 'openstax'
-const REVIEWER_ORG_NAME = 'Openstax'
+const REVIEWER_ORG_NAME = DATA_ORGS[REVIEWER_ORG]
 // Agreements Lab has more than one member, and the first PI option is a real person.
 const PRINCIPAL_INVESTIGATOR = 'QA Researcher'
 
-const AGREEMENT_GATE_COPY = /Study agreements are being prepared/i
+// management-app 1e6718e (Nov 13 2026) made the admin, test-lab and email copy say
+// "Study Agreement" in the singular; every selector below follows that wording.
+const AGREEMENT_GATE_COPY = 'Study Agreement is being prepared'
+const LEGAL_TAB = 'Study Agreement'
+const UPLOAD_AGREEMENT = 'Upload a signed Study Agreement'
 
 function studyId(ctx: RunContext): string {
     return ctx.state.studyId as string
@@ -142,7 +146,7 @@ const reviewerAcknowledgementSteps: Step[] = [
     },
 ]
 
-// SI Admin → Legal → Study Agreements. The upload modal is a cascade: each select
+// SI Admin → Legal → Study Agreement. The upload modal is a cascade: each select
 // stays disabled until the one above it loads, and the Study list holds only
 // approved studies with no agreement yet — so our study appearing in it at all is
 // itself a check that the gate is still open for it.
@@ -152,11 +156,11 @@ async function publishStudyAgreement(ctx: RunContext): Promise<void> {
     // Both controls are server-rendered: a click before hydration is swallowed (the
     // tab stays on Terms of Service), so each is re-driven until its target renders.
     await clickUntil(
-        page.getByRole('tab', { name: 'Study Agreements' }),
-        page.getByRole('button', { name: 'Upload signed study agreement' })
+        page.getByRole('tab', { name: LEGAL_TAB, exact: true }),
+        page.getByRole('button', { name: UPLOAD_AGREEMENT })
     )
-    const upload = page.getByRole('dialog', { name: 'Upload a signed study agreement' })
-    await clickUntil(page.getByRole('button', { name: 'Upload signed study agreement' }), upload)
+    const upload = page.getByRole('dialog', { name: UPLOAD_AGREEMENT })
+    await clickUntil(page.getByRole('button', { name: UPLOAD_AGREEMENT }), upload)
 
     await pickOption(ctx, 'Data Partner', REVIEWER_ORG_NAME)
     await pickOption(ctx, 'Research Lab', RESEARCHER_ORG_NAME)
@@ -185,7 +189,7 @@ async function publishStudyAgreement(ctx: RunContext): Promise<void> {
 // Mantine Selects: the textbox opens a portal listbox. Scoped to the upload dialog for
 // the textbox, but the options live outside it, so they are matched page-wide.
 async function pickOption(ctx: RunContext, label: string, option: string): Promise<void> {
-    const upload = ctx.page.getByRole('dialog', { name: 'Upload a signed study agreement' })
+    const upload = ctx.page.getByRole('dialog', { name: UPLOAD_AGREEMENT })
     const select = upload.getByRole('combobox', { name: label, exact: true })
     await select.click()
     await ctx.page.getByRole('option', { name: option, exact: true }).click()

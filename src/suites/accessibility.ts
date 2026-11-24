@@ -310,14 +310,14 @@ export const accessibilitySuite: Suite = {
             byName('Add new organization')
         ),
         scanStep('Scan admin: SafeInsights legal', SI_LEGAL),
-        ...['Privacy Notice', 'DOPA', 'ROPA', 'Study Agreements'].map(tab =>
+        ...['Privacy Notice', 'DOPA', 'ROPA', 'Study Agreement'].map(tab =>
             stateStep(`Scan admin: SafeInsights legal, ${tab} tab`, SI_LEGAL, clickTab(tab))
         ),
         dialogStep(
             'Scan admin: upload signed study agreement dialog',
             SI_LEGAL,
-            byName('Upload signed study agreement'),
-            clickTab('Study Agreements')
+            byName('Upload a signed Study Agreement'),
+            clickTab('Study Agreement')
         ),
         scanStep('Scan admin: support', '/support'),
         conformanceStep,
